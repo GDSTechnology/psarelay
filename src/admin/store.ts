@@ -15,6 +15,9 @@ export interface AdminUser {
   createdBy: string | null;
   passwordChangedAt: string | null;
   lastLoginAt: string | null;
+  /** The Autotask resource this user is (migration 0019); null = not linked. */
+  autotaskResourceId: number | null;
+  autotaskResourceName: string | null;
 }
 
 export interface AdminEvent { id: number; at: string; actor: string | null; action: string; details: Record<string, unknown>; ip: string | null }
@@ -29,8 +32,9 @@ const iso = (v: unknown): string | null => (v ? new Date(v as string).toISOStrin
 const toUser = (r: Row): AdminUser => ({
   id: Number(r.id), username: String(r.username), role: r.role as AdminRole, mustChangePassword: !!r.must_change_password, disabled: !!r.disabled,
   createdAt: iso(r.created_at)!, createdBy: (r.created_by as string | null) ?? null, passwordChangedAt: iso(r.password_changed_at), lastLoginAt: iso(r.last_login_at),
+  autotaskResourceId: r.autotask_resource_id == null ? null : Number(r.autotask_resource_id), autotaskResourceName: (r.autotask_resource_name as string | null) ?? null,
 });
-const USER_COLS = 'id, username, role, must_change_password, disabled, created_at, created_by, password_changed_at, last_login_at';
+const USER_COLS = 'id, username, role, must_change_password, disabled, created_at, created_by, password_changed_at, last_login_at, autotask_resource_id, autotask_resource_name';
 
 export const SESSION_IDLE_HOURS = 12;
 export const SESSION_MAX_DAYS = 7;
@@ -90,6 +94,12 @@ export class AdminStore {
     if (!sets.length) return this.getUser(id);
     const r = await this.db.query(`UPDATE admin_user SET ${sets.join(', ')} WHERE id = $1 RETURNING ${USER_COLS}`, params);
     if (patch.disabled) await this.db.query('DELETE FROM admin_session WHERE user_id = $1', [id]);
+    return r.rows[0] ? toUser(r.rows[0]) : null;
+  }
+
+  /** Link (or unlink, with null) the Autotask resource this user is. Tokens bound to the old link stop working. */
+  async setAutotaskLink(id: number, link: { id: number; name: string } | null): Promise<AdminUser | null> {
+    const r = await this.db.query(`UPDATE admin_user SET autotask_resource_id = $2, autotask_resource_name = $3 WHERE id = $1 RETURNING ${USER_COLS}`, [id, link?.id ?? null, link?.name ?? null]);
     return r.rows[0] ? toUser(r.rows[0]) : null;
   }
 

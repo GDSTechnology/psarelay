@@ -320,6 +320,17 @@ Require an access token on /mcp**; from then on a call without one gets 401. Cha
 a token yet (they will sign in with OAuth) — keep the requirement off while they connect directly, and protect the
 endpoint at the tunnel (Cloudflare Access) meanwhile.
 
+**Self-service: everyone connects their own client.** An administrator links each console user to the Autotask
+user they are (**Users** → Autotask user → *Link*, by their Autotask email or resource id). That person can then
+create their own tokens under **Account → Connect your AI** (30 days – 1 year) for Codex, n8n or a script — always
+*one person* tokens for **their** Autotask user, so nobody can give themselves more than their own Autotask rights.
+A token made this way stops working at once when its owner is disabled, deleted, unlinked or linked to someone else.
+
+**A person token always writes as that person**, even when the instance's impersonation mode is `off`: otherwise
+it would carry the API user's full rights. The API user's security level must allow impersonation for the
+entities people change; where it doesn't, Autotask refuses the write (fail closed). Reads still run with the API
+user's read access — per-person read scoping is the next step.
+
 **Who a call runs as, without a token.** The email a client declares (`requestingUserEmail`) is recorded but never
 used to write as that person: any client could claim to be anyone, so caller-mode impersonation only follows a token.
 **Settings → Security → Trust identities a client declares without a token** restores the old behaviour — don't.

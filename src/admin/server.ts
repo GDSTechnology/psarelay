@@ -26,7 +26,7 @@ import { Logger } from '../utils/logger.js';
 import { getPool, pgHealthCheck } from '../db/pool.js';
 import { isPgEnabled, loadPgFlags } from '../db/config.js';
 import { getShadowRuntime } from '../db/shadow-runtime.js';
-import { lastSetupReport, runSetupCheck } from '../setup/run.js';
+import { lastSetupReport, mcpUrl, runSetupCheck } from '../setup/run.js';
 import { MODULES } from '../setup/check.js';
 import { entitlementView, lockedReason, MODULE_INFO } from '../entitlements/index.js';
 import { usageSnapshot } from '../services/http-cache.js';
@@ -48,7 +48,7 @@ import { JOB_ACTIONS, jobAction, jobView, startPrepare, startPrepareCompanyConta
 import { activityProfile, DEFAULT_SCHEDULE } from '../bulk/schedule.js';
 import { mirrorClassifier, teamActivityHour, teamActivityProfile } from '../bulk/activity.js';
 import { hourlyActivity } from '../services/call-log.js';
-import { tokenStore } from '../security/tokens.js';
+import { clearTokenCache, tokenStore } from '../security/tokens.js';
 import { securityPosture } from '../security/posture.js';
 import { CHANNEL_KINDS, ChannelInputError, NOTIFY_SETTING_KEY, channelFromInput, channelLogDetails, channelView, parseStoredChannels } from './notifications.js';
 
@@ -236,7 +236,7 @@ type Ctx = { req: IncomingMessage; res: ServerResponse; ip: string; secure: bool
 
 export interface AdminDeps { store: AdminStore; pool: Pool | null; opts: AdminConsoleOptions; startedAt: number }
 
-const publicUser = (u: AdminUser) => ({ id: u.id, username: u.username, role: u.role, mustChangePassword: u.mustChangePassword, disabled: u.disabled, createdAt: u.createdAt, createdBy: u.createdBy, passwordChangedAt: u.passwordChangedAt, lastLoginAt: u.lastLoginAt });
+const publicUser = (u: AdminUser) => ({ id: u.id, username: u.username, role: u.role, mustChangePassword: u.mustChangePassword, disabled: u.disabled, createdAt: u.createdAt, createdBy: u.createdBy, passwordChangedAt: u.passwordChangedAt, lastLoginAt: u.lastLoginAt, autotaskResourceId: u.autotaskResourceId, autotaskResourceName: u.autotaskResourceName });
 
 let thresholdCache: { at: number; value: unknown } | null = null;
 
@@ -686,6 +686,37 @@ export function adminHandler(deps: AdminDeps) {
       void log(ctx, 'access.token_created', { id: r.item.id, name, resourceId: rid, delegate, expiresInDays: days });
       return send(res, 200, { token: r.token, item: r.item });
     }
+    // Self-service: every console user manages their OWN tokens — always bound to the Autotask resource an
+    // administrator linked them to, so a token never carries more than that person's own Autotask rights.
+    if (path === '/api/me/tokens' && method === 'GET') {
+      const u = requireUser(ctx);
+      const store = tokenStore(deps.pool);
+      const full = await deps.store.getUser(u.id);
+      return send(res, 200, { available: !!store, linked: full?.autotaskResourceId != null ? { id: full.autotaskResourceId, name: full.autotaskResourceName } : null, tokens: store ? await store.listOwned(u.id) : [], mcpUrl: mcpUrl() });
+    }
+    if (path === '/api/me/tokens' && method === 'POST') {
+      const u = requireUser(ctx);
+      const store = tokenStore(deps.pool);
+      if (!store) throw new HttpError(409, 'Access tokens need the Postgres layer (MCP_PG_ENABLED).', 'unavailable');
+      const full = await deps.store.getUser(u.id);
+      if (full?.autotaskResourceId == null) throw new HttpError(409, 'Your console user is not linked to an Autotask user yet — ask an administrator to link it (Users page).', 'not_linked');
+      const b = await readJson(req, 4 * 1024);
+      const name = String(b.name ?? '').trim().slice(0, 80) || 'My AI';
+      const days = b.expiresInDays == null || b.expiresInDays === '' ? 180 : Number(b.expiresInDays);
+      if (!Number.isInteger(days) || days < 1 || days > 365) throw new HttpError(400, 'Your own tokens last 1–365 days.', 'invalid');
+      const r = await store.create({ name, resourceId: full.autotaskResourceId, ownerUserId: u.id, expiresAt: new Date(Date.now() + days * 86_400_000).toISOString(), by: u.username });
+      void log(ctx, 'access.own_token_created', { id: r.item.id, name, resourceId: full.autotaskResourceId, expiresInDays: days });
+      return send(res, 200, { token: r.token, item: r.item, mcpUrl: mcpUrl() });
+    }
+    const ownTok = /^\/api\/me\/tokens\/(\d+)\/revoke$/.exec(path);
+    if (ownTok && method === 'POST') {
+      const u = requireUser(ctx);
+      const store = tokenStore(deps.pool);
+      if (!store) throw new HttpError(409, 'Access tokens need the Postgres layer (MCP_PG_ENABLED).', 'unavailable');
+      const ok = await store.revoke(Number(ownTok[1]), u.username, u.id);
+      void log(ctx, 'access.own_token_revoked', { id: Number(ownTok[1]), ok });
+      return send(res, 200, { ok, message: ok ? 'Revoked.' : 'Not one of your active tokens.' });
+    }
     const tokMatch = /^\/api\/access-tokens\/(\d+)\/revoke$/.exec(path);
     if (tokMatch && method === 'POST') {
       requireUser(ctx, 'admin');
@@ -850,7 +881,7 @@ export function adminHandler(deps: AdminDeps) {
       void log(ctx, 'user.created', { username, role });
       return send(res, 201, { user: publicUser(u), password });
     }
-    const userMatch = /^\/api\/users\/(\d+)(\/reset-password|\/sign-out)?$/.exec(path);
+    const userMatch = /^\/api\/users\/(\d+)(\/reset-password|\/sign-out|\/autotask)?$/.exec(path);
     if (userMatch) {
       const me = requireUser(ctx, 'admin');
       const id = idParam(userMatch[1]);
@@ -862,6 +893,30 @@ export function adminHandler(deps: AdminDeps) {
         await store.setPassword(id, password, true, id === me.id ? ctx.sessionHash ?? undefined : undefined);
         void log(ctx, 'user.password_reset', { username: target.username });
         return send(res, 200, { user: publicUser({ ...target, mustChangePassword: true }), password });
+      }
+      if (action === '/autotask' && method === 'PUT') {
+        // Link the console user to the Autotask resource they are (by email or id), or unlink. Their own access tokens
+        // follow the link: a token for the old resource stops working at once.
+        const b = await readJson(req, 4 * 1024);
+        let link: { id: number; name: string } | null = null;
+        if (b.unlink !== true) {
+          const email = String(b.email ?? '').trim(), rid = b.resourceId == null || b.resourceId === '' ? null : Number(b.resourceId);
+          const nameOf = (r: { firstName?: string; lastName?: string; email?: string; id: number }) => [r.firstName, r.lastName].filter(Boolean).join(' ') || r.email || `Resource ${r.id}`;
+          if (rid != null) {
+            if (!Number.isInteger(rid) || rid <= 0) throw new HttpError(400, 'The Autotask resource id must be a whole number.', 'invalid');
+            const r = await runJob('admin console', () => opts.service.getResource(rid));
+            if (!r || (r as { isActive?: boolean }).isActive === false) throw new HttpError(404, `No active Autotask resource #${rid}.`, 'not_found');
+            link = { id: rid, name: nameOf(r as never) };
+          } else if (email) {
+            const found = await runJob('admin console', () => opts.service.searchResourcesByEmail(email));
+            if (found.length !== 1) throw new HttpError(found.length ? 409 : 404, found.length ? `${found.length} active Autotask resources have that email — link by resource id.` : 'No active Autotask resource has that email.', found.length ? 'ambiguous' : 'not_found');
+            link = { id: found[0]!.id, name: nameOf(found[0]!) };
+          } else throw new HttpError(400, 'Give the Autotask email or resource id (or unlink).', 'invalid');
+        }
+        const u = await store.setAutotaskLink(id, link);
+        clearTokenCache();
+        void log(ctx, link ? 'user.autotask_linked' : 'user.autotask_unlinked', { username: target.username, ...(link ? { resourceId: link.id } : {}) });
+        return send(res, 200, { user: publicUser(u!) });
       }
       if (action === '/sign-out' && method === 'POST') {
         await store.deleteSessionsOf(id);
@@ -877,6 +932,7 @@ export function adminHandler(deps: AdminDeps) {
         if (losesAdmin && (await store.otherActiveAdmins(id)) === 0) throw new HttpError(409, 'This is the last active administrator. Make someone else an administrator first.', 'last_admin');
         if (id === me.id && patch.disabled) throw new HttpError(409, 'You cannot disable your own account.', 'self');
         const u = await store.updateUser(id, patch);
+        if (patch.disabled !== undefined) clearTokenCache(); // a disabled user's own tokens stop at once
         void log(ctx, 'user.updated', { username: target.username, ...patch });
         return send(res, 200, { user: u ? publicUser(u) : null });
       }

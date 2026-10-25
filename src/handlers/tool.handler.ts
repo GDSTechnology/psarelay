@@ -3973,7 +3973,12 @@ export class AutotaskToolHandler {
       // declared sources (e.g. n8n) even on a shared instance.
       let impersonationResourceId: number | undefined;
       const impersonationMode = getImpersonationMode();
-      if (impersonationMode !== 'off' && isMutatingTool(name)) {
+      // A token that names a person ALWAYS writes as that person, whatever the instance's impersonation mode: without
+      // it the call would carry the API user's full rights (privilege escalation). If the API user may not
+      // impersonate, Autotask refuses the write — fail closed.
+      if (auth?.resourceId != null && (isMutatingTool(name) || mayWrite(name, args))) {
+        impersonationResourceId = auth.resourceId;
+      } else if (impersonationMode !== 'off' && isMutatingTool(name)) {
         // Writes run as a person only when that person is vouched for (a token), unless the operator explicitly
         // trusts client-declared identities — otherwise any client could claim to be anyone (privilege escalation).
         const trusted = ctx.identityVerified === true || settingValue<boolean>('security.trustUnverifiedIdentity') === true;

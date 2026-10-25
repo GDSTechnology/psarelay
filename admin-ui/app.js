@@ -719,7 +719,7 @@ async function access(body) {
             if (!confirm(`Revoke "${t.name}"?\n\nEvery call with this token is refused from now on.`)) return;
             try { const x = await api('POST', `/api/access-tokens/${t.id}/revoke`, {}); toast(x.message); draw(); } catch (x) { toast(x.message); }
           } }, 'Revoke') : null;
-          return h('tr', null, h('td', null, t.name), h('td', { style: 'font-size:13px' }, t.resourceId ? `Autotask resource #${t.resourceId}` : t.delegate ? 'The person it names (delegate)' : 'API user (service)'),
+          return h('tr', null, h('td', null, t.name, t.ownerUsername ? h('div', { class: 'muted', style: 'font-size:12px' }, `self-service · ${t.ownerUsername}`) : null), h('td', { style: 'font-size:13px' }, t.resourceId ? `Autotask resource #${t.resourceId}` : t.delegate ? 'The person it names (delegate)' : 'API user (service)'),
             h('td', { class: 'mono' }, `${t.prefix}…`), h('td', { class: 'muted' }, `${ago(t.createdAt)} by ${t.createdBy}`), h('td', { class: 'muted' }, t.lastUsedAt ? ago(t.lastUsedAt) : 'never'), h('td', null, status), h('td', null, revoke));
         })))) : h('p', { class: 'muted' }, 'No tokens yet.'));
   };
@@ -1221,6 +1221,13 @@ async function users(body) {
         h('td', null, h('strong', null, u.username), self ? h('span', { class: 'muted' }, ' (you)') : null),
         h('td', null, roleSel),
         h('td', null, u.disabled ? h('span', { class: 'badge bad' }, 'Disabled') : u.mustChangePassword ? h('span', { class: 'badge warn' }, 'Must set password') : h('span', { class: 'badge ok' }, 'Active')),
+        h('td', { style: 'font-size:13px' }, u.autotaskResourceId ? h('span', null, u.autotaskResourceName || '', h('span', { class: 'muted' }, ` #${u.autotaskResourceId}`)) : h('span', { class: 'muted' }, 'Not linked'), ' ',
+          h('button', { class: 'small secondary', onclick: () => {
+            const v = prompt(`Link ${u.username} to their Autotask user.\n\nTheir Autotask email, or the resource id (a number). Leave empty to unlink.`, '');
+            if (v === null) return;
+            const t = v.trim();
+            act(() => api('PUT', `/api/users/${u.id}/autotask`, !t ? { unlink: true } : /^\d+$/.test(t) ? { resourceId: Number(t) } : { email: t }), t ? 'Linked. Their own tokens now run as that Autotask user.' : 'Unlinked. Their own tokens stopped working.');
+          } }, u.autotaskResourceId ? 'Change' : 'Link')),
         h('td', null, ago(u.lastLoginAt)),
         h('td', { class: 'muted' }, `${when(u.createdAt)}${u.createdBy ? ` by ${u.createdBy}` : ''}`),
         h('td', null, h('div', { class: 'row' },
@@ -1231,7 +1238,7 @@ async function users(body) {
     });
     body.replaceChildren(h('h1', null, 'Users'), add,
       h('section', { class: 'panel' }, h('div', { class: 'table-wrap' }, h('table', null,
-        h('thead', null, h('tr', null, h('th', null, 'User'), h('th', null, 'Access'), h('th', null, 'Status'), h('th', null, 'Last sign-in'), h('th', null, 'Created'), h('th', null, ''))),
+        h('thead', null, h('tr', null, h('th', null, 'User'), h('th', null, 'Access'), h('th', null, 'Status'), h('th', null, 'Autotask user'), h('th', null, 'Last sign-in'), h('th', null, 'Created'), h('th', null, ''))),
         h('tbody', null, rows)))));
   };
   await draw();
@@ -1244,6 +1251,8 @@ const ACTIONS = {
   'user.created': 'Created user', 'user.updated': 'Updated user', 'user.deleted': 'Deleted user',
   'user.password_reset': 'Reset password', 'user.signed_out': 'Signed user out', 'action.shadow_verify': 'Started mirror check',
   'notify.channel_added': 'Added notification channel', 'notify.channel_changed': 'Changed notification channel', 'notify.channel_removed': 'Deleted notification channel', 'notify.channel_tested': 'Sent test notification',
+  'access.token_created': 'Created access token', 'access.token_revoked': 'Revoked access token', 'access.own_token_created': 'Created own access token', 'access.own_token_revoked': 'Revoked own access token',
+  'user.autotask_linked': 'Linked user to Autotask', 'user.autotask_unlinked': 'Unlinked user from Autotask',
 };
 function describe(ev) {
   const d = ev.details || {};
@@ -1287,7 +1296,52 @@ async function account(body) {
         h('dt', null, 'Access'), h('dd', null, me.role === 'admin' ? 'Administrator' : 'Read-only'),
         h('dt', null, 'Password changed'), h('dd', null, when(me.passwordChangedAt))),
       h('h2', null, 'Change password'),
-      passwordForm(() => { toast('Password changed. Other sessions were signed out.'); render(); }, false)));
+      passwordForm(() => { toast('Password changed. Other sessions were signed out.'); render(); }, false)),
+    myConnections());
+}
+
+/** Account → Connect your AI: a user's own access tokens, always bound to the Autotask user an administrator linked. */
+function myConnections() {
+  const box = h('section', { class: 'panel' }, h('h2', null, 'Connect your AI'), h('p', { class: 'muted' }, 'Loading…'));
+  const shown = h('div');
+  const draw = async () => {
+    const r = await api('GET', '/api/me/tokens');
+    if (!r.available) { box.replaceChildren(h('h2', null, 'Connect your AI'), h('p', { class: 'muted' }, 'Needs the Postgres layer on this server.')); return; }
+    if (!r.linked) { box.replaceChildren(h('h2', null, 'Connect your AI'), h('div', { class: 'banner warn' }, 'Your console user is not linked to an Autotask user yet. Ask an administrator to link it on the Users page — then you can connect your own AI client here, working with your own Autotask permissions.')); return; }
+    const name = h('input', { placeholder: 'Which client, e.g. Codex on my laptop', maxlength: 80, style: 'flex:1 1 240px' });
+    const days = h('select', null, h('option', { value: '30' }, '30 days'), h('option', { value: '90' }, '90 days'), h('option', { value: '180', selected: true }, '180 days'), h('option', { value: '365' }, '1 year'));
+    const create = h('button', { class: 'primary', onclick: async () => {
+      create.disabled = true;
+      try {
+        const x = await api('POST', '/api/me/tokens', { name: name.value.trim(), expiresInDays: days.value });
+        const header = `Authorization: Bearer ${x.token}`;
+        const copy = (text) => h('button', { class: 'small secondary', onclick: async () => { try { await navigator.clipboard.writeText(text); toast('Copied.'); } catch { toast('Copy failed — select it instead.'); } } }, 'Copy');
+        shown.replaceChildren(h('div', { class: 'panel', style: 'border-style:dashed' },
+          h('p', null, h('strong', null, 'Copy it now — it is shown only once.'), ' If it is lost, revoke it and create another.'),
+          h('div', { class: 'table-wrap' }, h('table', null, h('tbody', null,
+            h('tr', null, h('th', null, 'MCP address'), h('td', { class: 'mono' }, x.mcpUrl), h('td', null, copy(x.mcpUrl))),
+            h('tr', null, h('th', null, 'Token'), h('td', { class: 'mono', style: 'word-break:break-all' }, x.token), h('td', null, copy(x.token))),
+            h('tr', null, h('th', null, 'Header'), h('td', { class: 'mono', style: 'word-break:break-all' }, header), h('td', null, copy(header)))))),
+          h('p', { class: 'muted', style: 'font-size:13px' }, 'Give your client the address and send the token as that header (n8n: Header Auth; Codex and other MCP clients: a bearer token). Calls run as ', h('strong', null, r.linked.name || `resource #${r.linked.id}`), ' — Autotask applies your own permissions to every change.'),
+          h('button', { class: 'small secondary', onclick: () => shown.replaceChildren() }, 'Done')));
+        await draw();
+      } catch (x) { toast(x.message); } finally { create.disabled = false; }
+    } }, 'Create my token');
+    box.replaceChildren(h('h2', null, 'Connect your AI'),
+      h('p', { class: 'muted', style: 'font-size:13px' }, 'Your own access to the MCP for a client you use (Codex, n8n, a script). It works as ', h('strong', null, r.linked.name || `resource #${r.linked.id}`), ' in Autotask, so you can only change what your Autotask account may change. ChatGPT and Claude connectors will sign in directly instead (coming).'),
+      shown,
+      h('div', { class: 'row', style: 'flex-wrap:wrap;gap:8px' }, name, days, create),
+      r.tokens.length ? h('div', { class: 'table-wrap', style: 'margin-top:12px' }, h('table', null,
+        h('thead', null, h('tr', null, ['Client', 'Token', 'Created', 'Last used', 'Status', ''].map((x) => h('th', null, x)))),
+        h('tbody', null, r.tokens.map((t) => {
+          const expired = t.expiresAt && Date.parse(t.expiresAt) < Date.now();
+          return h('tr', null, h('td', null, t.name), h('td', { class: 'mono' }, `${t.prefix}…`), h('td', { class: 'muted' }, ago(t.createdAt)), h('td', { class: 'muted' }, t.lastUsedAt ? ago(t.lastUsedAt) : 'never'),
+            h('td', null, t.revokedAt ? h('span', { class: 'badge' }, 'Revoked') : expired ? h('span', { class: 'badge warn' }, 'Expired') : h('span', { class: 'badge ok' }, `Until ${t.expiresAt.slice(0, 10)}`)),
+            h('td', null, !t.revokedAt && !expired ? h('button', { class: 'small secondary', onclick: async () => { if (!confirm(`Revoke "${t.name}"?`)) return; try { await api('POST', `/api/me/tokens/${t.id}/revoke`, {}); toast('Revoked.'); draw(); } catch (x) { toast(x.message); } } }, 'Revoke') : null));
+        })))) : null);
+  };
+  draw().catch((x) => box.replaceChildren(h('h2', null, 'Connect your AI'), h('div', { class: 'error' }, x.message)));
+  return box;
 }
 
 // ── boot ──────────────────────────────────────────────────────────────────
