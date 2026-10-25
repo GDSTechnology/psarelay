@@ -19,12 +19,15 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { CallerSource } from '../types/context.js';
 import type { RequestOrigin } from './origin.js';
+import type { TokenAuth } from '../security/tokens.js';
 
 export interface RequestContext {
   /** Autotask resource id to impersonate on outbound writes, if any. */
   impersonationResourceId?: number;
   /** Transport-derived origin of the request (server-captured, never from client). */
   origin?: RequestOrigin;
+  /** The verified access token this request carried, if any (server-checked, never from client). */
+  auth?: TokenAuth;
 }
 
 const storage = new AsyncLocalStorage<RequestContext>();
@@ -37,6 +40,11 @@ export function runWithRequestContext<T>(ctx: RequestContext, fn: () => T): T {
 /** The impersonation resource id for the current async context, if set. */
 export function getImpersonationResourceId(): number | undefined {
   return storage.getStore()?.impersonationResourceId;
+}
+
+/** The verified access token of the current request, if it carried one. */
+export function getRequestAuth(): TokenAuth | undefined {
+  return storage.getStore()?.auth;
 }
 
 /** The transport-derived origin for the current async context, if captured. */

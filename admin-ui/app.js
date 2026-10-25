@@ -81,6 +81,7 @@ const ROUTES = [
   { hash: '#/plan', label: 'Plan', view: planView },
   { hash: '#/notifications', label: 'Notifications', view: notifications },
   { hash: '#/settings', label: 'Settings', view: settings },
+  { hash: '#/access', label: 'Access', view: access, admin: true },
   { hash: '#/users', label: 'Users', view: users, admin: true },
   { hash: '#/activity', label: 'Activity', view: activity, admin: true },
   { hash: '#/account', label: 'Account', view: account },
@@ -677,8 +678,80 @@ async function setup(body) {
   body.replaceChildren(
     h('div', { class: 'row', style: 'justify-content:space-between;align-items:center' }, h('h1', null, 'Setup'), isAdmin ? run : null),
     h('p', { class: 'muted' }, 'Is this server connected to Autotask, and is its API user allowed to do what each module needs? Then how to connect ChatGPT, Claude and n8n.'),
+    securityPanel(),
     out);
   try { const r = await api('GET', '/api/setup'); draw(r.report); } catch (x) { out.replaceChildren(h('div', { class: 'error' }, x.message)); }
+}
+
+// ── security posture (zero trust): what this server exposes and who it trusts ──
+const POSTURE = { ok: ['OK', 'ok'], warn: ['Check', 'warn'], bad: ['Exposed', 'bad'], info: ['Note', ''] };
+function securityPanel() {
+  const box = h('section', { class: 'panel' }, h('h2', null, 'Security'), h('p', { class: 'muted' }, 'Loading…'));
+  api('GET', '/api/security').then((r) => {
+    box.replaceChildren(h('h2', null, 'Security'),
+      h('p', { class: 'muted', style: 'font-size:13px' }, 'Zero trust: who can reach this server, and who a call runs as. Fix anything marked Exposed first.'),
+      h('div', { class: 'table-wrap' }, h('table', null, h('tbody', null, r.checks.map((c) => {
+        const [label, cls] = POSTURE[c.status] || [c.status, ''];
+        return h('tr', null, h('th', null, c.label), h('td', null, h('span', { class: `badge ${cls}` }, label)),
+          h('td', { style: 'font-size:13px' }, c.detail, c.fix ? h('div', { class: 'muted' }, `→ ${c.fix}`) : null));
+      })))));
+  }).catch((x) => box.replaceChildren(h('h2', null, 'Security'), h('div', { class: 'error' }, x.message)));
+  return box;
+}
+
+// ── access: tokens for /mcp (shown once, stored hashed), revocable ──
+async function access(body) {
+  const list = h('div');
+  const shown = h('div');
+  const draw = async () => {
+    const r = await api('GET', '/api/access-tokens');
+    if (!r.available) { list.replaceChildren(h('p', { class: 'muted' }, 'Access tokens need the Postgres layer (MCP_PG_ENABLED) and migration 0018.')); return; }
+    const active = r.tokens.filter((t) => !t.revokedAt && !(t.expiresAt && Date.parse(t.expiresAt) < Date.now()));
+    list.replaceChildren(
+      r.required ? h('div', { class: 'banner ok' }, 'Tokens are required: calls without a valid token get HTTP 401.')
+        : h('div', { class: 'banner warn' }, `Tokens are optional right now: anyone who can reach the MCP port can use it. When every client has a token (${active.length} active), turn on Settings → Security → Require an access token.`),
+      r.tokens.length ? h('div', { class: 'table-wrap' }, h('table', null,
+        h('thead', null, h('tr', null, ['Name', 'Runs as', 'Token', 'Created', 'Last used', 'Status', ''].map((x) => h('th', null, x)))),
+        h('tbody', null, r.tokens.map((t) => {
+          const expired = t.expiresAt && Date.parse(t.expiresAt) < Date.now();
+          const status = t.revokedAt ? h('span', { class: 'badge' }, `Revoked ${ago(t.revokedAt)}`) : expired ? h('span', { class: 'badge warn' }, 'Expired') : h('span', { class: 'badge ok' }, t.expiresAt ? `Active · until ${t.expiresAt.slice(0, 10)}` : 'Active');
+          const revoke = !t.revokedAt ? h('button', { class: 'small secondary', onclick: async () => {
+            if (!confirm(`Revoke "${t.name}"?\n\nEvery call with this token is refused from now on.`)) return;
+            try { const x = await api('POST', `/api/access-tokens/${t.id}/revoke`, {}); toast(x.message); draw(); } catch (x) { toast(x.message); }
+          } }, 'Revoke') : null;
+          return h('tr', null, h('td', null, t.name), h('td', { style: 'font-size:13px' }, t.resourceId ? `Autotask resource #${t.resourceId}` : t.delegate ? 'The person it names (delegate)' : 'API user (service)'),
+            h('td', { class: 'mono' }, `${t.prefix}…`), h('td', { class: 'muted' }, `${ago(t.createdAt)} by ${t.createdBy}`), h('td', { class: 'muted' }, t.lastUsedAt ? ago(t.lastUsedAt) : 'never'), h('td', null, status), h('td', null, revoke));
+        })))) : h('p', { class: 'muted' }, 'No tokens yet.'));
+  };
+  const name = h('input', { placeholder: 'Who or what uses it, e.g. n8n', maxlength: 80, style: 'flex:1 1 220px' });
+  const kind = h('select', null, h('option', { value: 'service' }, 'Service — runs as the API user'), h('option', { value: 'person' }, 'One person — runs as an Autotask resource'), h('option', { value: 'delegate' }, 'Delegate — may name the person it acts for (e.g. n8n for Teams)'));
+  const rid = h('input', { type: 'number', min: 1, placeholder: 'Autotask resource id', style: 'display:none' });
+  kind.onchange = () => { rid.style.display = kind.value === 'person' ? '' : 'none'; };
+  const days = h('input', { type: 'number', min: 1, max: 3650, placeholder: 'Expires in days (empty = never)' });
+  const create = h('button', { class: 'primary', onclick: async () => {
+    create.disabled = true;
+    try {
+      const r = await api('POST', '/api/access-tokens', { name: name.value.trim(), resourceId: kind.value === 'person' ? rid.value : null, delegate: kind.value === 'delegate', expiresInDays: days.value });
+      name.value = ''; rid.value = ''; days.value = '';
+      shown.replaceChildren(h('div', { class: 'panel', style: 'border-style:dashed' },
+        h('h3', { style: 'margin-top:0' }, `Token for "${r.item.name}"`),
+        h('p', null, h('strong', null, 'Copy it now — it is shown only once.'), ' Only a fingerprint is stored, so it can\'t be shown again; if it is lost, revoke it and create a new one.'),
+        h('p', { class: 'mono', style: 'word-break:break-all' }, r.token),
+        h('div', { class: 'row', style: 'gap:8px' },
+          h('button', { class: 'primary small', onclick: async () => { try { await navigator.clipboard.writeText(r.token); toast('Copied.'); } catch { toast('Copy failed — select the text instead.'); } } }, 'Copy'),
+          h('button', { class: 'small secondary', onclick: () => shown.replaceChildren() }, 'Done')),
+        h('p', { class: 'muted', style: 'font-size:13px' }, 'The client sends it on every call as the header ', h('span', { class: 'mono' }, 'Authorization: Bearer <token>'), '. In n8n: the MCP Client / HTTP Request credential → Header Auth.')));
+      draw();
+    } catch (x) { toast(x.message); } finally { create.disabled = false; }
+  } }, 'Create token');
+  body.replaceChildren(
+    h('h1', null, 'Access'),
+    h('p', { class: 'muted' }, 'Access tokens for the MCP endpoint. One per client, so each can be revoked on its own, and the token — not what the client claims — decides who a call runs as.'),
+    shown,
+    h('section', { class: 'panel' }, h('h2', null, 'New token'),
+      h('div', { class: 'row', style: 'flex-wrap:wrap;gap:8px' }, name, kind, rid, days, create)),
+    h('section', { class: 'panel' }, h('h2', null, 'Tokens'), list));
+  try { await draw(); } catch (x) { list.replaceChildren(h('div', { class: 'error' }, x.message)); }
 }
 
 // ── bulk jobs: staged mass changes, pushed by the worker at a set pace ────

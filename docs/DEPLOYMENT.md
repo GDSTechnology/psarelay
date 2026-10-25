@@ -33,7 +33,7 @@ Set `AUTOTASK_IMPERSONATION_MODE` on each container:
 | Mode      | Behaviour |
 |-----------|-----------|
 | `off` (default) | Never impersonate. Writes are attributed to the integration (API) user. Use for n8n / cron / any unattended automation. |
-| `caller`  | Resolve the calling user (from `requestingUserEmail` / bound identity) and tunnel writes as them via `ImpersonationResourceId`. Degrades to the integration user when the caller can't be identified — never blocks. Use for the ChatGPT / Teams instance. |
+| `caller`  | Tunnel writes as the calling user via `ImpersonationResourceId` — **only when an access token vouches for them** (a token naming a person, or a delegate token), unless `MCP_TRUST_UNVERIFIED_IDENTITY=true`. Degrades to the integration user when the caller can't be identified — never blocks. Use for the ChatGPT / Teams instance. |
 
 Legacy `AUTOTASK_IMPERSONATION=on` (no mode set) maps to `caller`; unset maps to
 `off`. Native impersonation also requires the API user's Autotask security level
@@ -55,6 +55,7 @@ Do not assume a flag accepts `on` / `1` / `yes` — the accepted truthy value
 | `AUTOTASK_IMPERSONATION` (legacy) | `on`, `true`, `1`, or `yes` | off | Back-compat only; maps to `caller`. Prefer `_MODE`. Ignored when `_MODE` is set. |
 | `AUTOTASK_IMPERSONATION_SOURCES` | comma list, e.g. `chatgpt,hermes-teams` | empty = **all** sources may impersonate | `caller` mode only: allowlist of declared sources permitted to impersonate. Valid sources: `chatgpt`, `hermes-teams`, `telegram`, `n8n`, `cron`. |
 | `MCP_INSTANCE_LABEL` | any non-empty string, e.g. `gpt-teams` | empty = field omitted from audit | Stamps `instanceLabel` on every audit record. Observability only. |
+| `MCP_TRUST_UNVERIFIED_IDENTITY` | `true` | off | `caller` mode: also trust the identity a client declares without an access token. Off = writes run as a person only when a token vouches for them (see docs/ADMIN.md → Access). |
 | `MCP_TRANSPORT` | `http` | `stdio` | Serve over HTTP vs stdio. |
 | `LAZY_LOADING` | `true` or `1` **only** (not `on`/`yes`) | off | Expose only the 3 discovery meta-tools initially. |
 | `MCP_PERMISSIONS_ENABLED` | `true` **only** | off | Enforce role→risk permission intersection on mutating tools. Needs `AUTOTASK_ROLE_MAP`. |

@@ -42,6 +42,9 @@ import { runWithRequestContext } from '../utils/request-context.js';
 import { usageSnapshot } from '../services/http-cache.js';
 import { authBlockStatus } from '../services/autotask-http.js';
 import { backpressure } from '../services/backpressure.js';
+import { settingValue } from '../admin/settings.js';
+import { allowedOrigin, isExternalRequest } from '../security/http.js';
+import { bearerToken, tokenStore, type TokenAuth } from '../security/tokens.js';
 
 export class PsarelayServer {
   private config: McpServerConfig;
@@ -267,6 +270,23 @@ export class PsarelayServer {
   }
 
   /**
+   * The verified access token of an /mcp request (zero trust), null when it carried none and none is required, or
+   * 'refused' after answering 401 / 503. A presented token must be valid even when tokens are optional, so a revoked
+   * client never silently keeps working.
+   */
+  private async authenticateMcp(req: IncomingMessage, res: ServerResponse): Promise<TokenAuth | null | 'refused'> {
+    const presented = bearerToken(req.headers.authorization);
+    const required = settingValue<boolean>('security.requireMcpToken') === true;
+    if (!presented && !required) return null;
+    const store = tokenStore(isPgEnabled() ? getPool(this.logger) : null);
+    if (!store) { refuseMcp(res, 503, 'Access tokens need the Postgres layer (MCP_PG_ENABLED).'); return 'refused'; }
+    if (!presented) { refuseMcp(res, 401, 'Unauthorized: this MCP requires an access token (Authorization: Bearer psr_…).'); return 'refused'; }
+    const auth = await store.verify(presented);
+    if (!auth) { refuseMcp(res, 401, 'Unauthorized: the access token is not valid (unknown, revoked or expired).'); return 'refused'; }
+    return auth;
+  }
+
+  /**
    * Start with HTTP Streamable transport
    */
   private async startHttpTransport(): Promise<void> {
@@ -288,16 +308,16 @@ export class PsarelayServer {
     this.httpServer = createServer((req: IncomingMessage, res: ServerResponse) => {
       const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
 
-      // CORS headers applied to every response so browser-based MCP clients
-      // (e.g. claude.ai custom connectors) can reach the server. '*' is safe
-      // because nothing here relies on cookies.
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, DELETE');
-      res.setHeader(
-        'Access-Control-Allow-Headers',
-        'Content-Type, Accept, Authorization, Mcp-Session-Id'
-      );
-      res.setHeader('Access-Control-Max-Age', '86400');
+      // CORS only for the browser origins an operator lists (MCP_CORS_ORIGINS) — never '*'. AI connectors
+      // (ChatGPT, Claude) and n8n call server-to-server and don't need it.
+      const corsOrigin = allowedOrigin(req.headers.origin);
+      if (corsOrigin) {
+        res.setHeader('Access-Control-Allow-Origin', corsOrigin);
+        res.setHeader('Vary', 'Origin');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, DELETE');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept, Authorization, Mcp-Session-Id, Mcp-Protocol-Version');
+        res.setHeader('Access-Control-Max-Age', '86400');
+      }
 
       // CORS preflight — respond before routing so every path (including /mcp)
       // answers OPTIONS with 204 and the headers above.
@@ -324,9 +344,14 @@ export class PsarelayServer {
         return;
       }
 
-      // Health endpoint - no auth required
+      // Health endpoint - no auth required. From outside the private network (through a tunnel or proxy) it
+      // answers only status + version: API usage, backpressure and login state are for the host's own services.
       if (url.pathname === '/health') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        if (isExternalRequest(req)) {
+          res.end(JSON.stringify({ status: 'ok', version: getServerVersion(this.envConfig?.server?.version) }));
+          return;
+        }
         // `mcpTransport` (not `transport`) to avoid confusion with the network
         // scheme — the value refers to the MCP transport type (stdio vs
         // Streamable HTTP), not whether the service is served over HTTP/HTTPS.
@@ -368,18 +393,25 @@ export class PsarelayServer {
         // Cast: the adapter's duck-typed NodeIncomingMessageLike declares
         // `method?: string`, which node:http's IncomingMessage doesn't satisfy
         // under exactOptionalPropertyTypes (v2.0.0-beta.5 typings papercut).
-        runWithRequestContext(origin ? { origin } : {}, () => {
-          nodeMcpHandler(req as unknown as Parameters<typeof nodeMcpHandler>[0], res).catch((err) => {
-            this.logger.error('MCP transport error:', err);
-            if (!res.headersSent) {
-              res.writeHead(500, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({
-                jsonrpc: '2.0',
-                error: { code: -32603, message: 'Internal error' },
-                id: null,
-              }));
-            }
+        // The access token is checked first (zero trust); the body stream stays paused until the handler reads it.
+        this.authenticateMcp(req, res).then((auth) => {
+          if (auth === 'refused') return;
+          runWithRequestContext({ ...(origin ? { origin } : {}), ...(auth ? { auth } : {}) }, () => {
+            nodeMcpHandler(req as unknown as Parameters<typeof nodeMcpHandler>[0], res).catch((err) => {
+              this.logger.error('MCP transport error:', err);
+              if (!res.headersSent) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                  jsonrpc: '2.0',
+                  error: { code: -32603, message: 'Internal error' },
+                  id: null,
+                }));
+              }
+            });
           });
+        }, (err) => {
+          this.logger.error('MCP access-token check failed:', err);
+          refuseMcp(res, 503, 'Access tokens could not be checked (database unavailable).');
         });
 
         return;
@@ -491,4 +523,11 @@ function shadowHealth(): Record<string, unknown> {
   if (!rt) return {};
   const last = rt.lastRun();
   return { shadow: { enabled: true, serveReads: rt.serveReads, lastRunAt: last?.at ?? null, lastRunCalls: last?.report.calls ?? null, ...(last?.report.skipped ? { lastRunSkipped: last.report.skipped } : {}) } };
+}
+
+/** Answer an /mcp request that may not proceed (JSON-RPC error body; 401 says a Bearer token is expected). */
+function refuseMcp(res: ServerResponse, status: number, message: string): void {
+  if (res.headersSent) return;
+  res.writeHead(status, { 'Content-Type': 'application/json', ...(status === 401 ? { 'WWW-Authenticate': 'Bearer realm="psarelay"' } : {}) });
+  res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32001, message }, id: null }));
 }

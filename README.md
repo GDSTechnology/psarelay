@@ -170,6 +170,7 @@ migrations, restarts, waits for `/health` and prints the version — and refuses
 | `AUTOTASK_API_URL` | auto-detected | Override the zone URL |
 | `AUTOTASK_IMPERSONATION` | `off` | `on`: writes are recorded as the identified requesting user |
 | `MCP_TRANSPORT` / `MCP_HTTP_PORT` / `MCP_HTTP_HOST` | `stdio` / `8080` / `0.0.0.0` | Transport |
+| `MCP_REQUIRE_TOKEN` | `false` | Require an access token on `/mcp` (tokens: console → Access) |
 | `MCP_PG_ENABLED`, `MCP_PG_*` | off | Postgres layer → [POSTGRES](docs/POSTGRES.md) |
 | `MCP_PG_SHADOW_*` | | Mirror sync interval, budget, pause threshold (85%), serving reads |
 | `MCP_ADMIN_ENABLED`, `MCP_ADMIN_PORT` | off / `8090` | Admin console → [ADMIN](docs/ADMIN.md) |

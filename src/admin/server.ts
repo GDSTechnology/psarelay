@@ -48,6 +48,8 @@ import { JOB_ACTIONS, jobAction, jobView, startPrepare, startPrepareCompanyConta
 import { activityProfile, DEFAULT_SCHEDULE } from '../bulk/schedule.js';
 import { mirrorClassifier, teamActivityHour, teamActivityProfile } from '../bulk/activity.js';
 import { hourlyActivity } from '../services/call-log.js';
+import { tokenStore } from '../security/tokens.js';
+import { securityPosture } from '../security/posture.js';
 import { CHANNEL_KINDS, ChannelInputError, NOTIFY_SETTING_KEY, channelFromInput, channelLogDetails, channelView, parseStoredChannels } from './notifications.js';
 
 export interface AdminConsoleOptions {
@@ -652,6 +654,46 @@ export function adminHandler(deps: AdminDeps) {
         void log(ctx, 'notify.channel_removed', channelLogDetails(existing));
         return send(res, 200, { ok: true });
       }
+    }
+
+    // ── access: tokens for /mcp, and the security posture (zero trust) ──
+    if (path === '/api/security' && method === 'GET') {
+      requireUser(ctx);
+      const store = tokenStore(deps.pool);
+      const activeTokens = store ? await store.activeCount().catch(() => null) : null;
+      return send(res, 200, { checks: securityPosture({ pgEnabled: !!deps.pool, activeTokens }) });
+    }
+    if (path === '/api/access-tokens' && method === 'GET') {
+      requireUser(ctx, 'admin');
+      const store = tokenStore(deps.pool);
+      if (!store) return send(res, 200, { available: false, tokens: [], required: settingValue<boolean>('security.requireMcpToken') === true });
+      return send(res, 200, { available: true, tokens: await store.list(), required: settingValue<boolean>('security.requireMcpToken') === true });
+    }
+    if (path === '/api/access-tokens' && method === 'POST') {
+      requireUser(ctx, 'admin');
+      const store = tokenStore(deps.pool);
+      if (!store) throw new HttpError(409, 'Access tokens need the Postgres layer (MCP_PG_ENABLED).', 'unavailable');
+      const b = await readJson(req, 4 * 1024);
+      const name = String(b.name ?? '').trim().slice(0, 80);
+      if (!name) throw new HttpError(400, 'Give the token a name (who or what uses it, e.g. "n8n").', 'invalid');
+      const rid = b.resourceId == null || b.resourceId === '' ? null : Number(b.resourceId);
+      if (rid != null && (!Number.isInteger(rid) || rid <= 0)) throw new HttpError(400, 'The Autotask resource id must be a whole number.', 'invalid');
+      const delegate = b.delegate === true;
+      if (rid != null && delegate) throw new HttpError(400, 'A token is either for one person or a delegate, not both.', 'invalid');
+      const days = b.expiresInDays == null || b.expiresInDays === '' ? null : Number(b.expiresInDays);
+      if (days != null && (!Number.isInteger(days) || days < 1 || days > 3650)) throw new HttpError(400, 'Expiry is 1–3650 days, or empty for none.', 'invalid');
+      const r = await store.create({ name, resourceId: rid, delegate, expiresAt: days ? new Date(Date.now() + days * 86_400_000).toISOString() : null, by: ctx.user!.username });
+      void log(ctx, 'access.token_created', { id: r.item.id, name, resourceId: rid, delegate, expiresInDays: days });
+      return send(res, 200, { token: r.token, item: r.item });
+    }
+    const tokMatch = /^\/api\/access-tokens\/(\d+)\/revoke$/.exec(path);
+    if (tokMatch && method === 'POST') {
+      requireUser(ctx, 'admin');
+      const store = tokenStore(deps.pool);
+      if (!store) throw new HttpError(409, 'Access tokens need the Postgres layer (MCP_PG_ENABLED).', 'unavailable');
+      const ok = await store.revoke(Number(tokMatch[1]), ctx.user!.username);
+      void log(ctx, 'access.token_revoked', { id: Number(tokMatch[1]), ok });
+      return send(res, 200, { ok, message: ok ? 'Revoked. Calls with this token are refused from now on.' : 'That token was already revoked.' });
     }
 
     // ── plan: modules on the account, and upgrade requests (to the control plane, via notifications) ──

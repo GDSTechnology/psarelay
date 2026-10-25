@@ -121,6 +121,6 @@ export function connectionGuide(mcpUrl: string): Array<{ client: string; how: st
     { client: 'ChatGPT', how: `Settings → Connectors → Add custom connector (MCP) → URL ${mcpUrl}. Publish it through your tunnel; after a PSArelay update, ask ChatGPT to refresh its tool list.` },
     { client: 'Claude Code', how: `claude mcp add --transport http psarelay ${mcpUrl}` },
     { client: 'Claude Desktop / claude.ai', how: `Settings → Connectors → Add custom connector → ${mcpUrl}` },
-    { client: 'n8n', how: `MCP Client node (or HTTP Request) → ${mcpUrl}; call tools/call with the tool name and arguments. Use autotask_get_backpressure before bulk work.` },
+    { client: 'n8n', how: `MCP Client node (or HTTP Request) → ${mcpUrl}; header Authorization: Bearer <token> (create one on the Access page); call tools/call with the tool name and arguments. Use autotask_get_backpressure before bulk work.` },
   ];
 }
