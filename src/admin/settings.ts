@@ -13,7 +13,7 @@ export type SettingType = 'boolean' | 'integer' | 'string[]' | 'lines';
 
 export interface SettingDef {
   key: string;
-  group: 'Tools' | 'Postgres shadow' | 'Autotask API' | 'Diagnostics' | 'Actors';
+  group: 'Security' | 'Tools' | 'Postgres shadow' | 'Autotask API' | 'Diagnostics' | 'Actors';
   label: string;
   description: string;
   type: SettingType;
@@ -32,6 +32,16 @@ const boolEnv = (v: string | undefined, d: boolean): boolean => (v == null || v 
 const intEnv = (v: string | undefined, d: number): number => { const n = Number(v); return v != null && v !== '' && Number.isFinite(n) && n >= 0 ? Math.floor(n) : d; };
 
 export const SETTINGS: SettingDef[] = [
+  {
+    key: 'security.requireMcpToken', group: 'Security', type: 'boolean', label: 'Require an access token on /mcp',
+    description: 'On = every MCP call must carry a valid access token (Authorization: Bearer psr_…, created on the Access page); anything else gets HTTP 401. Off = anyone who can reach the MCP port can use every tool — only the network (tunnel, firewall) protects it. Create tokens for n8n and your other clients first, then turn this on. Needs Postgres.',
+    envDefault: (env) => boolEnv(env.MCP_REQUIRE_TOKEN, false),
+  },
+  {
+    key: 'security.trustUnverifiedIdentity', group: 'Security', type: 'boolean', label: 'Trust identities a client declares without a token',
+    description: 'Off (recommended) = a call that is not backed by a token naming a person (or a delegate token) runs as the API user: the email a client puts in its request is recorded but never used to write as that person (Autotask impersonation) — any client could claim to be anyone. On = the old behaviour: caller-mode impersonation trusts the declared email.',
+    envDefault: (env) => boolEnv(env.MCP_TRUST_UNVERIFIED_IDENTITY, false),
+  },
   {
     key: 'tools.writesEnabled', group: 'Tools', type: 'boolean', label: 'Allow write tools',
     description: 'Off = read-only MCP: every tool that creates, updates or deletes Autotask data is hidden and refused. Reads keep working.',

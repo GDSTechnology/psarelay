@@ -100,8 +100,10 @@ import {
   runWithRequestContext,
   getImpersonationMode,
   getRequestOrigin,
+  getRequestAuth,
   isImpersonationAllowedForSource,
 } from '../utils/request-context.js';
+import { settingValue } from '../admin/settings.js';
 import { TOOL_DEFINITIONS, TOOL_CATEGORIES } from './tool.definitions.js';
 import { toolBlockReason, toolListed, toolLockedReason } from '../admin/tool-gate.js';
 import { runToolCall, noteToolAudit, noteRawRequest } from '../services/call-log.js';
@@ -3793,6 +3795,22 @@ export class AutotaskToolHandler {
     // Caller context (who/where/correlation) for audit + future permissions
     // (§3.5/§23). Strip the reserved `_context` key so it never reaches tool logic.
     const ctx = extractCallerContext(meta, args);
+    // Zero trust: a verified access token decides who the caller is. A token naming a person replaces whatever the
+    // client declared; a service token (no person, not a delegate) drops declared identities, so the call runs as the
+    // API user; a delegate token (e.g. n8n acting for Teams users) keeps the declared person and vouches for it.
+    const auth = getRequestAuth();
+    if (auth) {
+      ctx.tokenName = auth.tokenName;
+      if (auth.resourceId != null) {
+        delete ctx.requestingUserEmail; delete ctx.teamsObjectId;
+        ctx.autotaskResourceId = auth.resourceId;
+        ctx.identityVerified = true;
+      } else if (auth.delegate) {
+        ctx.identityVerified = ctx.requestingUserEmail != null || ctx.autotaskResourceId != null || ctx.teamsObjectId != null;
+      } else {
+        delete ctx.requestingUserEmail; delete ctx.teamsObjectId; delete ctx.autotaskResourceId;
+      }
+    }
     // Attach the transport-derived origin captured at the HTTP entry (server-
     // side, via AsyncLocalStorage) so the audit trail records where the request
     // actually came from — not just the client-declared `source`.
@@ -3956,9 +3974,15 @@ export class AutotaskToolHandler {
       let impersonationResourceId: number | undefined;
       const impersonationMode = getImpersonationMode();
       if (impersonationMode !== 'off' && isMutatingTool(name)) {
-        if (impersonationMode === 'caller' && isImpersonationAllowedForSource(ctx.source)) {
-          const callerRes = await this.resolveCaller(ctx);
-          if (callerRes.status === 'resolved') impersonationResourceId = callerRes.resource.id;
+        // Writes run as a person only when that person is vouched for (a token), unless the operator explicitly
+        // trusts client-declared identities — otherwise any client could claim to be anyone (privilege escalation).
+        const trusted = ctx.identityVerified === true || settingValue<boolean>('security.trustUnverifiedIdentity') === true;
+        if (impersonationMode === 'caller' && trusted && isImpersonationAllowedForSource(ctx.source)) {
+          if (ctx.identityVerified && auth?.resourceId != null) impersonationResourceId = auth.resourceId;
+          else {
+            const callerRes = await this.resolveCaller(ctx);
+            if (callerRes.status === 'resolved') impersonationResourceId = callerRes.resource.id;
+          }
         }
       }
 

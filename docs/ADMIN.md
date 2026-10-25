@@ -302,6 +302,32 @@ ground truth. The same classification (`actorType`, `classificationSource`,
 
 Is this server connected to Autotask, and is its API user allowed to do what each module needs? **Run check** (admins; about 30 Autotask calls) signs in, names the API user, and probes **read** access live for every entity the modules use — straight to Autotask, never the mirror. Each module (Service desk & time, Contracts & financial, Billing & reports, Vendor billing reconciliation, Merges & bulk cleanup, Commerce) shows **Ready**, **Blocked** (no read access to …) or **Not fully checked**, with the **write** access it needs from the API user's security level (writes can't be probed without writing). Below: mirror backfill progress, and **Connect your AI** — the MCP endpoint (`MCP_PUBLIC_URL`) with copy-ready steps for ChatGPT, Claude and n8n. The same check is the tool `autotask_setup_check`.
 
+### Access (tokens for the MCP endpoint)
+
+Admins only. **Zero trust: a call is only as trusted as the token it carries.** Create one token per client (n8n, a
+script, a connector) so each can be revoked on its own. The token is shown **once**; only its SHA-256 is stored. The
+client sends it on every call as `Authorization: Bearer psr_…`. A token decides who the call runs as:
+
+| Kind | Runs as | Use for |
+|---|---|---|
+| **Service** | the API user; anything the client claims about a person is dropped | n8n workflows, scripts, cron |
+| **One person** | that Autotask resource — writes are recorded as them (impersonation), whatever the client claims | a technician's own client |
+| **Delegate** | the person the client names (vouched for by this token) | a bot acting for many people, e.g. n8n for Teams |
+
+A presented token must be valid even while tokens are optional: an unknown, revoked or expired one gets **HTTP 401**,
+so a revoked client never silently keeps working. When every client has its token, turn on **Settings → Security →
+Require an access token on /mcp**; from then on a call without one gets 401. ChatGPT and Claude connectors can't send
+a token yet (they will sign in with OAuth) — keep the requirement off while they connect directly, and protect the
+endpoint at the tunnel (Cloudflare Access) meanwhile.
+
+**Who a call runs as, without a token.** The email a client declares (`requestingUserEmail`) is recorded but never
+used to write as that person: any client could claim to be anyone, so caller-mode impersonation only follows a token.
+**Settings → Security → Trust identities a client declares without a token** restores the old behaviour — don't.
+
+The **Security** panel on the Setup page lists what this server exposes and who it trusts — open endpoint, trusted
+declared identities, role gating, raw requests, CORS, the public health check, the webhook receiver — worst first,
+each with the fix.
+
 ### Plan
 
 Which modules this account has. **Self-hosted** (no licence set): every module is unlocked, and the page says so. **Hosted**: the instance carries a licence signed by the PSArelay control plane (`PSARELAY_LICENSE`, verified with `PSARELAY_LICENSE_PUBLIC_KEY` — it can't be edited locally). Included modules show a ✓; the others stay visible as upgrade cards — what the module does, which plans include it or which add-on adds it — with **Request upgrade**, which sends the `platform.upgrade_requested` notification (set a channel for it under Notifications). A tool from a locked module is refused with the same wording ("🔒 Merges & bulk cleanup is not on this account (your plan: Starter) — it is included in the Pro / MSP plans …"), so an AI client can explain it; locked tools stay in the tool list, marked 🔒, unless **Settings → Show locked tools** is off. An expired licence keeps working for 7 days, then only the core module (service desk & time) is available; an invalid one gives core only and the page shows why. Setup, the plan and the console's own tools are never locked.
@@ -597,6 +623,14 @@ commands:
 - Changing a password signs out the user's other sessions. Disabling a user signs
   them out everywhere.
 
+**The MCP endpoint**
+- **Access tokens** (Access page): random 256-bit, shown once, stored as SHA-256, revocable, optional expiry; a bad
+  token is always refused. Required on every call once **Require an access token** is on.
+- **Identity comes from the token, not the client** — see Access above.
+- **CORS** only for the web origins in `MCP_CORS_ORIGINS` (default: claude.ai, chatgpt.com, chat.openai.com), never `*`.
+- **`/health` from outside** (through a tunnel or proxy) answers only status and version; usage, backpressure and
+  login state are for the host's own services (n8n on the compose network).
+
 **Requests**
 - **Cross-site requests are refused.** Every change needs the `X-PSArelay` header,
   which a foreign page can't send, and a same-host `Origin`.
@@ -619,4 +653,7 @@ commands:
 | `MCP_ADMIN_TRUST_PROXY` | `true` | Use `CF-Connecting-IP` / `X-Forwarded-For` for the client IP (throttling, activity log). Set `false` if the port is reachable without a proxy |
 | `MCP_NOTIFY_SERVER_NAME` | `PSArelay` | Server name shown in notifications (tell prod from dev) |
 | `PSARELAY_LICENSE` | — | Hosted only: the signed licence from the control plane. Unset = self-hosted, everything unlocked |
+| `MCP_REQUIRE_TOKEN` | `false` | Start value of **Settings → Security → Require an access token on /mcp** (the console setting wins once saved) |
+| `MCP_TRUST_UNVERIFIED_IDENTITY` | `false` | Start value of **Trust identities a client declares without a token** — keep off |
+| `MCP_CORS_ORIGINS` | claude.ai, chatgpt.com, chat.openai.com | Web origins that may call `/mcp` from a browser (comma-separated); `none` = no browser access. Never `*` |
 | `PSARELAY_LICENSE_PUBLIC_KEY` | — | Hosted only: the control plane's Ed25519 public key (PEM; `\n` escapes allowed) |

@@ -20,7 +20,7 @@ const logger = new Logger('error');
 const config: McpServerConfig = { name: 't', version: '0', autotask: { username: 'u@e.com', secret: 's', integrationCode: 'ic', apiUrl: 'https://webservices2.autotask.net/ATServicesRest/' } };
 const svcWith = (fake: any) => { const s = new AutotaskService(config, logger); jest.spyOn(s as any, 'ensureClient').mockResolvedValue(fake); return s; };
 
-const IMPERSONATION_ENVS = ['AUTOTASK_IMPERSONATION', 'AUTOTASK_IMPERSONATION_MODE', 'AUTOTASK_IMPERSONATION_SOURCES', 'MCP_INSTANCE_LABEL'];
+const IMPERSONATION_ENVS = ['MCP_TRUST_UNVERIFIED_IDENTITY', 'AUTOTASK_IMPERSONATION', 'AUTOTASK_IMPERSONATION_MODE', 'AUTOTASK_IMPERSONATION_SOURCES', 'MCP_INSTANCE_LABEL'];
 afterEach(() => { jest.restoreAllMocks(); for (const k of IMPERSONATION_ENVS) delete process.env[k]; });
 
 const mkReq = (over: Partial<{ remoteAddress: string; headers: Record<string, string | string[]> }>): IncomingMessage => ({
@@ -141,7 +141,8 @@ describe('callTool honours mode + source gating', () => {
     expect(seen).toBeUndefined();
   });
 
-  test('caller mode + allowed source → impersonates the resolved caller', async () => {
+  test('caller mode + allowed source + trusted declared identity → impersonates the resolved caller', async () => {
+    process.env.MCP_TRUST_UNVERIFIED_IDENTITY = 'true';
     process.env.AUTOTASK_IMPERSONATION_MODE = 'caller';
     process.env.AUTOTASK_IMPERSONATION_SOURCES = 'chatgpt';
     const service = svcWith({});

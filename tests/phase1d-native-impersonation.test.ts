@@ -18,7 +18,7 @@ const logger = new Logger('error');
 const config: McpServerConfig = { name: 't', version: '0', autotask: { username: 'u@e.com', secret: 's', integrationCode: 'ic', apiUrl: 'https://webservices2.autotask.net/ATServicesRest/' } };
 const svcWith = (fake: any) => { const s = new AutotaskService(config, logger); jest.spyOn(s as any, 'ensureClient').mockResolvedValue(fake); return s; };
 
-afterEach(() => { jest.restoreAllMocks(); delete process.env.AUTOTASK_IMPERSONATION; });
+afterEach(() => { jest.restoreAllMocks(); delete process.env.AUTOTASK_IMPERSONATION; delete process.env.MCP_TRUST_UNVERIFIED_IDENTITY; });
 
 describe('request-context (AsyncLocalStorage)', () => {
   test('impersonation id is scoped to the run and absent outside it', async () => {
@@ -62,6 +62,7 @@ describe('AutotaskHttpClient sends ImpersonationResourceId only when in context'
 describe('handler wires impersonation for the resolved caller (#42)', () => {
   test('flag on + mutating tool → caller id reaches the outbound call', async () => {
     process.env.AUTOTASK_IMPERSONATION = 'on';
+    process.env.MCP_TRUST_UNVERIFIED_IDENTITY = 'true'; // a declared identity (no token) must be trusted explicitly
     const service = svcWith({});
     const handler = new AutotaskToolHandler(service, logger);
     jest.spyOn(handler as any, 'resolveCaller').mockResolvedValue({ status: 'resolved', resource: { id: 5, name: 'Me' } });

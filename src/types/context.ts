@@ -31,6 +31,12 @@ export interface CallerContext {
   refs?: Record<string, string>;
   timestamp: string;
   /**
+   * Set ONLY server-side from a verified access token (never from _meta / _context): the token that authenticated
+   * this call, and whether the caller's identity is vouched for (a token naming a person, or a delegate token).
+   */
+  tokenName?: string;
+  identityVerified?: boolean;
+  /**
    * Transport-derived origin of the request (peer address / X-Forwarded-For /
    * User-Agent), captured server-side at the HTTP entry — NEVER from client
    * `_meta`/`_context`. Used for audit attribution of the calling container.

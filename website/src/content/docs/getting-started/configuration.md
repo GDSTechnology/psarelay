@@ -9,6 +9,8 @@ description: Environment variables for credentials, transport, the Postgres laye
 | `AUTOTASK_API_URL` | auto-detected | Override the zone URL |
 | `AUTOTASK_IMPERSONATION` | `off` | `on`: writes are recorded as the identified requesting user |
 | `MCP_TRANSPORT` | `stdio` | `http` for remote clients |
+| `MCP_REQUIRE_TOKEN` | `false` | Require an access token (`Authorization: Bearer psr_…`, created in the console) on every `/mcp` call |
+| `MCP_CORS_ORIGINS` | AI clients | Web origins allowed to call `/mcp` from a browser; `none` = none. Never `*` |
 | `MCP_HTTP_PORT` / `MCP_HTTP_HOST` | `8080` / `0.0.0.0` | HTTP transport |
 | `MCP_PG_ENABLED` and `MCP_PG_*` | off | The Postgres layer (connection, schema, roles) |
 | `MCP_PG_SHADOW_ENABLED`, `MCP_PG_SHADOW_SERVE_READS` | off | Mirror sync, and answering reads from it |
