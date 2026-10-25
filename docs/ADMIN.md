@@ -298,6 +298,10 @@ ground truth. The same classification (`actorType`, `classificationSource`,
 `reference`) appears on every event from
 `autotask_get_ticket_change_history`, and in `autotask_get_actor_roster`.
 
+### Setup
+
+Is this server connected to Autotask, and is its API user allowed to do what each module needs? **Run check** (admins; about 30 Autotask calls) signs in, names the API user, and probes **read** access live for every entity the modules use — straight to Autotask, never the mirror. Each module (Service desk & time, Contracts & financial, Billing & reports, Vendor billing reconciliation, Merges & bulk cleanup, Commerce) shows **Ready**, **Blocked** (no read access to …) or **Not fully checked**, with the **write** access it needs from the API user's security level (writes can't be probed without writing). Below: mirror backfill progress, and **Connect your AI** — the MCP endpoint (`MCP_PUBLIC_URL`) with copy-ready steps for ChatGPT, Claude and n8n. The same check is the tool `autotask_setup_check`.
+
 ### Bulk jobs (mass changes, paced)
 
 Mass changes are prepared from the mirror, **approved by a person here**, and pushed to Autotask by the server at a set pace. Today that means inactivating placeholder companies ("Gmail", "Outlook", "Unknown…") and their contacts, or the junk contacts on one real company. A chat assistant can prepare a job and watch it (`autotask_bulk_inactivate`), but some assistants refuse to approve tens of thousands of writes, and a person should decide that anyway.

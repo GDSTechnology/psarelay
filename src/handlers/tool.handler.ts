@@ -71,6 +71,7 @@ import { processToolHandlers } from '../vendors/process-tools.js';
 import { mergeToolHandlers } from '../merge/tools.js';
 import { bulkToolHandlers } from '../bulk/tools.js';
 import { commerceToolHandlers } from '../commerce/tools.js';
+import { setupToolHandlers } from '../setup/tools.js';
 import { captureGap, gapToolHandlers } from '../gaps/tools.js';
 import { pax8ToolHandlers } from '../vendors/pax8-tools.js';
 import { contractToolHandlers } from '../vendors/contract-tools.js';
@@ -1162,6 +1163,7 @@ export class AutotaskToolHandler {
       // Bulk placeholder cleanup (staged in Postgres, pushed by the background worker at a set pace).
       ...bulkToolHandlers(s, () => getPool(this.logger)),
       ...commerceToolHandlers(s, () => getPool(this.logger)),
+      ...setupToolHandlers(s),
       // Capability gaps → console Requests page.
       ...gapToolHandlers(() => getPool(this.logger)),
       // Connection
