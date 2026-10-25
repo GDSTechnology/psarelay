@@ -62,7 +62,7 @@ class AutotaskToolHandler {
 
 #### 2. Handler Composition Pattern
 ```typescript
-class AutotaskMcpServer {
+class PsarelayServer {
   constructor(config: McpServerConfig, logger: Logger) {
     this.autotaskService = new AutotaskService(config, logger);
     this.toolHandler = new ToolHandler(this.autotaskService, logger);
@@ -408,7 +408,7 @@ describe('Autotask API Integration', () => {
 // Test MCP server responses
 describe('MCP Server', () => {
   test('should list tools correctly', async () => {
-    const server = new AutotaskMcpServer(config, logger);
+    const server = new PsarelayServer(config, logger);
     const tools = await server.toolHandler.listTools();
     expect(tools.find(t => t.name === 'search_companies')).toBeDefined();
   });
@@ -643,7 +643,7 @@ class HealthCheckHandler {
 
 ```typescript
 // Graceful shutdown handling:
-class AutotaskMcpServer {
+class PsarelayServer {
   async stop(): Promise<void> {
     this.logger.info('Stopping MCP Server...');
     
@@ -705,7 +705,7 @@ interface McpPlugin {
   version: string;
   tools?: ToolDefinition[];
   resources?: ResourceDefinition[];
-  initialize(server: AutotaskMcpServer): Promise<void>;
+  initialize(server: PsarelayServer): Promise<void>;
 }
 
 class PluginManager {

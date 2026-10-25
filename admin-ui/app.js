@@ -6,10 +6,10 @@ const app = document.getElementById('app');
 let me = null;
 // The release this page's code came from; the server sends its own with every
 // API answer. Different = a deploy happened while this tab was open.
-const LOADED_VERSION = (document.querySelector('meta[name="atmcp-version"]') || {}).content || '';
+const LOADED_VERSION = (document.querySelector('meta[name="psarelay-version"]') || {}).content || '';
 let reloadShown = false;
 function checkVersion(res) {
-  const v = res.headers.get('X-Atmcp-Version');
+  const v = res.headers.get('X-PSArelay-Version');
   if (!v || !LOADED_VERSION || v === LOADED_VERSION || reloadShown) return;
   reloadShown = true;
   document.body.append(h('div', { class: 'reload-bar', role: 'status' },
@@ -58,7 +58,7 @@ async function api(method, path, body) {
   const res = await fetch(path, {
     method,
     credentials: 'same-origin',
-    headers: { 'X-Atmcp': '1', ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
+    headers: { 'X-PSArelay': '1', ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   checkVersion(res);

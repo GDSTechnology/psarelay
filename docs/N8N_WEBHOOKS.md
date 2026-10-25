@@ -101,7 +101,7 @@ forward the **raw body unchanged** with the original header:
 ```
 Webhook (Raw Body ON) → [verify, as above] → HTTP Request
   Method:  POST
-  URL:     http://autotask-mcp:8080/ingest/autotask-webhook
+  URL:     http://psarelay:8080/ingest/autotask-webhook   (installs from before the rename: http://autotask-mcp:8080/…)
   Send Headers:  X-Hook-Signature = {{ $('Webhook').item.json.headers['x-hook-signature'] }}
                  Content-Type     = application/json
   Send Body:     n8n Binary File, input field "data"   (the raw body, byte for byte)

@@ -173,7 +173,7 @@ describe('admin HTTP API', () => {
   afterEach(() => new Promise<void>((ok) => server.close(() => ok())));
 
   const call = async (method: string, path: string, body?: unknown, cookie?: string, extra: Record<string, string> = {}) => {
-    const r = await fetch(base + path, { method, headers: { 'X-Atmcp': '1', 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}), ...extra }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+    const r = await fetch(base + path, { method, headers: { 'X-PSArelay': '1', 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}), ...extra }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
     return { status: r.status, body: await r.json().catch(() => null) as any, cookie: r.headers.get('set-cookie') };
   };
   const login = async (u: string, p: string) => { const r = await call('POST', '/api/login', { username: u, password: p }); return { ...r, jar: r.cookie?.split(';')[0] }; };
@@ -272,7 +272,7 @@ describe('admin HTTP API', () => {
 
   test('cookie is Secure (__Host-) behind an HTTPS proxy', async () => {
     const r = await call('POST', '/api/login', { username: 'admin', password: 'initial-temp-password' }, undefined, { 'X-Forwarded-Proto': 'https' });
-    expect(r.cookie).toMatch(/^__Host-atmcp_session=.*; Secure$/);
+    expect(r.cookie).toMatch(/^__Host-psarelay_session=.*; Secure$/);
   });
 });
 

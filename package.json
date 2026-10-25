@@ -5,7 +5,7 @@
   "main": "dist/entry.js",
   "bin": {
     "psarelay": "./dist/entry.js",
-    "autotask-mcp": "./dist/entry.js"
+    "psarelay": "./dist/entry.js"
   },
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
