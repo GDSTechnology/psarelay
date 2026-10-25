@@ -52,17 +52,17 @@ export function getRequestOrigin(): RequestOrigin | undefined {
  *   off      never impersonate (e.g. the n8n / cron integration instance)
  *   caller   resolve the calling user and tunnel writes as them, degrading to
  *            the integration user when unidentified (the ChatGPT / Teams instance)
- *   gateway  impersonate ONLY from the trusted, S2S-verified gateway header —
- *            the client payload is never used to pick the acting user
  *
  * Legacy compatibility: AUTOTASK_IMPERSONATION=on/true/1/yes (with no MODE set)
  * maps to `caller`; off/unset maps to `off`.
  */
-export type ImpersonationMode = 'off' | 'caller' | 'gateway';
+export type ImpersonationMode = 'off' | 'caller';
 
 export function getImpersonationMode(): ImpersonationMode {
   const mode = (process.env.AUTOTASK_IMPERSONATION_MODE || '').trim().toLowerCase();
-  if (mode === 'off' || mode === 'caller' || mode === 'gateway') return mode;
+  if (mode === 'off' || mode === 'caller') return mode;
+  // Any other explicit value (the removed hosted-gateway mode included) fails closed.
+  if (mode) return 'off';
   // Fall back to the legacy on/off flag when MODE isn't set.
   const legacy = (process.env.AUTOTASK_IMPERSONATION || '').trim().toLowerCase();
   if (legacy === 'on' || legacy === 'true' || legacy === '1' || legacy === 'yes') return 'caller';

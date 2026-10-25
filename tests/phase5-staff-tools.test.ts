@@ -3,10 +3,6 @@
 // reads). Asserts the filters sent upstream and that nothing is written when
 // validation fails.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { AutotaskToolHandler } from '../src/handlers/tool.handler';
 import { TOOL_DEFINITIONS } from '../src/handlers/tool.definitions';

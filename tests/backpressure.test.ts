@@ -1,10 +1,6 @@
 // Backpressure (MCP-008): the ok / slow / stop verdict from usage, login
 // protection, 429 cooldown and queue depth — and the tool reading live state.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { assessBackpressure } from '../src/services/backpressure';
 import { AutotaskToolHandler } from '../src/handlers/tool.handler';
 import { AutotaskService } from '../src/services/autotask.service';

@@ -2,12 +2,6 @@
 // "T20260825.0006" can be a Ticket OR a project Task — resolve by searching
 // both, never by the prefix; return matched / ambiguous / not-found.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: {
-    create: jest.fn().mockRejectedValue(new Error('Mock: Cannot connect to Autotask API')),
-  },
-}));
-
 import {
   classifyReferenceMatches,
   isRecordReferenceShape,

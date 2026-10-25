@@ -1,11 +1,5 @@
 // Caller context + structured audit logging (Expansion Spec §3.5 / §23).
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: {
-    create: jest.fn().mockRejectedValue(new Error('Mock: Cannot connect to Autotask API')),
-  },
-}));
-
 import { extractCallerContext, stripCallerContext, CALLER_CONTEXT_ARG } from '../src/types/context';
 import { emitAudit } from '../src/utils/audit';
 import { AutotaskService } from '../src/services/autotask.service';

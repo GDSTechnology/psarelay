@@ -1,9 +1,5 @@
 // Picklist label→value resolver (Phase 4 §4.4, #45). Mocked getFieldInfo.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';
 import type { McpServerConfig } from '../src/types/mcp';

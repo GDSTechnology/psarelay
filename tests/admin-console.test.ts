@@ -3,10 +3,6 @@
 // CSRF and last-admin rules against an in-memory store. The real Postgres
 // path (migration 0004, CLI init, browser sign-in) was verified on the local dev DB.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { createServer, Server } from 'node:http';
 import { AddressInfo } from 'node:net';
 import { resolve } from 'node:path';
@@ -169,7 +165,7 @@ describe('admin HTTP API', () => {
     store = new FakeStore();
     await store.createUser('admin', 'initial-temp-password', 'admin', 'cli', true);
     const handler = adminHandler({ store: store as unknown as AdminStore, pool: null, startedAt: Date.now(),
-      opts: { logger, service: {} as any, version: 't', authMode: 'gateway', env: { MCP_ADMIN_UI_DIR: resolve(__dirname, '..', 'admin-ui') } } });
+      opts: { logger, service: {} as any, version: 't', env: { MCP_ADMIN_UI_DIR: resolve(__dirname, '..', 'admin-ui') } } });
     server = createServer((q, r) => { void handler(q, r); });
     await new Promise<void>((ok) => server.listen(0, '127.0.0.1', () => ok()));
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

@@ -215,7 +215,7 @@ async function dashboard(body) {
     const s = await api('GET', '/api/status');
     const at = s.api && s.api.autotask && !s.api.autotask.error ? s.api.autotask : null;
     const srv = s.api && s.api.server;
-    const noApi = s.authMode === 'gateway' ? 'Not available in gateway mode (many tenants).' : 'No Autotask API user is configured.';
+    const noApi = 'No Autotask API user is configured.';
     const banners = [];
     if (!s.tools.writesEnabled) banners.push(h('div', { class: 'banner warn' }, 'Read-only mode: write tools are switched off for every agent.'));
     if (s.tools.disabledCategories.length) banners.push(h('div', { class: 'banner warn' }, `Disabled tool groups: ${s.tools.disabledCategories.join(', ')}.`));
@@ -245,7 +245,6 @@ async function dashboard(body) {
         h('dl', { class: 'kv' },
           h('dt', null, 'Up for'), h('dd', null, duration(s.uptimeSeconds)),
           h('dt', null, 'Started'), h('dd', null, when(s.startedAt)),
-          h('dt', null, 'Mode'), h('dd', null, s.authMode === 'env' ? 'Single tenant' : 'Gateway'),
           h('dt', null, 'Node'), h('dd', null, s.node))),
       h('section', { class: 'panel' }, h('h2', null, 'Autotask API (whole tenant)'),
         at ? [h('div', { class: 'stat' }, `${at.usedPct ?? '—'}%`, h('small', null, ` of ${fmt(at.limit)} / h`)), usageBar(at.usedPct),

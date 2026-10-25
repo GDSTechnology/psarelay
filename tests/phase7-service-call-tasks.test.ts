@@ -3,12 +3,6 @@
 // Child routes: POST /ServiceCalls/{id}/Tasks and
 // POST /ServiceCallTasks/{id}/Resources (root collections don't exist → 404).
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: {
-    create: jest.fn().mockRejectedValue(new Error('Mock: Cannot connect to Autotask API')),
-  },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';
 import type { McpServerConfig } from '../src/types/mcp';

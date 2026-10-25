@@ -13,12 +13,7 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies — NO registry token required. autotask-node is now a
-# public github:GDSTechnology/autotask-node dependency (dev-only, never imported
-# by src), so npm ci clones it anonymously. --ignore-scripts skips the git dep's
-# prepare/build: the MCP runtime does not use the SDK, and the production stage
-# takes its node_modules from the `deps` stage (no dev deps), so its dist is
-# never needed.
+# Install dependencies — public packages only, no registry token.
 RUN npm ci --ignore-scripts
 
 # Copy source code
@@ -48,8 +43,7 @@ RUN npm run build
 # production stage copies node_modules from HERE, not from the builder.
 # It used to copy the builder's full node_modules (~370 MB with dev deps) and
 # then `npm prune` it — but a later layer can't shrink an earlier one, so the
-# dev deps stayed in the image (745 MB). --omit=dev never fetches the
-# dev-only git dependency (autotask-node), so this needs no git or token.
+# dev deps stayed in the image (745 MB). --omit=dev skips the dev deps entirely.
 FROM node:26-alpine AS deps
 WORKDIR /app
 COPY package*.json ./
@@ -110,8 +104,6 @@ ENV LOG_FORMAT=json
 ENV MCP_TRANSPORT=http
 ENV MCP_HTTP_PORT=8080
 ENV MCP_HTTP_HOST=0.0.0.0
-# Default to env mode for backward compatibility; set to 'gateway' for hosted deployment
-ENV AUTH_MODE=env
 
 # Define volume for logs
 VOLUME ["/app/logs"]

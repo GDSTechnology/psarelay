@@ -2,10 +2,6 @@
 // forward/modify) are hidden from user-facing note views by default. Shapes
 // below mirror T20260928.0084's live notes (2026-09-29): 24 notes, 15 system.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';
 import { buildTicketCard, headline } from '../src/handlers/card.builder';

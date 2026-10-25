@@ -58,8 +58,7 @@ reported by `/health`:
 - `COMMIT_SHA` — the exact source commit
 - `BUILD_DATE` — UTC build timestamp
 
-The dependency `autotask-node` is the **public** `github:GDSTechnology/autotask-node`
-fork, so the image builds with **no registry token**.
+The image builds from public dependencies only — **no registry token**.
 
 ## 1. Prerequisites
 
@@ -89,7 +88,6 @@ Behavior / safety (set as needed):
 |---|---|
 | `AUTOTASK_DEFAULT_OWNER_RESOURCE_ID` | Default company owner when a create omits `ownerResourceID` (§6.1) |
 | `AUTOTASK_PROTECTED_COMPANY_IDS` | Comma-separated extra protected company IDs (company `0` is always protected, §7.31) |
-| `AUTH_MODE` | `env` (single-tenant, default) or `gateway` (hosted multi-tenant) |
 | `MCP_TRANSPORT` | `http` for the server deployment |
 | `MCP_HTTP_PORT` / `MCP_HTTP_HOST` | Default `8080` / `0.0.0.0` |
 | `LOG_LEVEL` / `LOG_FORMAT` | `info` / `json` in production |

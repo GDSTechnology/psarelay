@@ -3,10 +3,6 @@
 // be treated as "no company": not rejected, not dropped from a filter, not
 // missing from the write log or the mirror's dirty marks.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { AutotaskToolHandler } from '../src/handlers/tool.handler';
 import { Logger } from '../src/utils/logger';

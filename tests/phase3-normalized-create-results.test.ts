@@ -2,12 +2,6 @@
 // { id, entityType, parentType?, parentId? } as `data`, so callers never
 // special-case itemId vs item.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: {
-    create: jest.fn().mockRejectedValue(new Error('Mock: Cannot connect to Autotask API')),
-  },
-}));
-
 import {
   normalizeCreateResult,
   normalizeCreateToolResult,

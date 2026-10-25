@@ -51,8 +51,7 @@ services:
       MCP_TRANSPORT: http
       MCP_HTTP_HOST: 0.0.0.0
       MCP_HTTP_PORT: "8080"
-      AUTH_MODE: env
-      # Impersonation posture. Accepted values (exact): off | caller | gateway.
+      # Impersonation posture. Accepted values (exact): off | caller.
       # "off" = writes run as the integration user; n8n/cron cannot impersonate.
       # To turn impersonation on here later, change to "caller". Remove the line
       # or set "off" to disable. (Legacy AUTOTASK_IMPERSONATION=on|true|1|yes also
@@ -87,8 +86,7 @@ services:
       MCP_TRANSPORT: http
       MCP_HTTP_HOST: 0.0.0.0
       MCP_HTTP_PORT: "8080"
-      AUTH_MODE: env
-      # Impersonation posture. Accepted values (exact): off | caller | gateway.
+      # Impersonation posture. Accepted values (exact): off | caller.
       # "caller" resolves the calling user and tunnels writes as them
       # (ImpersonationResourceId). Requires the API user's Autotask security level
       # to permit impersonation. Set "off" (or remove) to disable.

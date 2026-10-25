@@ -1,12 +1,6 @@
 // Permission gating (Expansion Spec §4.2, issue #15). Effective permission =
 // caller's functional role ∩ tool risk. Disabled unless MCP_PERMISSIONS_ENABLED.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: {
-    create: jest.fn().mockRejectedValue(new Error('Mock: Cannot connect to Autotask API')),
-  },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { AutotaskToolHandler } from '../src/handlers/tool.handler';
 import { Logger } from '../src/utils/logger';

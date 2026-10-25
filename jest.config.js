@@ -7,7 +7,7 @@ module.exports = {
     '**/?(*.)+(spec|test).ts'
   ],
   transformIgnorePatterns: [
-    'node_modules/(?!(autotask-node|@exodus/bytes)/)'
+    'node_modules/(?!(@exodus/bytes)/)'
   ],
   moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1'

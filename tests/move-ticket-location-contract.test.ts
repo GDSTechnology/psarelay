@@ -3,10 +3,6 @@
 // contract cleared — validated and reported — when it belongs to another
 // company. update_ticket verifies UDFs (BP-Status / Nexus-Status) on read-back.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { AutotaskToolHandler } from '../src/handlers/tool.handler';
 import { Logger } from '../src/utils/logger';

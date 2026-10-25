@@ -1,10 +1,6 @@
 // Ticket-anchored billing-gaps sweep — the reviewable weekly report. Pure rules
 // + service sweep (union of open + completed tickets). Mocked service.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { analyzeTicketBillingGaps } from '../src/utils/ticket-billing-gaps';
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';

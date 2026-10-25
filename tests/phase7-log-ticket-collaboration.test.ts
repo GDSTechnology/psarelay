@@ -3,12 +3,6 @@
 // ticket note. Dry-run-first, resolve by id/name/email, role auto-resolve,
 // idempotent time + note, validate-all-before-write.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: {
-    create: jest.fn().mockRejectedValue(new Error('Mock: Cannot connect to Autotask API')),
-  },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { AutotaskToolHandler } from '../src/handlers/tool.handler';
 import { Logger } from '../src/utils/logger';

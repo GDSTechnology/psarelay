@@ -2,10 +2,6 @@
 // against the tenant's live picklist; server-side filter combined with the name
 // / active filters; rows carry classification {id, label} or null.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { AutotaskToolHandler } from '../src/handlers/tool.handler';
 import { matchPicklistExact } from '../src/utils/staff-tools';

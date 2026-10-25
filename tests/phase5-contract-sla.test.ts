@@ -2,10 +2,6 @@
 // Pure planners (classifyContractSlaCoverage, planContractSlaAssignment,
 // activeStatusValues) + dry-run-first gating through the service (mocked).
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import {
   classifyContractSlaCoverage, planContractSlaAssignment, activeStatusValues,
 } from '../src/utils/contract-sla';

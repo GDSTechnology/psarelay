@@ -1,12 +1,6 @@
 // currentUser proxy data input (Expansion Spec §4.1/§9): "act as me" resolves the
 // caller to their Autotask resource and writes it into the tool's resource field.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: {
-    create: jest.fn().mockRejectedValue(new Error('Mock: Cannot connect to Autotask API')),
-  },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { AutotaskToolHandler } from '../src/handlers/tool.handler';
 import { Logger } from '../src/utils/logger';

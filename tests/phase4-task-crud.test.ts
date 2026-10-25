@@ -1,9 +1,5 @@
 // Task read/write/complete + phase association (Phase 4 §4.2/§4.4/§5.3, #45). Mocked.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';
 import type { McpServerConfig } from '../src/types/mcp';

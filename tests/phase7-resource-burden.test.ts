@@ -1,12 +1,6 @@
 // report_resource_burden: per-resource labour-burden basis (internalCost) +
 // employment basis (payrollType/resourceType) for cost/utilisation pages.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: {
-    create: jest.fn().mockRejectedValue(new Error('Mock: Cannot connect to Autotask API')),
-  },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { AutotaskToolHandler } from '../src/handlers/tool.handler';
 import { Logger } from '../src/utils/logger';

@@ -5,9 +5,8 @@ description: Environment variables for credentials, transport, the Postgres laye
 
 | Variable | Default | |
 |---|---|---|
-| `AUTOTASK_USERNAME` / `AUTOTASK_SECRET` / `AUTOTASK_INTEGRATION_CODE` | — | API user credentials (required in `env` auth mode) |
+| `AUTOTASK_USERNAME` / `AUTOTASK_SECRET` / `AUTOTASK_INTEGRATION_CODE` | — | API user credentials (required) |
 | `AUTOTASK_API_URL` | auto-detected | Override the zone URL |
-| `AUTH_MODE` | `env` | `gateway`: credentials arrive per request in headers (`X-API-Key`, `X-API-Secret`, `X-Integration-Code`) |
 | `AUTOTASK_IMPERSONATION` | `off` | `on`: writes are recorded as the identified requesting user |
 | `MCP_TRANSPORT` | `stdio` | `http` for remote clients |
 | `MCP_HTTP_PORT` / `MCP_HTTP_HOST` | `8080` / `0.0.0.0` | HTTP transport |

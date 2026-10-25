@@ -1,10 +1,6 @@
 // Catalog Phase B (#93): guarded bulk-update + merge planning, and dry-run-first
 // gating through the service. Pure planners + mocked service.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { planBulkProductUpdate, planProductMerge } from '../src/utils/catalog-hygiene';
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';

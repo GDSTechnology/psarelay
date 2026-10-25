@@ -1,11 +1,5 @@
 // Caller → Autotask resource resolution + identity prompt (Expansion Spec §4.1).
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: {
-    create: jest.fn().mockRejectedValue(new Error('Mock: Cannot connect to Autotask API')),
-  },
-}));
-
 import {
   parseUserMap,
   callerMapKeys,

@@ -2,10 +2,6 @@
 // first, paged by send; filters asserted on the payload sent upstream. Shapes
 // mirror live rows (2026-09-30) — incl. "Name <addr>" recipients.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';
 import { groupNotificationSends, emailDomain, NotificationRow } from '../src/utils/notification-history';

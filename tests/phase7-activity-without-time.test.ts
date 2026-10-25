@@ -2,10 +2,6 @@
 // (2026-09-22..29): bare "Closed" notes, "Closed - <reason>" close-outs,
 // internal-company and alert tickets, mail-loop junk, backlog cleanup.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';
 import { computeActivityWithoutTime, isSubstantiveNote, localDay, AwtTicket } from '../src/utils/activity-without-time';

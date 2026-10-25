@@ -3,10 +3,6 @@
 // Live schema confirmed 2026-09-18: ContractServiceUnits/BundleUnits carry
 // units + a PRORATED per-period `price`; steady-state monthly = units × rate.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { computeRecurringRevenue } from '../src/utils/recurring-revenue';
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';

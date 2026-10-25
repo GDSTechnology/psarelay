@@ -54,7 +54,6 @@ export interface AdminConsoleOptions {
   logger: Logger;
   service: AutotaskService;
   version: string;
-  authMode: 'env' | 'gateway';
   apiUsername?: string | undefined;
   env?: NodeJS.ProcessEnv;
 }
@@ -378,7 +377,7 @@ export function adminHandler(deps: AdminDeps) {
 
   const status = async () => {
     const rt = getShadowRuntime();
-    const tenant = opts.authMode === 'env' ? opts.apiUsername?.toLowerCase() : undefined;
+    const tenant = opts.apiUsername?.toLowerCase();
     // Autotask's own counter costs an API call — refresh at most every 5 minutes.
     // Errors are kept only a minute, so a fixed account shows up quickly.
     const ttl = thresholdCache && (thresholdCache.value as { error?: unknown } | null)?.error ? 60_000 : 300_000;
@@ -405,7 +404,6 @@ export function adminHandler(deps: AdminDeps) {
       startedAt: new Date(deps.startedAt).toISOString(),
       uptimeSeconds: Math.round((Date.now() - deps.startedAt) / 1000),
       node: process.version,
-      authMode: opts.authMode,
       autotaskAuth: tenant ? authBlockStatus(tenant) : null,
       outsideTraffic: tenant ? outsideTraffic() : null,
       mcpTraffic: mcpTrafficSummary(24),
@@ -582,7 +580,7 @@ export function adminHandler(deps: AdminDeps) {
 
     if (path === '/api/actions/auth-retry' && method === 'POST') {
       requireUser(ctx, 'admin');
-      const tenant = opts.authMode === 'env' ? opts.apiUsername?.toLowerCase() : undefined;
+      const tenant = opts.apiUsername?.toLowerCase();
       const cleared = tenant ? clearAuthBlock(tenant) : false;
       thresholdCache = null; // re-check usage (the probe) on the next dashboard refresh
       void log(ctx, 'action.auth_retry', { cleared });

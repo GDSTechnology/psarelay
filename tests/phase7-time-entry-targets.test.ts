@@ -1,10 +1,6 @@
 // #5 — get_time_entry_targets: open tasks (exclude completed) + non-complete
 // assigned tickets for a resource, with project names + searchTerm filter. Mocked.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';
 import type { McpServerConfig } from '../src/types/mcp';

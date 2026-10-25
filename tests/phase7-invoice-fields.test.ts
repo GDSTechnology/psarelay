@@ -2,10 +2,6 @@
 // so the read optimizer can't strip them), the unsynced/batch/date filters, and the
 // invoice→work linkage (linkedTicketIDs/ProjectIDs/TaskIDs). Service mocked.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';
 import type { McpServerConfig } from '../src/types/mcp';

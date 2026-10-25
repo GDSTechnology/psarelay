@@ -1,9 +1,5 @@
 // Task notes (Phase 4 §5.6, #45) — child of Tasks via the note-impl pattern. Mocked.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';
 import type { McpServerConfig } from '../src/types/mcp';

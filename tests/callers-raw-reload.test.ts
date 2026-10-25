@@ -75,7 +75,7 @@ describe('console version', () => {
   beforeAll(async () => {
     global.fetch = realFetch;
     const store = { sessionUser: async () => null } as unknown as AdminStore;
-    const handler = adminHandler({ store, pool: null, startedAt: Date.now(), opts: { logger, service: {} as any, version: '3.59.0', authMode: 'gateway', env: { MCP_ADMIN_UI_DIR: resolve(__dirname, '..', 'admin-ui') } } });
+    const handler = adminHandler({ store, pool: null, startedAt: Date.now(), opts: { logger, service: {} as any, version: '3.59.0', env: { MCP_ADMIN_UI_DIR: resolve(__dirname, '..', 'admin-ui') } } });
     server = createServer((q, r) => { void handler(q, r); });
     await new Promise<void>((ok) => server.listen(0, '127.0.0.1', () => ok()));
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

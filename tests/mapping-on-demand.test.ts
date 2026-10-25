@@ -4,10 +4,6 @@
 // had no title filter, so finding an existing ticket meant listing a whole
 // company's open tickets page by page.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { MappingService, _resetTenantCacheStore } from '../src/utils/mapping.service';
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';

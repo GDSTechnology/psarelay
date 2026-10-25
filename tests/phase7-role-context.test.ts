@@ -2,12 +2,6 @@
 // queue names; resolveWorkTimeEntryRole returns DEDUPED role choices with that
 // context when a resource has multiple roles and no API-visible default.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: {
-    create: jest.fn().mockRejectedValue(new Error('Mock: Cannot connect to Autotask API')),
-  },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';
 import type { McpServerConfig } from '../src/types/mcp';

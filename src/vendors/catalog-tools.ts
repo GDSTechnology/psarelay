@@ -18,7 +18,7 @@ import { ADJUSTMENTS, adjustmentAlreadyApplied, adjustmentReadBack, adjustmentSn
 
 type Result = { result: unknown; message: string };
 type H = (a: Record<string, any>, ctx: CallerContext) => Promise<Result>;
-const who = (ctx: CallerContext) => ctx.trustedActingUserEmail ?? ctx.requestingUserEmail ?? (ctx.source !== 'unknown' ? ctx.source : null);
+const who = (ctx: CallerContext) => ctx.requestingUserEmail ?? (ctx.source !== 'unknown' ? ctx.source : null);
 const unavailable: Result = { result: { status: 'unavailable' }, message: 'Needs the Postgres store (MCP_PG_ENABLED=true and migrations 0010 + 0011).' };
 const CADENCES = ['MM', 'AM', 'AA', 'monthly', 'annual'];
 

@@ -1,10 +1,6 @@
 // #46 — SOW→project build engine. Pure blueprint ordering + the idempotent,
 // resumable, dry-run-first build orchestrator. Service methods are mocked; no I/O.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { orderPhasesForCreate, planProjectBuild, buildMarker, hasBuildMarker } from '../src/utils/project-build';
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';

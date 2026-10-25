@@ -4,10 +4,6 @@
 // automation share one API user, so without the exclusion every MCP write
 // would re-fire the webhook into n8n.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';
 import { buildExclusions, envExcludedResourceIDs, maskSecret, resolveWebhookSecret, secretErrors, secretWarnings } from '../src/utils/webhook-safety';

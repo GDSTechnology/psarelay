@@ -15,7 +15,7 @@ import { OfferingStore, OrderStore, type Order, type OrderStatus, type Payment }
 
 type Result = { result: unknown; message: string };
 type H = (a: Record<string, any>, ctx: CallerContext) => Promise<Result>;
-const who = (ctx: CallerContext) => ctx.trustedActingUserEmail ?? ctx.requestingUserEmail ?? (ctx.source !== 'unknown' ? ctx.source : null);
+const who = (ctx: CallerContext) => ctx.requestingUserEmail ?? (ctx.source !== 'unknown' ? ctx.source : null);
 const today = () => new Date().toISOString().slice(0, 10);
 
 /** The offering from tool input (snake or camel), defaults applied. */

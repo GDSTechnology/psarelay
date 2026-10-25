@@ -3,10 +3,6 @@
 // contractID required + readonly, status a tenant picklist. Financial mutations,
 // so create/update are confirmation-gated. Mocked http / mocked service.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { AutotaskToolHandler } from '../src/handlers/tool.handler';
 import { TOOL_DEFINITIONS } from '../src/handlers/tool.definitions';

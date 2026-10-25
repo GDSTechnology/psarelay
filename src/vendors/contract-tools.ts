@@ -18,7 +18,7 @@ import type { QueryFn } from './contract-io.js';
 
 type Result = { result: unknown; message: string };
 type H = (a: Record<string, any>, ctx: CallerContext) => Promise<Result>;
-const who = (ctx: CallerContext) => ctx.trustedActingUserEmail ?? ctx.requestingUserEmail ?? (ctx.source !== 'unknown' ? ctx.source : null);
+const who = (ctx: CallerContext) => ctx.requestingUserEmail ?? (ctx.source !== 'unknown' ? ctx.source : null);
 const unavailable: Result = { result: { status: 'unavailable' }, message: 'Needs the Postgres store (MCP_PG_ENABLED=true and migrations 0010–0012).' };
 const r4 = (n: number) => Math.round(n * 10000) / 10000;
 const nextMonth = () => { const n = new Date(); return new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth() + 1, 1)).toISOString().slice(0, 10); };

@@ -2,10 +2,6 @@
 // impersonation mode, source allowlist gating, and the audit fields that make
 // "which container is making the request" answerable. Mocked http / service.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import type { IncomingMessage } from 'node:http';
 import { extractRequestOrigin } from '../src/utils/origin';
 import {
@@ -64,7 +60,7 @@ describe('origin flows through AsyncLocalStorage', () => {
 describe('getImpersonationMode', () => {
   test('defaults to off', () => { expect(getImpersonationMode()).toBe('off'); expect(isImpersonationEnabled()).toBe(false); });
   test('explicit modes win', () => {
-    process.env.AUTOTASK_IMPERSONATION_MODE = 'gateway'; expect(getImpersonationMode()).toBe('gateway');
+    process.env.AUTOTASK_IMPERSONATION_MODE = 'gateway'; expect(getImpersonationMode()).toBe('off'); // removed mode fails closed
     process.env.AUTOTASK_IMPERSONATION_MODE = 'caller'; expect(getImpersonationMode()).toBe('caller');
     process.env.AUTOTASK_IMPERSONATION_MODE = 'off'; expect(getImpersonationMode()).toBe('off');
   });
@@ -119,7 +115,7 @@ describe('emitAudit records the attribution signals', () => {
 });
 
 describe('callTool honours mode + source gating', () => {
-  test('gateway mode: caller is NOT resolved; only the trusted header impersonates', async () => {
+  test('the removed gateway mode fails closed: no caller resolution, no impersonation', async () => {
     process.env.AUTOTASK_IMPERSONATION_MODE = 'gateway';
     const service = svcWith({});
     const handler = new AutotaskToolHandler(service, logger);
@@ -127,7 +123,7 @@ describe('callTool honours mode + source gating', () => {
     let seen: number | undefined = -1;
     jest.spyOn(service, 'createTicket').mockImplementation(async () => { seen = getImpersonationResourceId(); return 1; });
     await handler.callTool('autotask_create_ticket', { companyID: 1, title: 'T', description: 'D' });
-    expect(resolveSpy).not.toHaveBeenCalled(); // client payload never picks the actor
+    expect(resolveSpy).not.toHaveBeenCalled();
     expect(seen).toBeUndefined();
   });
 

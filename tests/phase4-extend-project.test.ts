@@ -1,10 +1,6 @@
 // #46 §2.4 — extend_project: add phases/tasks/deps to an EXISTING project by id,
 // idempotent (title-matched reuse), dry-run-first. Service mocked; no I/O.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';
 import type { McpServerConfig } from '../src/types/mcp';

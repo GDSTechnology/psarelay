@@ -14,7 +14,6 @@ function buildEnvConfig(port: number): EnvironmentConfig {
     server: { name: 'autotask-mcp-test', version: '0.0.0-test' },
     transport: { type: 'http', port, host: '127.0.0.1' },
     logging: { level: 'error', format: 'simple' },
-    auth: { mode: 'env' },
   };
 }
 
