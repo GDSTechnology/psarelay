@@ -22,10 +22,12 @@ function fakePool() {
   let id = 0;
   const query = jest.fn(async (sql: string, p: any[] = []) => {
     if (sql.startsWith('INSERT INTO mcp_token')) {
-      const r = { id: ++id, name: p[0], token_hash: p[1], token_prefix: p[2], resource_id: p[3], delegate: p[4], created_by: p[5], expires_at: p[6], created_at: new Date(), last_used_at: null, revoked_at: null, revoked_by: null };
+      const r: Record<string, any> = { id: ++id, name: p[0], token_hash: p[1], token_prefix: p[2], resource_id: p[3], delegate: p[4], created_by: p[5], expires_at: p[6], owner_user_id: p[7], created_at: new Date(), last_used_at: null, revoked_at: null, revoked_by: null };
+      // the owner join (admin_user) is simulated on the row itself
+      if (r.owner_user_id != null) { r.owner_disabled = false; r.owner_resource_id = r.resource_id; }
       rows.push(r); return { rows: [r], rowCount: 1 };
     }
-    if (sql.includes('WHERE token_hash = $1')) {
+    if (sql.includes('t.token_hash = $1')) {
       return { rows: rows.filter((r) => r.token_hash === p[0] && !r.revoked_at && (!r.expires_at || Date.parse(r.expires_at) > Date.now())), rowCount: 1 };
     }
     if (sql.startsWith('UPDATE mcp_token SET revoked_at')) {
@@ -58,6 +60,16 @@ describe('access tokens', () => {
     expect(await s.verify('not-a-token')).toBeNull();
     await s.revoke(item.id, 'admin');
     expect(await s.verify(token)).toBeNull();
+  });
+  test('a self-service token stops when its owner is disabled or linked to another Autotask user', async () => {
+    const { pool, rows } = fakePool();
+    const s = new TokenStore(pool);
+    const a = await s.create({ name: 'mine', resourceId: 42, ownerUserId: 5, by: 'jane' });
+    expect(await s.verify(a.token)).toMatchObject({ resourceId: 42 });
+    rows[0]!.owner_resource_id = 43; s.clearCache();
+    expect(await s.verify(a.token)).toBeNull();
+    rows[0]!.owner_resource_id = 42; rows[0]!.owner_disabled = true; s.clearCache();
+    expect(await s.verify(a.token)).toBeNull();
   });
   test('expired tokens are refused', async () => {
     const { pool } = fakePool();
@@ -129,6 +141,12 @@ describe('who a call runs as', () => {
     await call({ resourceId: 42, delegate: false });
     expect(seen).toEqual([42]);
     expect(resolve).not.toHaveBeenCalled();
+  });
+  test('a person token writes as that person even when impersonation is off (no API-user escalation)', async () => {
+    const { call, seen } = setup();
+    process.env.AUTOTASK_IMPERSONATION_MODE = 'off';
+    await call({ resourceId: 42, delegate: false });
+    expect(seen).toEqual([42]);
   });
   test('a service token drops declared identities', async () => {
     const { call, seen, resolve } = setup();

@@ -136,7 +136,7 @@ class FakeStore {
   async findForLogin(name: string) { return this.users.find((u) => u.username.toLowerCase() === name.toLowerCase()) ?? null; }
   async passwordHashOf(id: number) { return this.users.find((u) => u.id === id)?.passwordHash ?? null; }
   async createUser(username: string, password: string, role: AdminRole, by: string | null, mustChange = true) {
-    const u = { id: this.nextId++, username, role, mustChangePassword: mustChange, disabled: false, createdAt: new Date().toISOString(), createdBy: by, passwordChangedAt: null, lastLoginAt: null, passwordHash: await hashPassword(password) };
+    const u = { id: this.nextId++, username, role, mustChangePassword: mustChange, disabled: false, createdAt: new Date().toISOString(), createdBy: by, passwordChangedAt: null, lastLoginAt: null, autotaskResourceId: null, autotaskResourceName: null, passwordHash: await hashPassword(password) };
     this.users.push(u);
     return (await this.getUser(u.id))!;
   }

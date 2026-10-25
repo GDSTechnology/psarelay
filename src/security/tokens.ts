@@ -11,7 +11,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 export const TOKEN_PREFIX = 'psr_';
 
 export interface AccessToken {
-  id: number; name: string; prefix: string; resourceId: number | null; delegate: boolean;
+  id: number; name: string; prefix: string; resourceId: number | null; delegate: boolean; ownerUserId: number | null; ownerUsername: string | null;
   createdBy: string; createdAt: string; lastUsedAt: string | null; expiresAt: string | null; revokedAt: string | null; revokedBy: string | null;
 }
 /** What a verified token tells the request about its caller. */
@@ -25,7 +25,7 @@ export const tokenShapeOk = (t: string) => t.startsWith(TOKEN_PREFIX) && /^[A-Za
 
 const iso = (d: unknown) => (d ? new Date(d as string).toISOString() : null);
 const row = (x: Record<string, any>): AccessToken => ({
-  id: Number(x.id), name: x.name, prefix: x.token_prefix, resourceId: x.resource_id == null ? null : Number(x.resource_id), delegate: !!x.delegate,
+  id: Number(x.id), name: x.name, prefix: x.token_prefix, resourceId: x.resource_id == null ? null : Number(x.resource_id), delegate: !!x.delegate, ownerUserId: x.owner_user_id == null ? null : Number(x.owner_user_id), ownerUsername: x.owner_username ?? null,
   createdBy: x.created_by, createdAt: iso(x.created_at)!, lastUsedAt: iso(x.last_used_at), expiresAt: iso(x.expires_at), revokedAt: iso(x.revoked_at), revokedBy: x.revoked_by ?? null,
 });
 
@@ -37,20 +37,27 @@ export class TokenStore {
   private touched = new Map<number, number>();
   constructor(private readonly pool: Pool) {}
 
-  async create(o: { name: string; resourceId?: number | null; delegate?: boolean; expiresAt?: string | null; by: string }): Promise<{ token: string; item: AccessToken }> {
+  async create(o: { name: string; resourceId?: number | null; delegate?: boolean; expiresAt?: string | null; by: string; ownerUserId?: number | null }): Promise<{ token: string; item: AccessToken }> {
     const token = newToken();
     const r = await this.pool.query(
-      `INSERT INTO mcp_token (name, token_hash, token_prefix, resource_id, delegate, created_by, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-      [o.name, hashToken(token), token.slice(0, TOKEN_PREFIX.length + 6), o.resourceId ?? null, !!o.delegate, o.by, o.expiresAt ?? null]);
+      `INSERT INTO mcp_token (name, token_hash, token_prefix, resource_id, delegate, created_by, expires_at, owner_user_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [o.name, hashToken(token), token.slice(0, TOKEN_PREFIX.length + 6), o.resourceId ?? null, !!o.delegate, o.by, o.expiresAt ?? null, o.ownerUserId ?? null]);
     return { token, item: row(r.rows[0]) };
   }
-  async list(): Promise<AccessToken[]> { return (await this.pool.query('SELECT * FROM mcp_token ORDER BY revoked_at NULLS FIRST, created_at DESC')).rows.map(row); }
+  async list(): Promise<AccessToken[]> { return (await this.pool.query('SELECT t.*, u.username AS owner_username FROM mcp_token t LEFT JOIN admin_user u ON u.id = t.owner_user_id ORDER BY t.revoked_at NULLS FIRST, t.created_at DESC')).rows.map(row); }
+  /** A user's own tokens (self-service). */
+  async listOwned(userId: number): Promise<AccessToken[]> { return (await this.pool.query('SELECT * FROM mcp_token WHERE owner_user_id = $1 ORDER BY revoked_at NULLS FIRST, created_at DESC', [userId])).rows.map(row); }
   async activeCount(): Promise<number> { return Number((await this.pool.query(`SELECT count(*) AS n FROM mcp_token WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())`)).rows[0]?.n ?? 0); }
-  async revoke(id: number, by: string): Promise<boolean> {
-    const r = await this.pool.query('UPDATE mcp_token SET revoked_at = now(), revoked_by = $2 WHERE id = $1 AND revoked_at IS NULL', [id, by]);
+  /** Revoke a token; with `ownerUserId`, only if that user owns it (self-service). */
+  async revoke(id: number, by: string, ownerUserId?: number): Promise<boolean> {
+    const r = ownerUserId == null
+      ? await this.pool.query('UPDATE mcp_token SET revoked_at = now(), revoked_by = $2 WHERE id = $1 AND revoked_at IS NULL', [id, by])
+      : await this.pool.query('UPDATE mcp_token SET revoked_at = now(), revoked_by = $2 WHERE id = $1 AND owner_user_id = $3 AND revoked_at IS NULL', [id, by, ownerUserId]);
     this.cache.clear(); // a revoke applies at once, not after the cache minute
     return (r.rowCount ?? 0) > 0;
   }
+
+  clearCache(): void { this.cache.clear(); }
 
   /** The caller a presented token stands for, or null (unknown, revoked or expired). */
   async verify(token: string): Promise<TokenAuth | null> {
@@ -58,8 +65,12 @@ export class TokenStore {
     const h = hashToken(token);
     const hit = this.cache.get(h);
     if (hit && Date.now() - hit.at < CACHE_MS) return hit.auth;
-    const r = await this.pool.query(`SELECT * FROM mcp_token WHERE token_hash = $1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())`, [h]);
-    const x = r.rows[0];
+    // A self-service token lives only while its owner is enabled and still linked to the same Autotask resource.
+    const r = await this.pool.query(`SELECT t.*, u.disabled AS owner_disabled, u.autotask_resource_id AS owner_resource_id FROM mcp_token t LEFT JOIN admin_user u ON u.id = t.owner_user_id
+      WHERE t.token_hash = $1 AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at > now())`, [h]);
+    const found = r.rows[0];
+    const ownerOk = !found || found.owner_user_id == null || (found.owner_disabled === false && found.owner_resource_id != null && Number(found.owner_resource_id) === Number(found.resource_id));
+    const x = ownerOk ? found : undefined;
     // Constant-time re-check of the stored hash (the index lookup itself is by exact value).
     const auth = x && timingSafeEqual(Buffer.from(String(x.token_hash)), Buffer.from(h))
       ? { tokenId: Number(x.id), tokenName: String(x.name), resourceId: x.resource_id == null ? null : Number(x.resource_id), delegate: !!x.delegate }
@@ -81,6 +92,9 @@ export function tokenStore(pool: Pool | null): TokenStore | null {
   return store;
 }
 export const _resetTokenStore = () => { store = null; };
+
+/** Forget cached verifications (a user was disabled, unlinked or relinked). */
+export function clearTokenCache(): void { store?.clearCache(); }
 
 /** The bearer token from an Authorization header, or null. */
 export function bearerToken(header: string | string[] | undefined): string | null {
