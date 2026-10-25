@@ -25,6 +25,8 @@ We run PSArelay for you:
 - connect ChatGPT, Claude or n8n with a URL — nothing to install;
 - direct support from the team that builds it.
 
+Hosted plans include modules (service desk, contracts, billing, reports, vendor reconciliation, cleanup, commerce, webhooks). Modules that aren't on your plan stay visible in the console's **Plan** page and in your AI client's tool list, marked 🔒 with the plan or add-on that adds them — one click asks for the upgrade.
+
 Plans and sign-up: **[psarelay.com](https://psarelay.com)**.
 
 ## Which one?

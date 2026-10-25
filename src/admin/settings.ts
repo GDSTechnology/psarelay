@@ -38,6 +38,11 @@ export const SETTINGS: SettingDef[] = [
     envDefault: () => true,
   },
   {
+    key: 'entitlements.showLockedTools', group: 'Tools', type: 'boolean', label: 'Show tools that need an upgrade',
+    description: 'Hosted plans: list the tools of modules not on the account (marked as locked, answering which plan or add-on unlocks them) so AI clients can say what an upgrade adds. Off hides them. Self-hosted instances have no locked tools.',
+    envDefault: () => true,
+  },
+  {
     key: 'tools.disabledCategories', group: 'Tools', type: 'string[]', label: 'Disabled tool groups',
     description: 'Tool groups hidden from agents and refused if called. A tool listed in several groups is disabled when any of them is.',
     envDefault: () => [],

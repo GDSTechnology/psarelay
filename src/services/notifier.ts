@@ -23,7 +23,8 @@ export type NotifyEventType =
   | 'vendor.import_stale' | 'vendor.renewal' | 'vendor.contract_ending'
   | 'vendor.exception_overdue' | 'vendor.notice_due'
   | 'bulk.paused' | 'bulk.done'
-  | 'commerce.order_ready' | 'commerce.order_invoiced' | 'commerce.order_paid' | 'commerce.order_failed' | 'commerce.subscription_changed';
+  | 'commerce.order_ready' | 'commerce.order_invoiced' | 'commerce.order_paid' | 'commerce.order_failed' | 'commerce.subscription_changed'
+  | 'platform.upgrade_requested';
 
 export const NOTIFY_EVENTS: Array<{ type: Exclude<NotifyEventType, 'test'>; label: string; severity: NotifySeverity }> = [
   { type: 'auth.held', label: 'Autotask login HELD (needs Retry now)', severity: 'critical' },
@@ -49,6 +50,7 @@ export const NOTIFY_EVENTS: Array<{ type: Exclude<NotifyEventType, 'test'>; labe
   { type: 'commerce.order_paid', label: 'An order was paid (build the account, start onboarding)', severity: 'info' },
   { type: 'commerce.order_failed', label: 'An order failed to set up in Autotask', severity: 'warning' },
   { type: 'commerce.subscription_changed', label: 'A subscription changed (upgrade, add-on, seats, downgrade, cancel)', severity: 'info' },
+  { type: 'platform.upgrade_requested', label: 'A user asked for a module that is not on the plan', severity: 'info' },
   { type: 'vendor.notice_due', label: 'A customer price change takes effect within 30 days with no notice recorded', severity: 'warning' },
 ];
 
