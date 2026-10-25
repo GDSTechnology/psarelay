@@ -45,6 +45,8 @@ import { backpressure } from '../services/backpressure.js';
 import { settingValue } from '../admin/settings.js';
 import { allowedOrigin, isExternalRequest } from '../security/http.js';
 import { bearerToken, tokenStore, type TokenAuth } from '../security/tokens.js';
+import { CredentialStore, setCredentialSource } from '../setup/credentials.js';
+import type { Pool } from 'pg';
 
 export class PsarelayServer {
   private config: McpServerConfig;
@@ -220,6 +222,8 @@ export class PsarelayServer {
     if (isPgEnabled()) {
       const pool = getPool(this.logger);
       if (pool) await initAuthBlockStore(pool, this.logger);
+      // The API user entered and verified in the console wins over the AUTOTASK_* environment variables.
+      if (pool) await this.applyStoredCredentials(pool);
     }
 
     // Postgres shadow (no-op unless MCP_PG_ENABLED + MCP_PG_SHADOW_ENABLED).
@@ -267,6 +271,23 @@ export class PsarelayServer {
       onerror: (error) => this.logger.error('MCP stdio serving error:', error),
     });
     this.logger.info('PSArelay started and connected to stdio transport');
+  }
+
+  /** Use the console-stored Autotask credentials (migration 0020) when there are any and they decrypt. */
+  private async applyStoredCredentials(pool: Pool): Promise<void> {
+    try {
+      const has = await pool.query<{ t: string | null }>(`SELECT to_regclass('autotask_credential')::text AS t`);
+      if (!has.rows[0]?.t) return;
+      const c = await new CredentialStore(pool).get();
+      if (!c) return;
+      this.autotaskService.reconfigure(c);
+      if (this.envConfig) this.envConfig.autotask = { username: c.username, secret: c.secret, integrationCode: c.integrationCode, ...(c.apiUrl ? { apiUrl: c.apiUrl } : {}) };
+      setCredentialSource('console');
+      this.logger.info(`Autotask credentials: from the console (${c.username}, verified ${c.verifiedAt})`);
+    } catch (err) {
+      setCredentialSource('environment', `The credentials saved in the console could not be used (${err instanceof Error ? err.message : String(err)}) — using the environment variables.`);
+      this.logger.error('Console-stored Autotask credentials could not be used; falling back to the environment', err);
+    }
   }
 
   /**

@@ -32,6 +32,8 @@ function h(tag, attrs, ...children) {
   for (const c of children.flat()) if (c != null && c !== false) el.append(c instanceof Node ? c : document.createTextNode(String(c)));
   return el;
 }
+/** replaceChildren that skips null / false like h() does (replaceChildren would print "null"). */
+const fill = (el, ...kids) => el.replaceChildren(...kids.flat().filter((k) => k != null && k !== false));
 const fmt = (n) => (n == null ? '—' : Number(n).toLocaleString());
 function ago(iso) {
   if (!iso) return 'never';
@@ -620,7 +622,7 @@ async function planView(body) {
   const p = await api('GET', '/api/plan');
   const [label, cls] = PLAN_MODE[p.mode] || [p.mode, ''];
   const on = p.modules.filter((m) => m.included), off = p.modules.filter((m) => !m.included);
-  body.replaceChildren(
+  fill(body, 
     h('h1', null, 'Plan'),
     h('section', { class: 'panel' },
       h('div', { class: 'row', style: 'justify-content:space-between;align-items:center' },
@@ -640,9 +642,9 @@ async function setup(body) {
   const out = h('div', { class: 'muted' }, 'Loading…');
   const copy = (text) => h('button', { class: 'small secondary', onclick: async () => { try { await navigator.clipboard.writeText(text); toast('Copied.'); } catch { toast('Copy failed — select and copy it.'); } } }, 'Copy');
   const draw = (r) => {
-    if (!r) { out.replaceChildren(h('p', { class: 'muted' }, isAdmin ? 'No check run yet on this server — press Run check (about 30 Autotask calls).' : 'No check run yet — ask an administrator to run it.')); return; }
+    if (!r) { fill(out, h('p', { class: 'muted' }, isAdmin ? 'No check run yet on this server — press Run check (about 30 Autotask calls).' : 'No check run yet — ask an administrator to run it.')); return; }
     const c = r.connection;
-    out.replaceChildren(
+    fill(out, 
       h('section', { class: 'panel' }, h('h2', null, 'Connection'),
         c.ok ? h('div', null,
           h('p', null, h('span', { class: 'badge ok' }, 'Connected'), ' Signed in as ', h('strong', null, c.apiUser?.name || `resource #${c.apiUser?.id ?? '?'}`), c.apiUser?.id ? h('span', { class: 'muted' }, ` (#${c.apiUser.id})`) : null),
@@ -675,12 +677,58 @@ async function setup(body) {
     try { const r = await api('POST', '/api/setup/run', {}); draw(r.report); toast('Check finished.'); } catch (x) { toast(x.message); }
     finally { run.disabled = false; run.textContent = 'Run check'; }
   } }, 'Run check');
-  body.replaceChildren(
+  fill(body, 
     h('div', { class: 'row', style: 'justify-content:space-between;align-items:center' }, h('h1', null, 'Setup'), isAdmin ? run : null),
     h('p', { class: 'muted' }, 'Is this server connected to Autotask, and is its API user allowed to do what each module needs? Then how to connect ChatGPT, Claude and n8n.'),
+    isAdmin ? credentialsPanel() : null,
     securityPanel(),
     out);
-  try { const r = await api('GET', '/api/setup'); draw(r.report); } catch (x) { out.replaceChildren(h('div', { class: 'error' }, x.message)); }
+  try { const r = await api('GET', '/api/setup'); draw(r.report); } catch (x) { fill(out, h('div', { class: 'error' }, x.message)); }
+}
+
+// ── the Autotask API user: test (carefully) and save in the console ──
+function credentialsPanel() {
+  const box = h('section', { class: 'panel' }, h('h2', null, 'Autotask API user'), h('p', { class: 'muted' }, 'Loading…'));
+  const draw = async () => {
+    const r = await api('GET', '/api/autotask/credentials');
+    const user = h('input', { type: 'email', autocomplete: 'off', placeholder: 'API user email', value: r.username || '' , style: 'flex:1 1 220px' });
+    const secret = h('input', { type: 'password', autocomplete: 'new-password', placeholder: 'Secret', style: 'flex:1 1 180px' });
+    const code = h('input', { type: 'password', autocomplete: 'off', placeholder: 'Integration code', style: 'flex:1 1 180px' });
+    const url = h('input', { type: 'url', autocomplete: 'off', placeholder: 'API URL (optional — found from the username)', style: 'flex:1 1 320px' });
+    const steps = h('div');
+    const values = () => ({ username: user.value.trim(), secret: secret.value, integrationCode: code.value.trim(), apiUrl: url.value.trim() });
+    let tested = null;
+    const save = h('button', { class: 'primary', disabled: true, onclick: async () => {
+      if (JSON.stringify(values()) !== tested) { toast('The values changed since the test — test again.'); save.disabled = true; return; }
+      if (!confirm('Use these credentials for every Autotask call from now on?')) return;
+      save.disabled = true;
+      try { const x = await api('POST', '/api/autotask/credentials', values()); toast(x.message); secret.value = ''; code.value = ''; await draw(); } catch (x) { toast(x.message); save.disabled = false; }
+    } }, 'Save and use');
+    const test = h('button', { class: 'secondary', onclick: async () => {
+      test.disabled = true; save.disabled = true; steps.replaceChildren(h('p', { class: 'muted' }, 'Testing — one login attempt…'));
+      try {
+        const x = await api('POST', '/api/autotask/credentials/test', values());
+        steps.replaceChildren(h('ul', { style: 'margin:8px 0' }, x.steps.map((s) => h('li', null, h('span', { class: `badge ${s.ok ? 'ok' : 'bad'}` }, s.ok ? '✓' : '✗'), ' ', s.detail))));
+        if (x.ok) { tested = JSON.stringify(values()); save.disabled = !r.key.ok || !r.pg; }
+      } catch (x) { steps.replaceChildren(h('div', { class: 'banner warn' }, x.message)); }
+      finally { test.disabled = false; }
+    } }, 'Test');
+    for (const i of [user, secret, code, url]) i.oninput = () => { if (tested && JSON.stringify(values()) !== tested) save.disabled = true; };
+    const clear = r.stored ? h('button', { class: 'small secondary', onclick: async () => {
+      if (!confirm('Remove the credentials saved in the console and go back to the AUTOTASK_* environment variables?')) return;
+      try { const x = await api('POST', '/api/autotask/credentials/clear', {}); toast(x.message); await draw(); } catch (x) { toast(x.message); }
+    } }, 'Use the environment variables instead') : null;
+    fill(box, h('h2', null, 'Autotask API user'),
+      h('p', null, r.username ? h('span', null, 'In use: ', h('strong', null, r.username), r.source === 'console' ? h('span', { class: 'muted' }, ` — saved in the console by ${r.stored?.updatedBy ?? '?'} ${ago(r.stored?.updatedAt)}${r.stored?.verifiedAs ? `, verified as ${r.stored.verifiedAs}` : ''}`) : h('span', { class: 'muted' }, ' — from the environment variables (env file)')) : h('span', { class: 'error' }, 'No Autotask API user is configured.'), ' ', clear),
+      r.problem ? h('div', { class: 'banner bad' }, r.problem) : null,
+      !r.key.ok ? h('div', { class: 'banner warn' }, `Saving here needs an encryption key: ${r.key.detail}`) : null,
+      h('p', { class: 'muted', style: 'font-size:13px' }, 'Replace or rotate the API user here. A test tries the login exactly once — a rejected one counts toward Autotask locking the user, so at most 3 tests per 15 minutes. Saved secrets are encrypted; a different Autotask database is refused.'),
+      h('div', { class: 'row', style: 'flex-wrap:wrap;gap:8px' }, user, secret, code),
+      h('div', { class: 'row', style: 'flex-wrap:wrap;gap:8px;margin-top:8px' }, url, test, save),
+      steps);
+  };
+  draw().catch((x) => fill(box, h('h2', null, 'Autotask API user'), h('div', { class: 'error' }, x.message)));
+  return box;
 }
 
 // ── security posture (zero trust): what this server exposes and who it trusts ──
@@ -1252,6 +1300,7 @@ const ACTIONS = {
   'user.password_reset': 'Reset password', 'user.signed_out': 'Signed user out', 'action.shadow_verify': 'Started mirror check',
   'notify.channel_added': 'Added notification channel', 'notify.channel_changed': 'Changed notification channel', 'notify.channel_removed': 'Deleted notification channel', 'notify.channel_tested': 'Sent test notification',
   'access.token_created': 'Created access token', 'access.token_revoked': 'Revoked access token', 'access.own_token_created': 'Created own access token', 'access.own_token_revoked': 'Revoked own access token',
+  'autotask.credentials_tested': 'Tested Autotask credentials', 'autotask.credentials_saved': 'Saved Autotask credentials', 'autotask.credentials_cleared': 'Removed saved Autotask credentials',
   'user.autotask_linked': 'Linked user to Autotask', 'user.autotask_unlinked': 'Unlinked user from Autotask',
 };
 function describe(ev) {
@@ -1306,8 +1355,8 @@ function myConnections() {
   const shown = h('div');
   const draw = async () => {
     const r = await api('GET', '/api/me/tokens');
-    if (!r.available) { box.replaceChildren(h('h2', null, 'Connect your AI'), h('p', { class: 'muted' }, 'Needs the Postgres layer on this server.')); return; }
-    if (!r.linked) { box.replaceChildren(h('h2', null, 'Connect your AI'), h('div', { class: 'banner warn' }, 'Your console user is not linked to an Autotask user yet. Ask an administrator to link it on the Users page — then you can connect your own AI client here, working with your own Autotask permissions.')); return; }
+    if (!r.available) { fill(box, h('h2', null, 'Connect your AI'), h('p', { class: 'muted' }, 'Needs the Postgres layer on this server.')); return; }
+    if (!r.linked) { fill(box, h('h2', null, 'Connect your AI'), h('div', { class: 'banner warn' }, 'Your console user is not linked to an Autotask user yet. Ask an administrator to link it on the Users page — then you can connect your own AI client here, working with your own Autotask permissions.')); return; }
     const name = h('input', { placeholder: 'Which client, e.g. Codex on my laptop', maxlength: 80, style: 'flex:1 1 240px' });
     const days = h('select', null, h('option', { value: '30' }, '30 days'), h('option', { value: '90' }, '90 days'), h('option', { value: '180', selected: true }, '180 days'), h('option', { value: '365' }, '1 year'));
     const create = h('button', { class: 'primary', onclick: async () => {
@@ -1327,7 +1376,7 @@ function myConnections() {
         await draw();
       } catch (x) { toast(x.message); } finally { create.disabled = false; }
     } }, 'Create my token');
-    box.replaceChildren(h('h2', null, 'Connect your AI'),
+    fill(box, h('h2', null, 'Connect your AI'),
       h('p', { class: 'muted', style: 'font-size:13px' }, 'Your own access to the MCP for a client you use (Codex, n8n, a script). It works as ', h('strong', null, r.linked.name || `resource #${r.linked.id}`), ' in Autotask, so you can only change what your Autotask account may change. ChatGPT and Claude connectors will sign in directly instead (coming).'),
       shown,
       h('div', { class: 'row', style: 'flex-wrap:wrap;gap:8px' }, name, days, create),
@@ -1340,7 +1389,7 @@ function myConnections() {
             h('td', null, !t.revokedAt && !expired ? h('button', { class: 'small secondary', onclick: async () => { if (!confirm(`Revoke "${t.name}"?`)) return; try { await api('POST', `/api/me/tokens/${t.id}/revoke`, {}); toast('Revoked.'); draw(); } catch (x) { toast(x.message); } } }, 'Revoke') : null));
         })))) : null);
   };
-  draw().catch((x) => box.replaceChildren(h('h2', null, 'Connect your AI'), h('div', { class: 'error' }, x.message)));
+  draw().catch((x) => fill(box, h('h2', null, 'Connect your AI'), h('div', { class: 'error' }, x.message)));
   return box;
 }
 

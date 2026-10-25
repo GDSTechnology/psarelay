@@ -302,6 +302,21 @@ ground truth. The same classification (`actorType`, `classificationSource`,
 
 Is this server connected to Autotask, and is its API user allowed to do what each module needs? **Run check** (admins; about 30 Autotask calls) signs in, names the API user, and probes **read** access live for every entity the modules use — straight to Autotask, never the mirror. Each module (Service desk & time, Contracts & financial, Billing & reports, Vendor billing reconciliation, Merges & bulk cleanup, Commerce) shows **Ready**, **Blocked** (no read access to …) or **Not fully checked**, with the **write** access it needs from the API user's security level (writes can't be probed without writing). Below: mirror backfill progress, and **Connect your AI** — the MCP endpoint (`MCP_PUBLIC_URL`) with copy-ready steps for ChatGPT, Claude and n8n. The same check is the tool `autotask_setup_check`.
 
+**Autotask API user (admins).** Replace or rotate the API user without touching the server: enter the username,
+secret and integration code, press **Test**, then **Save and use**. Because every rejected login counts toward
+Autotask locking the API user (it has happened), a test is careful:
+
+1. it looks up the zone first — unauthenticated, so an unknown username stops before any login;
+2. it makes **one** login call with the new values (never retried) and names the API user;
+3. at most 3 tests per 15 minutes, and none while the live login is paused or held.
+
+**Save** needs a passing test of exactly those values in the last 10 minutes. A different Autotask database than the
+one this server mirrors is refused. The secret and integration code are stored **encrypted** (AES-256-GCM) with
+`MCP_SECRET_KEY` from the env file — `update-psarelay` adds one when there is none (run it twice the first time:
+the first run installs the new script). Saved credentials win over the `AUTOTASK_*` variables; a rotated secret
+applies at once, a different API user after a restart (`update-psarelay --recreate`). **Use the environment
+variables instead** removes them.
+
 ### Access (tokens for the MCP endpoint)
 
 Admins only. **Zero trust: a call is only as trusted as the token it carries.** Create one token per client (n8n, a
@@ -664,6 +679,7 @@ commands:
 | `MCP_ADMIN_TRUST_PROXY` | `true` | Use `CF-Connecting-IP` / `X-Forwarded-For` for the client IP (throttling, activity log). Set `false` if the port is reachable without a proxy |
 | `MCP_NOTIFY_SERVER_NAME` | `PSArelay` | Server name shown in notifications (tell prod from dev) |
 | `PSARELAY_LICENSE` | — | Hosted only: the signed licence from the control plane. Unset = self-hosted, everything unlocked |
+| `MCP_SECRET_KEY` | — (added by `update-psarelay`) | 32 random bytes (base64 or hex) that encrypt secrets saved in the console. Keep it: without it, saved credentials must be re-entered |
 | `MCP_REQUIRE_TOKEN` | `false` | Start value of **Settings → Security → Require an access token on /mcp** (the console setting wins once saved) |
 | `MCP_TRUST_UNVERIFIED_IDENTITY` | `false` | Start value of **Trust identities a client declares without a token** — keep off |
 | `MCP_CORS_ORIGINS` | claude.ai, chatgpt.com, chat.openai.com | Web origins that may call `/mcp` from a browser (comma-separated); `none` = no browser access. Never `*` |

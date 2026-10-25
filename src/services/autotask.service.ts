@@ -182,6 +182,18 @@ export class AutotaskService {
   }
 
   /**
+   * Swap the Autotask credentials (entered and verified in the console). The next call builds a fresh client;
+   * calls already running finish on the old one.
+   */
+  reconfigure(c: { username: string; secret: string; integrationCode: string; apiUrl?: string | undefined }): void {
+    const autotask: McpServerConfig['autotask'] = { username: c.username, secret: c.secret, integrationCode: c.integrationCode };
+    if (c.apiUrl) autotask.apiUrl = c.apiUrl;
+    this.config = { ...this.config, autotask };
+    this.http = null;
+    this.initializationPromise = null;
+  }
+
+  /**
    * Stable identity of the tenant these credentials belong to (lowercased
    * API username), used to key per-tenant caches that outlive a single
    * request. Null when credentials aren't configured.

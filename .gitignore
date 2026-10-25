@@ -62,3 +62,6 @@ dev-postgres/.runtime/
 # the operator's local Autotask credentials file and must never
 # be committed to this public repo.
 /_*.mjs
+
+# Local CI runs (scripts/ci-local.sh)
+.ci-local/
