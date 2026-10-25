@@ -118,9 +118,10 @@ export async function probeEntities(probe: ProbeFn, modules: ModuleSpec[] = MODU
 /** How to connect AI clients to this instance's MCP endpoint. */
 export function connectionGuide(mcpUrl: string): Array<{ client: string; how: string }> {
   return [
-    { client: 'ChatGPT', how: `Settings → Connectors → Add custom connector (MCP) → URL ${mcpUrl}. Publish it through your tunnel; after a PSArelay update, ask ChatGPT to refresh its tool list.` },
-    { client: 'Claude Code', how: `claude mcp add --transport http psarelay ${mcpUrl}` },
-    { client: 'Claude Desktop / claude.ai', how: `Settings → Connectors → Add custom connector → ${mcpUrl}` },
+    { client: 'ChatGPT', how: `Settings → Connectors → Create → URL ${mcpUrl}, Authentication OAuth → sign in with your console login (console → Connect). After a PSArelay update, ask ChatGPT to refresh its tool list.` },
+    { client: 'Claude Desktop / claude.ai', how: `Settings → Connectors → Add custom connector → ${mcpUrl} → Connect → sign in with your console login.` },
+    { client: 'Codex', how: `codex mcp add psarelay --url ${mcpUrl}, then codex mcp login psarelay (signs in with your console login).` },
+    { client: 'Claude Code', how: `claude mcp add --transport http psarelay ${mcpUrl} — then /mcp to sign in.` },
     { client: 'n8n', how: `MCP Client node (or HTTP Request) → ${mcpUrl}; header Authorization: Bearer <token> (create one on the Access page); call tools/call with the tool name and arguments. Use autotask_get_backpressure before bulk work.` },
   ];
 }

@@ -79,6 +79,7 @@ const ROUTES = [
   { hash: '#/actors', label: 'Actors', view: actors },
   { hash: '#/requests', label: 'Requests', view: requests },
   { hash: '#/bulk', label: 'Bulk jobs', view: bulk },
+  { hash: '#/connect', label: 'Connect', view: connect },
   { hash: '#/setup', label: 'Setup', view: setup },
   { hash: '#/plan', label: 'Plan', view: planView },
   { hash: '#/notifications', label: 'Notifications', view: notifications },
@@ -731,6 +732,55 @@ function credentialsPanel() {
   return box;
 }
 
+// ── connect: one card per AI client; they sign in with the console login (OAuth), so there is nothing to install ──
+async function connect(body) {
+  const r = await api('GET', '/api/connect');
+  const copy = (text, label = 'Copy') => h('button', { class: 'small secondary', onclick: async () => { try { await navigator.clipboard.writeText(text); toast('Copied.'); } catch { toast('Copy failed — select it instead.'); } } }, label);
+  const code = (text) => h('div', { class: 'row', style: 'gap:8px;align-items:center;margin:6px 0' }, h('code', { class: 'mono', style: 'flex:1;word-break:break-all;padding:6px 8px;border-radius:6px;background:var(--bg-soft, rgba(127,127,127,.12))' }, text), copy(text));
+  const card = (title, steps, extra) => h('section', { class: 'panel', style: 'flex:1 1 320px;margin:0' }, h('h2', { style: 'margin-top:0' }, title), h('ol', { style: 'padding-left:18px;margin:6px 0' }, steps.map((s) => h('li', { style: 'margin:6px 0' }, s))), extra || null);
+  const link = (href, text) => h('a', { href, target: '_blank', rel: 'noopener noreferrer' }, text);
+  const url = r.mcpUrl;
+  const conns = h('div');
+  const drawConns = (list) => fill(conns,
+    list.length ? h('div', { class: 'table-wrap' }, h('table', null,
+      h('thead', null, h('tr', null, ['Client', 'Connected', 'Last sign-in refresh', ''].map((x) => h('th', null, x)))),
+      h('tbody', null, list.map((c) => h('tr', null, h('td', null, c.clientName), h('td', { class: 'muted' }, ago(c.since)), h('td', { class: 'muted' }, ago(c.lastUsedAt)),
+        h('td', null, h('button', { class: 'small secondary', onclick: async () => {
+          if (!confirm(`Disconnect "${c.clientName}"? It has to sign in again to use PSArelay.`)) return;
+          try { const x = await api('POST', `/api/me/connections/${c.family}/revoke`, {}); toast(x.message); drawConns((await api('GET', '/api/connect')).connections); } catch (x) { toast(x.message); }
+        } }, 'Disconnect'))))))) : h('p', { class: 'muted' }, 'No AI client is signed in as you yet.'));
+  drawConns(r.connections);
+  fill(body,
+    h('h1', null, 'Connect your AI'),
+    h('p', { class: 'muted' }, 'Add PSArelay to your AI client, then sign in with this console login. The client then works as ', h('strong', null, r.linked?.name || 'your Autotask user'), ' — Autotask applies your own permissions. Nothing to install or configure on the server.'),
+    !r.signIn.ready ? h('div', { class: 'banner warn' }, `Sign-in for AI clients is not available yet: ${r.signIn.reasons.join('; ')}. An administrator sets it; until then use an access token (Account page).`) : null,
+    !r.linked ? h('div', { class: 'banner warn' }, 'Your console login is not linked to an Autotask user yet — ask an administrator (Users page). Signing in from an AI client is refused until then.') : null,
+    h('section', { class: 'panel' }, h('h2', { style: 'margin-top:0' }, 'Your PSArelay address'), code(url)),
+    h('div', { class: 'row', style: 'flex-wrap:wrap;gap:12px;align-items:stretch' },
+      card('ChatGPT', [
+        h('span', null, link('https://chatgpt.com/#settings/Connectors', 'ChatGPT → Settings → Connectors'), ' → ', h('strong', null, 'Create'), ' (custom connector).'),
+        h('span', null, 'Name it ', h('strong', null, 'PSArelay'), ', paste the address above, Authentication: ', h('strong', null, 'OAuth'), '.'),
+        'Press Create / Connect — a PSArelay sign-in opens. Sign in with this console login.',
+        'Business / Enterprise: a workspace admin can add it once and share it with the people who should have it; each person still signs in as themselves.',
+      ]),
+      card('Claude', [
+        h('span', null, link('https://claude.ai/settings/connectors', 'Claude → Settings → Connectors'), ' → ', h('strong', null, 'Add custom connector'), '.'),
+        'Paste the address above → Add → Connect — sign in with this console login.',
+        'Team / Enterprise: an owner adds it for the organisation; each person connects and signs in as themselves.',
+      ]),
+      card('Codex', [
+        'In a terminal on your computer:',
+        code(`codex mcp add psarelay --url ${url}`),
+        code('codex mcp login psarelay'),
+        'The login opens a browser — sign in with this console login.',
+      ]),
+      card('n8n and scripts', [
+        'They can\'t sign in interactively: create a token for them on your Account page (Connect your AI) — or an administrator creates a service token on the Access page.',
+        h('span', null, 'Send it as ', h('span', { class: 'mono' }, 'Authorization: Bearer <token>'), ' to the address above.'),
+      ])),
+    h('section', { class: 'panel', style: 'margin-top:12px' }, h('h2', { style: 'margin-top:0' }, 'Signed in as you'), conns));
+}
+
 // ── security posture (zero trust): what this server exposes and who it trusts ──
 const POSTURE = { ok: ['OK', 'ok'], warn: ['Check', 'warn'], bad: ['Exposed', 'bad'], info: ['Note', ''] };
 function securityPanel() {
@@ -1301,6 +1351,7 @@ const ACTIONS = {
   'notify.channel_added': 'Added notification channel', 'notify.channel_changed': 'Changed notification channel', 'notify.channel_removed': 'Deleted notification channel', 'notify.channel_tested': 'Sent test notification',
   'access.token_created': 'Created access token', 'access.token_revoked': 'Revoked access token', 'access.own_token_created': 'Created own access token', 'access.own_token_revoked': 'Revoked own access token',
   'autotask.credentials_tested': 'Tested Autotask credentials', 'autotask.credentials_saved': 'Saved Autotask credentials', 'autotask.credentials_cleared': 'Removed saved Autotask credentials',
+  'oauth.approved': 'Connected an AI client (sign-in)', 'oauth.disconnected': 'Disconnected an AI client',
   'user.autotask_linked': 'Linked user to Autotask', 'user.autotask_unlinked': 'Unlinked user from Autotask',
 };
 function describe(ev) {

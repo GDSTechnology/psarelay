@@ -52,6 +52,8 @@ import { clearTokenCache, tokenStore } from '../security/tokens.js';
 import { securityPosture } from '../security/posture.js';
 import { CredentialStore, credentialSource, credentialTester, lookupZone, setCredentialSource, type AutotaskCredentials } from '../setup/credentials.js';
 import { secretKeyStatus } from '../security/secrets.js';
+import { oauthBase } from '../oauth/server.js';
+import { OAuthStore } from '../oauth/store.js';
 import { CHANNEL_KINDS, ChannelInputError, NOTIFY_SETTING_KEY, channelFromInput, channelLogDetails, channelView, parseStoredChannels } from './notifications.js';
 
 export interface AdminConsoleOptions {
@@ -99,6 +101,8 @@ function noteFailure(ip: string, username: string): void {
 }
 function clearFailures(username: string): void { failures.delete(`user:${username.toLowerCase()}`); }
 export function _resetThrottle(): void { failures.clear(); }
+/** Shared with the AI-client sign-in page, so both count toward the same limits. */
+export { noteFailure as noteLoginFailure, clearFailures as clearLoginFailures };
 
 // ── HTTP helpers ───────────────────────────────────────────────────────────
 const SECURITY_HEADERS: Record<string, string> = {
@@ -759,6 +763,30 @@ export function adminHandler(deps: AdminDeps) {
       const r = await store.create({ name, resourceId: full.autotaskResourceId, ownerUserId: u.id, expiresAt: new Date(Date.now() + days * 86_400_000).toISOString(), by: u.username });
       void log(ctx, 'access.own_token_created', { id: r.item.id, name, resourceId: full.autotaskResourceId, expiresInDays: days });
       return send(res, 200, { token: r.token, item: r.item, mcpUrl: mcpUrl() });
+    }
+    // Connect your AI: how each client connects, and the person's AI-client sign-ins (OAuth).
+    if (path === '/api/connect' && method === 'GET') {
+      const u = requireUser(ctx);
+      const base = oauthBase();
+      const full = await deps.store.getUser(u.id);
+      const reasons = [!base ? 'MCP_PUBLIC_URL is not set to the https address AI clients use (e.g. https://mcp.example.com)' : null, !deps.pool ? 'the Postgres layer is off' : null].filter(Boolean);
+      const os = deps.pool ? new OAuthStore(deps.pool) : null;
+      return send(res, 200, {
+        mcpUrl: base?.resource ?? mcpUrl(), signIn: { ready: !reasons.length, reasons },
+        linked: full?.autotaskResourceId != null ? { id: full.autotaskResourceId, name: full.autotaskResourceName } : null,
+        connections: os && base ? await os.connectionsOf(u.id).catch(() => []) : [],
+      });
+    }
+    const connMatch = /^\/api\/me\/connections\/([A-Za-z0-9_-]{10,64})\/revoke$/.exec(path);
+    if (connMatch && method === 'POST') {
+      const u = requireUser(ctx);
+      if (!deps.pool) throw new HttpError(409, 'Needs the Postgres layer.', 'unavailable');
+      const os = new OAuthStore(deps.pool);
+      if ((await os.familyOwner(connMatch[1]!)) !== u.id) throw new HttpError(404, 'Not one of your connections.');
+      await os.revokeFamily(connMatch[1]!, u.username);
+      clearTokenCache();
+      void log(ctx, 'oauth.disconnected', { family: connMatch[1] });
+      return send(res, 200, { ok: true, message: 'Disconnected. The client must sign in again to use PSArelay.' });
     }
     const ownTok = /^\/api\/me\/tokens\/(\d+)\/revoke$/.exec(path);
     if (ownTok && method === 'POST') {

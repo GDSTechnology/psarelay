@@ -15,7 +15,11 @@ export interface AccessToken {
   createdBy: string; createdAt: string; lastUsedAt: string | null; expiresAt: string | null; revokedAt: string | null; revokedBy: string | null;
 }
 /** What a verified token tells the request about its caller. */
-export interface TokenAuth { tokenId: number; tokenName: string; resourceId: number | null; delegate: boolean }
+export interface TokenAuth {
+  tokenId: number; tokenName: string; resourceId: number | null; delegate: boolean;
+  /** Sign-in (OAuth) tokens: the MCP URL they were issued for — accepted only there. */
+  audience?: string | null;
+}
 
 export const hashToken = (token: string) => createHash('sha256').update(token, 'utf8').digest('hex');
 /** A new random token: `psr_` + 43 base64url characters (256 bits). */
@@ -37,16 +41,16 @@ export class TokenStore {
   private touched = new Map<number, number>();
   constructor(private readonly pool: Pool) {}
 
-  async create(o: { name: string; resourceId?: number | null; delegate?: boolean; expiresAt?: string | null; by: string; ownerUserId?: number | null }): Promise<{ token: string; item: AccessToken }> {
+  async create(o: { name: string; resourceId?: number | null; delegate?: boolean; expiresAt?: string | null; by: string; ownerUserId?: number | null; oauthClientId?: string; audience?: string; oauthFamily?: string }): Promise<{ token: string; item: AccessToken }> {
     const token = newToken();
     const r = await this.pool.query(
-      `INSERT INTO mcp_token (name, token_hash, token_prefix, resource_id, delegate, created_by, expires_at, owner_user_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-      [o.name, hashToken(token), token.slice(0, TOKEN_PREFIX.length + 6), o.resourceId ?? null, !!o.delegate, o.by, o.expiresAt ?? null, o.ownerUserId ?? null]);
+      `INSERT INTO mcp_token (name, token_hash, token_prefix, resource_id, delegate, created_by, expires_at, owner_user_id, oauth_client_id, audience, oauth_family) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+      [o.name, hashToken(token), token.slice(0, TOKEN_PREFIX.length + 6), o.resourceId ?? null, !!o.delegate, o.by, o.expiresAt ?? null, o.ownerUserId ?? null, o.oauthClientId ?? null, o.audience ?? null, o.oauthFamily ?? null]);
     return { token, item: row(r.rows[0]) };
   }
   async list(): Promise<AccessToken[]> { return (await this.pool.query('SELECT t.*, u.username AS owner_username FROM mcp_token t LEFT JOIN admin_user u ON u.id = t.owner_user_id ORDER BY t.revoked_at NULLS FIRST, t.created_at DESC')).rows.map(row); }
   /** A user's own tokens (self-service). */
-  async listOwned(userId: number): Promise<AccessToken[]> { return (await this.pool.query('SELECT * FROM mcp_token WHERE owner_user_id = $1 ORDER BY revoked_at NULLS FIRST, created_at DESC', [userId])).rows.map(row); }
+  async listOwned(userId: number): Promise<AccessToken[]> { return (await this.pool.query('SELECT * FROM mcp_token WHERE owner_user_id = $1 AND oauth_client_id IS NULL ORDER BY revoked_at NULLS FIRST, created_at DESC', [userId])).rows.map(row); }
   async activeCount(): Promise<number> { return Number((await this.pool.query(`SELECT count(*) AS n FROM mcp_token WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())`)).rows[0]?.n ?? 0); }
   /** Revoke a token; with `ownerUserId`, only if that user owns it (self-service). */
   async revoke(id: number, by: string, ownerUserId?: number): Promise<boolean> {
@@ -73,7 +77,7 @@ export class TokenStore {
     const x = ownerOk ? found : undefined;
     // Constant-time re-check of the stored hash (the index lookup itself is by exact value).
     const auth = x && timingSafeEqual(Buffer.from(String(x.token_hash)), Buffer.from(h))
-      ? { tokenId: Number(x.id), tokenName: String(x.name), resourceId: x.resource_id == null ? null : Number(x.resource_id), delegate: !!x.delegate }
+      ? { tokenId: Number(x.id), tokenName: String(x.name), resourceId: x.resource_id == null ? null : Number(x.resource_id), delegate: !!x.delegate, audience: x.audience ?? null }
       : null;
     this.cache.set(h, { at: Date.now(), auth });
     if (auth && Date.now() - (this.touched.get(auth.tokenId) ?? 0) > TOUCH_MS) {

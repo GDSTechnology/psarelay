@@ -46,6 +46,7 @@ import { settingValue } from '../admin/settings.js';
 import { allowedOrigin, isExternalRequest } from '../security/http.js';
 import { bearerToken, tokenStore, type TokenAuth } from '../security/tokens.js';
 import { CredentialStore, setCredentialSource } from '../setup/credentials.js';
+import { handleOAuth, oauthBase, resourceMetadataUrl } from '../oauth/server.js';
 import type { Pool } from 'pg';
 
 export class PsarelayServer {
@@ -304,6 +305,9 @@ export class PsarelayServer {
     if (!presented) { refuseMcp(res, 401, 'Unauthorized: this MCP requires an access token (Authorization: Bearer psr_…).'); return 'refused'; }
     const auth = await store.verify(presented);
     if (!auth) { refuseMcp(res, 401, 'Unauthorized: the access token is not valid (unknown, revoked or expired).'); return 'refused'; }
+    // A sign-in token is accepted only by the MCP it was issued for (audience, RFC 8707).
+    const base = oauthBase();
+    if (auth.audience && (!base || auth.audience.toLowerCase() !== base.resource.toLowerCase())) { refuseMcp(res, 401, 'Unauthorized: this token was issued for a different server.'); return 'refused'; }
     return auth;
   }
 
@@ -345,6 +349,15 @@ export class PsarelayServer {
       if (req.method === 'OPTIONS') {
         res.writeHead(204);
         res.end();
+        return;
+      }
+
+      // Sign-in for AI clients (OAuth discovery, registration, sign-in page, tokens).
+      if (url.pathname.startsWith('/.well-known/oauth-') || url.pathname.startsWith('/oauth/')) {
+        handleOAuth(req, res, url, { pool: isPgEnabled() ? getPool(this.logger) : null, logger: this.logger }).catch((err) => {
+          this.logger.error('OAuth request failed:', err);
+          if (!res.headersSent) { res.writeHead(500, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'server_error' })); }
+        });
         return;
       }
 
@@ -549,6 +562,9 @@ function shadowHealth(): Record<string, unknown> {
 /** Answer an /mcp request that may not proceed (JSON-RPC error body; 401 says a Bearer token is expected). */
 function refuseMcp(res: ServerResponse, status: number, message: string): void {
   if (res.headersSent) return;
-  res.writeHead(status, { 'Content-Type': 'application/json', ...(status === 401 ? { 'WWW-Authenticate': 'Bearer realm="psarelay"' } : {}) });
+  // On 401, point AI clients at the sign-in (RFC 9728) so they can connect by themselves.
+  const base = oauthBase();
+  const challenge = base ? `Bearer realm="psarelay", resource_metadata="${resourceMetadataUrl(base)}"` : 'Bearer realm="psarelay"';
+  res.writeHead(status, { 'Content-Type': 'application/json', ...(status === 401 ? { 'WWW-Authenticate': challenge } : {}) });
   res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32001, message }, id: null }));
 }
