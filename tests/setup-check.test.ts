@@ -66,7 +66,7 @@ describe('the full check', () => {
     expect(mcpUrl({ MCP_PUBLIC_URL: 'https://mcp.example.com/' })).toBe('https://mcp.example.com/mcp');
     expect(mcpUrl({ MCP_PUBLIC_URL: 'https://mcp.example.com/mcp' })).toBe('https://mcp.example.com/mcp');
     expect(mcpUrl({ MCP_HTTP_PORT: '9000' })).toBe('http://<this-host>:9000/mcp');
-    expect(connectionGuide('https://x/mcp').map((c) => c.client)).toEqual(['ChatGPT', 'Claude Code', 'Claude Desktop / claude.ai', 'n8n']);
+    expect(connectionGuide('https://x/mcp').map((c) => c.client)).toEqual(['ChatGPT', 'Claude Desktop / claude.ai', 'Codex', 'Claude Code', 'n8n']);
     expect(MODULES.map((m) => m.id)).toEqual(['core', 'contracts', 'billing', 'vendor', 'cleanup', 'commerce']);
   });
 });

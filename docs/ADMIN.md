@@ -317,6 +317,19 @@ the first run installs the new script). Saved credentials win over the `AUTOTASK
 applies at once, a different API user after a restart (`update-psarelay --recreate`). **Use the environment
 variables instead** removes them.
 
+### Connect (AI clients sign in)
+
+Every user: **Connect** shows one card per client — ChatGPT, Claude, Codex, n8n — with the address to paste and the
+steps. ChatGPT, Claude and Codex then open a **PSArelay sign-in page**; the person signs in with their console login
+and the client works as their linked Autotask user. PSArelay is its own OAuth 2.1 authorization server (MCP
+authorization spec: protected-resource metadata, dynamic client registration, PKCE S256, resource-bound tokens):
+access tokens last 1 hour and work only on this server; refresh tokens rotate (30 days) and reusing an old one
+disconnects that client. *Signed in as you* lists the person's connected clients with **Disconnect**.
+
+Needs `MCP_PUBLIC_URL` set to the **https** address clients use, and the Postgres layer. Only users linked to an
+Autotask user can sign in (Users page); a temporary password must be changed first. Sign-in failures count toward the
+same throttle as console sign-ins. Once every client signs in or has a token, turn on **Require an access token**.
+
 ### Access (tokens for the MCP endpoint)
 
 Admins only. **Zero trust: a call is only as trusted as the token it carries.** Create one token per client (n8n, a

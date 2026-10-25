@@ -55,7 +55,7 @@ describe('access tokens', () => {
     const { pool } = fakePool();
     const s = new TokenStore(pool);
     const { token, item } = await s.create({ name: 'Jane', resourceId: 42, by: 'admin' });
-    expect(await s.verify(token)).toEqual({ tokenId: item.id, tokenName: 'Jane', resourceId: 42, delegate: false });
+    expect(await s.verify(token)).toEqual({ tokenId: item.id, tokenName: 'Jane', resourceId: 42, delegate: false, audience: null });
     expect(await s.verify(newToken())).toBeNull();
     expect(await s.verify('not-a-token')).toBeNull();
     await s.revoke(item.id, 'admin');
