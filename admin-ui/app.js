@@ -78,6 +78,7 @@ const ROUTES = [
   { hash: '#/requests', label: 'Requests', view: requests },
   { hash: '#/bulk', label: 'Bulk jobs', view: bulk },
   { hash: '#/setup', label: 'Setup', view: setup },
+  { hash: '#/plan', label: 'Plan', view: planView },
   { hash: '#/notifications', label: 'Notifications', view: notifications },
   { hash: '#/settings', label: 'Settings', view: settings },
   { hash: '#/users', label: 'Users', view: users, admin: true },
@@ -599,6 +600,39 @@ async function actors(body) {
   await draw();
 }
 
+// ── plan: what's on the account, and the upgrade path (locked modules stay visible) ──
+const PLAN_MODE = { 'self-hosted': ['Self-hosted', 'ok'], licensed: ['Active', 'ok'], grace: ['Renewal due', 'warn'], expired: ['Expired', 'bad'], invalid: ['Licence problem', 'bad'] };
+/** The upgrade card for one locked module (also used where a locked page would be). */
+function upgradeCard(m, plan, onDone) {
+  const where = [m.offer?.includedIn?.length ? `Included in ${m.offer.includedIn.join(' / ')}` : null, m.offer?.addon ? `Add-on: ${m.offer.addon}` : null].filter(Boolean);
+  const note = h('textarea', { rows: 2, placeholder: 'Anything we should know? (optional)' });
+  const btn = h('button', { class: 'primary small', onclick: async () => {
+    btn.disabled = true;
+    try { const r = await api('POST', '/api/plan/request', { module: m.id, note: note.value.trim() }); toast(r.message); onDone?.(); } catch (x) { toast(x.message); btn.disabled = false; }
+  } }, 'Request upgrade');
+  return h('div', { class: 'panel', style: 'border-style:dashed' },
+    h('div', { class: 'row', style: 'justify-content:space-between;align-items:flex-start' }, h('h3', { style: 'margin:0' }, `🔒 ${m.name}`), h('span', { class: 'badge warn' }, 'Not on your plan')),
+    h('p', null, m.description),
+    where.length ? h('p', { class: 'muted', style: 'font-size:13px' }, where.join(' · ')) : null,
+    note, h('div', { class: 'row', style: 'margin-top:8px;gap:8px' }, btn, plan.upgradeUrl ? h('a', { href: plan.upgradeUrl, target: '_blank', rel: 'noopener noreferrer' }, 'See plans ↗') : null));
+}
+async function planView(body) {
+  const p = await api('GET', '/api/plan');
+  const [label, cls] = PLAN_MODE[p.mode] || [p.mode, ''];
+  const on = p.modules.filter((m) => m.included), off = p.modules.filter((m) => !m.included);
+  body.replaceChildren(
+    h('h1', null, 'Plan'),
+    h('section', { class: 'panel' },
+      h('div', { class: 'row', style: 'justify-content:space-between;align-items:center' },
+        h('div', null, h('h2', { style: 'margin:0' }, p.mode === 'self-hosted' ? 'Self-hosted' : (p.planName || 'Your plan')), p.customer ? h('div', { class: 'muted' }, p.customer) : null),
+        h('span', { class: `badge ${cls}` }, label)),
+      h('p', { class: p.mode === 'invalid' || p.mode === 'expired' ? 'error' : 'muted' }, p.detail),
+      p.expiresAt && p.mode !== 'self-hosted' ? h('p', { class: 'muted', style: 'font-size:13px' }, `Renews / expires ${p.expiresAt.slice(0, 10)}.`) : null),
+    h('section', { class: 'panel' }, h('h2', null, `Included (${on.length})`),
+      h('div', { class: 'row', style: 'flex-wrap:wrap;gap:10px' }, on.map((m) => h('div', { class: 'panel', style: 'flex:1 1 240px;margin:0' }, h('div', { class: 'row', style: 'justify-content:space-between' }, h('strong', null, m.name), h('span', { class: 'badge ok' }, '✓ Included')), h('p', { class: 'muted', style: 'font-size:13px;margin:6px 0 0' }, m.description))))),
+    off.length ? h('section', null, h('h2', null, `Add to your plan (${off.length})`), h('div', { class: 'row', style: 'flex-wrap:wrap;gap:10px;align-items:stretch' }, off.map((m) => h('div', { style: 'flex:1 1 300px' }, upgradeCard(m, p, () => planView(body)))))) : null);
+}
+
 // ── setup: connection, API-user permissions per module, mirror progress, connecting AI clients ──
 const SETUP_STATUS = { ready: ['Ready', 'ok'], blocked: ['Blocked', 'bad'], unknown: ['Not fully checked', 'warn'] };
 async function setup(body) {
@@ -735,6 +769,7 @@ async function bulk(body) {
   };
   async function draw() {
     const r = await api('GET', `/api/bulk-jobs${showArchived ? '?archived=1' : ''}`);
+    if (r.locked) { const p = await api('GET', '/api/plan'); const m = p.modules.find((x) => x.id === r.locked.module); list.replaceChildren(upgradeCard(m, p, draw)); return; }
     if (!r.available) { list.replaceChildren(h('p', { class: 'muted' }, 'Needs Postgres (MCP_PG_ENABLED) and migration 0015.')); return; }
     const toggle = r.archivedCount ? h('label', { style: 'font-weight:500;display:flex;gap:6px;align-items:center;margin:0 0 10px' }, h('input', { type: 'checkbox', checked: showArchived, onchange: (e) => { showArchived = e.target.checked; draw(); } }), `Show archived (${fmt(r.archivedCount)})`) : null;
     list.replaceChildren(...[toggle, ...(r.jobs.length ? r.jobs.map(card) : [h('p', { class: 'muted' }, showArchived ? 'No bulk jobs.' : 'No bulk jobs yet (or all archived).')])].filter(Boolean));

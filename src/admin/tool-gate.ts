@@ -5,6 +5,7 @@
 import { TOOL_CATEGORIES, TOOL_DEFINITIONS } from '../handlers/tool.definitions.js';
 import { isMutatingTool } from '../utils/idempotency.js';
 import { settingValue } from './settings.js';
+import { lockedReason, moduleOf } from '../entitlements/index.js';
 
 /** Discovery / routing meta-tools are never switched off — agents need them to see what is available. */
 const ALWAYS_ON = new Set(['autotask_list_categories', 'autotask_list_category_tools', 'autotask_execute_tool', 'autotask_router', 'autotask_test_connection', 'autotask_whoami', 'autotask_report_gap']); // a missing capability can always be reported
@@ -34,6 +35,9 @@ const WRITES_DESPITE_NAME = new Set(['autotask_bulk_inactivate']);
 /** Why a tool is switched off in the console, or null when it may run. */
 export function toolBlockReason(name: string): string | null {
   if (ALWAYS_ON.has(name)) return null;
+  // Hosted plans: a module not on the account answers which plan / add-on unlocks it (self-hosted: never locked).
+  const locked = toolLockedReason(name);
+  if (locked) return locked;
   if (!settingValue<boolean>('tools.writesEnabled') && isWriteTool(name)) {
     return `${name} is disabled: this MCP is in read-only mode (an administrator turned off write tools in the admin console).`;
   }
@@ -46,5 +50,22 @@ export function toolBlockReason(name: string): string | null {
 }
 
 export const toolAllowed = (name: string): boolean => toolBlockReason(name) === null;
+
+/** The module a tool belongs to. */
+export const toolModule = (name: string): string => moduleOf(name, categoriesOf.get(name) ?? []);
+/** Why the account's plan doesn't include this tool, or null. */
+export function toolLockedReason(name: string): string | null { return ALWAYS_ON.has(name) ? null : lockedReason(toolModule(name)); }
+/** Listed to clients: allowed tools, plus plan-locked ones (marked) unless the console hides them — they show what an upgrade adds. */
+export function toolListed(name: string): boolean {
+  if (toolAllowed(name)) return true;
+  return toolLockedReason(name) !== null && settingValue<boolean>('entitlements.showLockedTools') !== false && toolBlockReasonIgnoringPlan(name) === null;
+}
+/** The console switches alone (read-only mode, disabled groups), without the plan. */
+function toolBlockReasonIgnoringPlan(name: string): string | null {
+  if (ALWAYS_ON.has(name)) return null;
+  if (!settingValue<boolean>('tools.writesEnabled') && isWriteTool(name)) return 'read-only';
+  const disabled = settingValue<string[]>('tools.disabledCategories');
+  return (categoriesOf.get(name) ?? []).some((c) => disabled.includes(c)) ? 'disabled group' : null;
+}
 
 export const toolCategoryNames = (): string[] => Object.keys(TOOL_CATEGORIES);

@@ -302,6 +302,10 @@ ground truth. The same classification (`actorType`, `classificationSource`,
 
 Is this server connected to Autotask, and is its API user allowed to do what each module needs? **Run check** (admins; about 30 Autotask calls) signs in, names the API user, and probes **read** access live for every entity the modules use — straight to Autotask, never the mirror. Each module (Service desk & time, Contracts & financial, Billing & reports, Vendor billing reconciliation, Merges & bulk cleanup, Commerce) shows **Ready**, **Blocked** (no read access to …) or **Not fully checked**, with the **write** access it needs from the API user's security level (writes can't be probed without writing). Below: mirror backfill progress, and **Connect your AI** — the MCP endpoint (`MCP_PUBLIC_URL`) with copy-ready steps for ChatGPT, Claude and n8n. The same check is the tool `autotask_setup_check`.
 
+### Plan
+
+Which modules this account has. **Self-hosted** (no licence set): every module is unlocked, and the page says so. **Hosted**: the instance carries a licence signed by the PSArelay control plane (`PSARELAY_LICENSE`, verified with `PSARELAY_LICENSE_PUBLIC_KEY` — it can't be edited locally). Included modules show a ✓; the others stay visible as upgrade cards — what the module does, which plans include it or which add-on adds it — with **Request upgrade**, which sends the `platform.upgrade_requested` notification (set a channel for it under Notifications). A tool from a locked module is refused with the same wording ("🔒 Merges & bulk cleanup is not on this account (your plan: Starter) — it is included in the Pro / MSP plans …"), so an AI client can explain it; locked tools stay in the tool list, marked 🔒, unless **Settings → Show locked tools** is off. An expired licence keeps working for 7 days, then only the core module (service desk & time) is available; an invalid one gives core only and the page shows why. Setup, the plan and the console's own tools are never locked.
+
 ### Bulk jobs (mass changes, paced)
 
 Mass changes are prepared from the mirror, **approved by a person here**, and pushed to Autotask by the server at a set pace. Today that means inactivating placeholder companies ("Gmail", "Outlook", "Unknown…") and their contacts, or the junk contacts on one real company. A chat assistant can prepare a job and watch it (`autotask_bulk_inactivate`), but some assistants refuse to approve tens of thousands of writes, and a person should decide that anyway.
@@ -614,3 +618,5 @@ commands:
 | `AUTOTASK_AUTH_PAUSE_SECONDS` | `300` | First pause after Autotask rejects the API credentials (doubles per repeat, max 60 min); `0` disables. See "Autotask login protection" |
 | `MCP_ADMIN_TRUST_PROXY` | `true` | Use `CF-Connecting-IP` / `X-Forwarded-For` for the client IP (throttling, activity log). Set `false` if the port is reachable without a proxy |
 | `MCP_NOTIFY_SERVER_NAME` | `PSArelay` | Server name shown in notifications (tell prod from dev) |
+| `PSARELAY_LICENSE` | — | Hosted only: the signed licence from the control plane. Unset = self-hosted, everything unlocked |
+| `PSARELAY_LICENSE_PUBLIC_KEY` | — | Hosted only: the control plane's Ed25519 public key (PEM; `\n` escapes allowed) |

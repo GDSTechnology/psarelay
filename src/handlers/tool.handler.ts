@@ -104,7 +104,7 @@ import {
   isImpersonationAllowedForSource,
 } from '../utils/request-context.js';
 import { TOOL_DEFINITIONS, TOOL_CATEGORIES } from './tool.definitions.js';
-import { toolAllowed, toolBlockReason } from '../admin/tool-gate.js';
+import { toolBlockReason, toolListed, toolLockedReason } from '../admin/tool-gate.js';
 import { runToolCall, noteToolAudit, noteRawRequest } from '../services/call-log.js';
 import { buildTicketCard } from './card.builder.js';
 
@@ -1025,8 +1025,12 @@ export class AutotaskToolHandler {
       this.logger.debug(`Lazy loading mode: exposing ${metaTools.length} meta-tools (${TOOL_DEFINITIONS.length} total available)`);
       return metaTools;
     }
-    // Tools switched off in the admin console (read-only mode, disabled groups) are hidden.
-    const tools = TOOL_DEFINITIONS.filter((t) => toolAllowed(t.name));
+    // Tools switched off in the admin console (read-only mode, disabled groups) are hidden. Tools of modules not on
+    // the account's plan stay listed, marked, so a client can say what an upgrade adds (calling one explains the lock).
+    const tools = TOOL_DEFINITIONS.filter((t) => toolListed(t.name)).map((t) => {
+      const locked = toolLockedReason(t.name);
+      return locked ? { ...t, description: `${locked} — ${t.description}` } : t;
+    });
     this.logger.debug(`Listed ${tools.length} available tools`);
     return tools;
   }
@@ -3566,8 +3570,9 @@ export class AutotaskToolHandler {
           const available = Object.keys(TOOL_CATEGORIES).join(', ');
           throw new Error(`Unknown category "${a.category}". Available: ${available}`);
         }
-        const tools = TOOL_DEFINITIONS.filter(t => category.tools.includes(t.name) && toolAllowed(t.name));
-        return { result: tools, message: `Found ${tools.length} tools in "${a.category}" category` };
+        const tools = TOOL_DEFINITIONS.filter(t => category.tools.includes(t.name) && toolListed(t.name)).map((t) => { const locked = toolLockedReason(t.name); return locked ? { ...t, locked: true, description: `${locked} — ${t.description}` } : t; });
+        const nLocked = tools.filter((t) => (t as { locked?: boolean }).locked).length;
+        return { result: tools, message: `Found ${tools.length} tools in "${a.category}" category${nLocked ? ` (${nLocked} need an upgrade)` : ''}` };
       }],
       ['autotask_execute_tool', async (a, ctx) => {
         const toolName = a.toolName;

@@ -28,6 +28,7 @@ import { isPgEnabled, loadPgFlags } from '../db/config.js';
 import { getShadowRuntime } from '../db/shadow-runtime.js';
 import { lastSetupReport, runSetupCheck } from '../setup/run.js';
 import { MODULES } from '../setup/check.js';
+import { entitlementView, lockedReason, MODULE_INFO } from '../entitlements/index.js';
 import { usageSnapshot } from '../services/http-cache.js';
 import { TOOL_DEFINITIONS } from '../handlers/tool.definitions.js';
 import type { AutotaskService } from '../services/autotask.service.js';
@@ -40,7 +41,7 @@ import { classify, ttlMs, cacheEnabled } from '../services/http-cache.js';
 import { shadowEntity } from '../db/shadow-entities.js';
 import { authBlockStatus, clearAuthBlock } from '../services/autotask-http.js';
 import { recentLogs } from '../utils/logger.js';
-import { getNotifier, NOTIFY_EVENTS, type NotifyChannel } from '../services/notifier.js';
+import { getNotifier, notify, NOTIFY_EVENTS, type NotifyChannel } from '../services/notifier.js';
 import { GapStore, GAP_PRIORITIES, GAP_STATUSES, type GapPriority, type GapStatus } from '../gaps/store.js';
 import { BulkStore, type ItemStatus } from '../bulk/store.js';
 import { JOB_ACTIONS, jobAction, jobView, startPrepare, startPrepareCompanyContacts, type JobAction } from '../bulk/service.js';
@@ -655,6 +656,24 @@ export function adminHandler(deps: AdminDeps) {
       }
     }
 
+    // ── plan: modules on the account, and upgrade requests (to the control plane, via notifications) ──
+    if (path === '/api/plan' && method === 'GET') {
+      requireUser(ctx);
+      return send(res, 200, entitlementView());
+    }
+    if (path === '/api/plan/request' && method === 'POST') {
+      const u = requireUser(ctx);
+      const b = await readJson(req, 4 * 1024);
+      const module = String(b.module ?? '');
+      if (!MODULE_INFO[module]) throw new HttpError(400, 'Unknown module.', 'invalid');
+      const v = entitlementView();
+      if (v.modules.find((m) => m.id === module)?.included) throw new HttpError(409, 'That module is already on your plan.', 'included');
+      const note = String(b.note ?? '').slice(0, 500);
+      notify({ type: 'platform.upgrade_requested', severity: 'info', title: `Upgrade requested: ${MODULE_INFO[module]!.name}`, detail: `${u.username} asked for ${MODULE_INFO[module]!.name}${v.customer ? ` (${v.customer}, plan ${v.planName})` : ''}.${note ? ` Note: ${note}` : ''}`, fields: { module, customer: v.customer ?? '', plan: v.plan ?? '', by: u.username }, dedupeKey: `upgrade:${module}:${u.username}:${new Date().toISOString().slice(0, 10)}` });
+      void log(ctx, 'plan.upgrade_requested', { module, note: note ? 'yes' : 'no' });
+      return send(res, 200, { ok: true, message: v.upgradeUrl ? `Request sent. You can also see plans at ${v.upgradeUrl}.` : 'Request sent to your provider.' });
+    }
+
     // ── setup check: connection, API-user permissions per module, mirror progress, how to connect clients ──
     if (path === '/api/setup' && method === 'GET') {
       requireUser(ctx);
@@ -670,6 +689,7 @@ export function adminHandler(deps: AdminDeps) {
     // ── bulk jobs: mass changes staged in Postgres, pushed by the worker at a set pace ──
     if (path === '/api/bulk-jobs' && method === 'GET') {
       requireUser(ctx);
+      { const locked = lockedReason('cleanup'); if (locked) return send(res, 200, { jobs: [], available: true, locked: { module: 'cleanup', reason: locked } }); }
       if (!deps.pool) return send(res, 200, { jobs: [], available: false });
       const st = new BulkStore(deps.pool);
       const showArchived = new URL(req.url ?? '/', 'http://x').searchParams.get('archived') === '1';
