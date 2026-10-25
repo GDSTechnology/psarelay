@@ -27,7 +27,7 @@ HOST_SRC="$OUT/src"; command -v cygpath >/dev/null 2>&1 && HOST_SRC="$(cygpath -
 
 test_job() { # $1 = node major
   docker run --rm -v "$HOST_SRC:/src:ro" -w /work "node:$1-bookworm" bash -c '
-    set -e; cp -a /src/. /work/
+    set -eo pipefail; cp -a /src/. /work/   # pipefail: "lint | tail" must fail when lint fails
     npm ci --no-audit --no-fund >/dev/null
     echo "== lint";        npm run lint 2>&1 | tail -3
     echo "== destructive"; node scripts/lint-destructive-warnings.mjs src

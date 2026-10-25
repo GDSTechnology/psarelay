@@ -112,7 +112,8 @@ export async function handleOAuth(req: IncomingMessage, res: ServerResponse, url
     try { b = JSON.parse(await body(req)); } catch { oauthError(res, 400, 'invalid_client_metadata', 'Send the registration as JSON.'); return true; }
     const uris = Array.isArray(b.redirect_uris) ? b.redirect_uris.map(String) : [];
     if (!uris.length || uris.length > 10 || !uris.every(redirectUriOk)) { oauthError(res, 400, 'invalid_redirect_uri', 'redirect_uris must be 1–10 https URLs (or loopback http for apps on this computer).'); return true; }
-    const name = String(b.client_name ?? 'AI client').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 80) || 'AI client';
+    // The name is shown on the sign-in page: drop control characters (it is also HTML-escaped there).
+    const name = [...String(b.client_name ?? 'AI client')].filter((ch) => ch.charCodeAt(0) >= 32).join('').trim().slice(0, 80) || 'AI client';
     const c = await store.registerClient(name, uris, ip);
     deps.logger.info(`OAuth client registered: ${name} (${c.clientId}) → ${uris.map((u) => new URL(u).host).join(', ')}`);
     json(res, 201, { client_id: c.clientId, client_name: c.clientName, redirect_uris: c.redirectUris, grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], token_endpoint_auth_method: 'none', client_id_issued_at: Math.floor(Date.parse(c.createdAt) / 1000) });
