@@ -3275,6 +3275,38 @@ export const TOOL_DEFINITIONS: McpTool[] = [
 
   // Expense Item tools
   {
+    name: 'autotask_search_expense_items',
+    description: 'Search expense items (parking, mileage, meals, materials bought). Filter by ticketId to read the expenses on a ticket (the "Charges & Expenses" tab: charges are separate, autotask_search_ticket_charges), or by expenseReportId. Read-only.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ticketId: {
+          type: 'number',
+          description: 'Expense items logged against this ticket'
+        },
+        expenseReportId: {
+          type: 'number',
+          description: 'Expense items on this expense report'
+        },
+        startDate: {
+          type: 'string',
+          description: 'Expense date on or after (YYYY-MM-DD)'
+        },
+        endDate: {
+          type: 'string',
+          description: 'Expense date on or before (YYYY-MM-DD)'
+        },
+        pageSize: {
+          type: 'number',
+          description: 'Number of results to return (default: 25, max: 100)',
+          minimum: 1,
+          maximum: 100
+        }
+      },
+      required: []
+    }
+  },
+  {
     name: 'autotask_create_expense_item',
     description: 'Create an expense item on an existing expense report',
     inputSchema: {
@@ -6420,7 +6452,7 @@ export const TOOL_CATEGORIES: Record<string, { description: string; tools: strin
   },
   time_and_billing: {
     description: 'Time entries, billing items, and expense management',
-    tools: ['autotask_create_time_entry', 'autotask_create_task_time_entries_bulk', 'autotask_log_ticket_collaboration', 'autotask_log_my_time', 'autotask_list_regular_time_categories', 'autotask_get_time_entry_targets', 'autotask_get_my_day', 'autotask_search_time_entries', 'autotask_get_time_entry', 'autotask_update_time_entry', 'autotask_delete_time_entry', 'autotask_search_billing_items', 'autotask_get_billing_item', 'autotask_search_billing_item_approval_levels', 'autotask_report_time_entry_compliance', 'autotask_report_activity_without_time', 'autotask_search_audit_activity', 'autotask_get_activity_feed', 'autotask_backfill_history', 'autotask_report_resource_activity', 'autotask_report_resource_daily_audit', 'autotask_report_unbilled_time', 'autotask_get_expense_report', 'autotask_search_expense_reports', 'autotask_create_expense_report', 'autotask_create_expense_item']
+    tools: ['autotask_create_time_entry', 'autotask_create_task_time_entries_bulk', 'autotask_log_ticket_collaboration', 'autotask_log_my_time', 'autotask_list_regular_time_categories', 'autotask_get_time_entry_targets', 'autotask_get_my_day', 'autotask_search_time_entries', 'autotask_get_time_entry', 'autotask_update_time_entry', 'autotask_delete_time_entry', 'autotask_search_billing_items', 'autotask_get_billing_item', 'autotask_search_billing_item_approval_levels', 'autotask_report_time_entry_compliance', 'autotask_report_activity_without_time', 'autotask_search_audit_activity', 'autotask_get_activity_feed', 'autotask_backfill_history', 'autotask_report_resource_activity', 'autotask_report_resource_daily_audit', 'autotask_report_unbilled_time', 'autotask_get_expense_report', 'autotask_search_expense_reports', 'autotask_create_expense_report', 'autotask_search_expense_items', 'autotask_create_expense_item']
   },
   financial: {
     description: 'Quotes, quote items, opportunities, invoices, and contracts',

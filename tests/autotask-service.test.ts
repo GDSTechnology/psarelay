@@ -547,6 +547,25 @@ describe('AutotaskService', () => {
       expect(filters).toContainEqual({ op: 'lte', field: 'itemDate', value: '2026-01-31' });
     });
 
+    test('searchExpenseItems reads the expenses on a ticket by ticketID', async () => {
+      let capturedBody: any;
+      fetchSpy = jest.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+        const url = typeof input === 'string' ? input : (input as URL).toString();
+        expect(url).toBe(`${BASE}/ExpenseItems/query`);
+        capturedBody = JSON.parse(init!.body as string);
+        return jsonResponse({
+          items: [{ id: 1, ticketID: 555, description: 'Parking', expenseCurrencyExpenseAmount: 14 }],
+          pageDetails: { nextPageUrl: null },
+        });
+      });
+
+      const service = new AutotaskService(configWithUrl, mockLogger);
+      const items = await service.searchExpenseItems({ ticketId: 555 });
+
+      expect(capturedBody.filter).toEqual([{ field: 'ticketID', op: 'eq', value: 555 }]);
+      expect(items[0].description).toBe('Parking');
+    });
+
     test('searchBillingItems emits exist filter when isInvoiced=true', async () => {
       let capturedBody: any;
       fetchSpy = jest.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
