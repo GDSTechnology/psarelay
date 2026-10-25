@@ -56,6 +56,23 @@ Rows use the ids that earlier rows create (`meta.refs`), and every step is re-ru
 where it stopped without creating anything twice. Approve the plan by its hash (`autotask_change_plan_review`) and run
 it (`autotask_change_plan_execute`) like any other plan.
 
+## Subscription changes
+
+`autotask_commerce_order action=change { contractId, lines: [{ offering, quantity }] }` changes an existing recurring
+contract — each line names the **new** quantity (0 removes it); lines not named stay as they are:
+
+| Change | When | Price |
+|---|---|---|
+| more seats, a new plan or add-on | from today (or `effectiveDate`) — Autotask prorates the rest of the period, and that prorated amount is what is invoiced now (an estimate is shown) | existing lines keep their price; new lines take the catalog price |
+| fewer seats, a line removed | from the **next period start** — no mid-period credit | unchanged |
+
+`action=cancel_subscription { contractId, endContract? }` sets every catalog line to 0 at the next period start and,
+with `endContract: true`, ends the contract the day before.
+
+Both are orders with a plan (kind `commerce_change`) approved and run like any other. Once a change is in, the
+notification `commerce.subscription_changed` lets a control plane update the customer's entitlements at once; a change
+that adds something is then tracked to its invoice and payment, and one that only reduces is **complete**.
+
 ## Tracking to invoice and payment
 
 Every 5 minutes (and on `action=status`) each open order is followed, from Autotask, with no writes:
@@ -67,6 +84,7 @@ Every 5 minutes (and on `action=status`) each open order is followed, from Autot
 | `provisioned` | company, users, contract and tickets are in Autotask — waiting for the invoice |
 | `invoiced` | its charges / contract lines are on an Autotask invoice (BillingItems → Invoices) |
 | `paid` | the invoice has a `paidDate` (set when the payment syncs back from the payment platform) |
+| `complete` | a subscription change that only reduces or removes lines — nothing to invoice |
 
 Each change sends a notification — `commerce.order_ready`, `commerce.order_invoiced`, `commerce.order_paid`,
 `commerce.order_failed`. Subscribe a **generic webhook** channel (console → Notifications) and a control plane can build

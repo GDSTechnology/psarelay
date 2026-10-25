@@ -34,7 +34,7 @@ export class OfferingStore {
   }
 }
 
-export type OrderStatus = 'planned' | 'provisioning' | 'provisioned' | 'invoiced' | 'paid' | 'failed' | 'cancelled';
+export type OrderStatus = 'planned' | 'provisioning' | 'provisioned' | 'invoiced' | 'paid' | 'complete' | 'failed' | 'cancelled';
 export interface Payment { status: 'unpaid' | 'invoiced' | 'paid'; method?: string | null; reference?: string | null; amount?: number | null; invoiceIds?: number[]; invoiceNumbers?: string[]; paidAt?: string | null; at?: string | null; by?: string | null }
 export interface Order {
   id: string; status: OrderStatus; customer: Record<string, unknown>; contacts: Array<Record<string, unknown>>; lines: Array<Record<string, unknown>>; totals: Record<string, unknown> | null;
