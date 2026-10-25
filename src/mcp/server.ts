@@ -1,6 +1,6 @@
 // Main MCP Server Implementation
 // Handles the Model Context Protocol server setup and integration with Autotask
-// Supports both local (env-based) and gateway (header-based) credential modes
+// Single tenant: Autotask credentials come from the environment.
 //
 // Serving is built on the v2 SDK's dual-era entries: one shared
 // McpServerFactory feeds createMcpHandler (HTTP, modern 2026-07-28 envelope
@@ -33,19 +33,17 @@ import { createServer, IncomingMessage, ServerResponse, Server as HttpServer } f
 import { AutotaskService } from '../services/autotask.service.js';
 import { Logger } from '../utils/logger.js';
 import { McpServerConfig } from '../types/mcp.js';
-import { EnvironmentConfig, parseCredentialsFromHeaders, GatewayCredentials, getServerVersion } from '../utils/config.js';
+import { EnvironmentConfig, getServerVersion } from '../utils/config.js';
 import { AutotaskResourceHandler } from '../handlers/resource.handler.js';
 import { AutotaskToolHandler } from '../handlers/tool.handler.js';
 import { registerPromptHandlers } from './prompts.js';
-import { verifyS2sHeader, S2S_HEADER } from './s2s-verify.js';
-import { parseActingHeaders, TrustedActing } from '../utils/impersonation.js';
 import { extractRequestOrigin } from '../utils/origin.js';
 import { runWithRequestContext } from '../utils/request-context.js';
 import { usageSnapshot } from '../services/http-cache.js';
 import { authBlockStatus } from '../services/autotask-http.js';
 import { backpressure } from '../services/backpressure.js';
 
-export class AutotaskMcpServer {
+export class PsarelayServer {
   private config: McpServerConfig;
   private autotaskService: AutotaskService;
   private resourceHandler: AutotaskResourceHandler;
@@ -74,42 +72,19 @@ export class AutotaskMcpServer {
 
   /**
    * The shared per-request/per-connection server factory consumed by every
-   * serving entry (createMcpHandler for Node HTTP and Workers, serveStdio for
-   * stdio). One factory backs both protocol eras, so the tool surface can
-   * never drift between legacy (2025) and modern (2026-07-28) clients.
-   *
-   * In gateway mode, per-request credentials are read from the inbound HTTP
-   * request's headers (ctx.requestInfo) — the exact same X-API-Key /
-   * X-API-Secret / X-Integration-Code / X-API-Url contract as before. stdio
-   * connections have no requestInfo and always use env-configured credentials.
+   * serving entry (createMcpHandler for Node HTTP, serveStdio for stdio). One
+   * factory backs both protocol eras, so the tool surface can never drift
+   * between legacy (2025) and modern (2026-07-28) clients.
    */
   public requestFactory(): McpServerFactory {
-    const isGatewayMode = this.envConfig?.auth?.mode === 'gateway';
-    return (ctx) => {
-      let credentials: GatewayCredentials | undefined;
-      let acting: TrustedActing | undefined;
-      if (isGatewayMode && ctx.requestInfo) {
-        const headers = Object.fromEntries(ctx.requestInfo.headers) as Record<string, string | undefined>;
-        credentials = parseCredentialsFromHeaders(headers);
-        // Trusted acting identity (#42): only in gateway mode, only after the
-        // /mcp S2S gate has verified the request came from the gateway.
-        acting = parseActingHeaders(headers);
-      }
-      return this.createRequestServer(credentials, acting);
-    };
+    return () => this.createFreshServer();
   }
 
   /**
    * Create a fresh MCP Server with all handlers registered.
    * Called per-request in HTTP (stateless) mode so each initialize gets a clean server.
-   *
-   * In gateway mode, per-request handlers are passed so each request is fully
-   * isolated — no shared mutable state between concurrent requests.
    */
-  private createFreshServer(
-    perRequestToolHandler?: AutotaskToolHandler,
-    perRequestResourceHandler?: AutotaskResourceHandler,
-  ): Server {
+  private createFreshServer(): Server {
     const server = new Server(
       {
         name: this.config.name,
@@ -140,67 +115,10 @@ export class AutotaskMcpServer {
       this.logger.info('MCP Server initialized and ready to serve requests');
     };
 
-    const toolHandler = perRequestToolHandler ?? this.toolHandler;
-    const resourceHandler = perRequestResourceHandler ?? this.resourceHandler;
-    this.setupHandlers(server, toolHandler, resourceHandler);
-    toolHandler.setServer(server);
+    this.setupHandlers(server, this.toolHandler, this.resourceHandler);
+    this.toolHandler.setServer(server);
 
     return server;
-  }
-
-  /**
-   * Build per-request service + handlers from gateway credentials.
-   * Returns fully isolated instances that won't be affected by concurrent requests.
-   */
-  private buildPerRequestHandlers(credentials: GatewayCredentials): {
-    toolHandler: AutotaskToolHandler;
-    resourceHandler: AutotaskResourceHandler;
-  } {
-    const autotaskConfig: McpServerConfig['autotask'] = {};
-    if (credentials.username) autotaskConfig.username = credentials.username;
-    if (credentials.secret) autotaskConfig.secret = credentials.secret;
-    if (credentials.integrationCode) autotaskConfig.integrationCode = credentials.integrationCode;
-    if (credentials.apiUrl) autotaskConfig.apiUrl = credentials.apiUrl;
-
-    const requestConfig: McpServerConfig = {
-      name: this.envConfig?.server?.name || 'psarelay',
-      version: getServerVersion(this.envConfig?.server?.version),
-      autotask: autotaskConfig,
-    };
-
-    const service = new AutotaskService(requestConfig, this.logger);
-    return {
-      resourceHandler: new AutotaskResourceHandler(service, this.logger),
-      toolHandler: new AutotaskToolHandler(service, this.logger, this.lazyLoading),
-    };
-  }
-
-  /**
-   * Build a fresh MCP `Server` for a single request, optionally bound to
-   * per-request gateway credentials.
-   *
-   * This is the reuse seam for non-Node transports (e.g. the Cloudflare
-   * Workers entrypoint in `worker.ts`), which cannot use the Node
-   * `http.createServer` HTTP path but still need the exact same handler
-   * wiring. When `credentials` carry a full username/secret/integrationCode
-   * triple, an isolated per-request service + handlers are created; otherwise
-   * the default (env-configured) handlers are used.
-   */
-  public createRequestServer(credentials?: GatewayCredentials, acting?: TrustedActing): Server {
-    if (
-      credentials &&
-      credentials.username &&
-      credentials.secret &&
-      credentials.integrationCode
-    ) {
-      const { toolHandler, resourceHandler } =
-        this.buildPerRequestHandlers(credentials);
-      // Trusted acting identity is bound to this per-request, tenant-isolated
-      // handler only (#42) — never the shared env-mode handler.
-      if (acting) toolHandler.setTrustedActingContext(acting);
-      return this.createFreshServer(toolHandler, resourceHandler);
-    }
-    return this.createFreshServer();
   }
 
   /**
@@ -302,10 +220,7 @@ export class AutotaskMcpServer {
     }
 
     // Postgres shadow (no-op unless MCP_PG_ENABLED + MCP_PG_SHADOW_ENABLED).
-    // Single-tenant env mode only: the mirror is of THIS server's tenant.
-    if (this.envConfig?.auth?.mode !== 'gateway') {
-      try { initShadow(this.autotaskService, this.logger); } catch (err) { this.logger.error('Postgres shadow failed to start (continuing without it)', err); }
-    }
+    try { initShadow(this.autotaskService, this.logger); } catch (err) { this.logger.error('Postgres shadow failed to start (continuing without it)', err); }
 
     if (transportType === 'http') {
       await this.startHttpTransport();
@@ -315,12 +230,11 @@ export class AutotaskMcpServer {
         this.adminConsole = await startAdminConsole({
           logger: this.logger, service: this.autotaskService,
           version: getServerVersion(this.envConfig?.server?.version),
-          authMode: this.envConfig?.auth?.mode === 'gateway' ? 'gateway' : 'env',
           apiUsername: this.envConfig?.autotask?.username,
         });
       } catch (err) { this.logger.error('Admin console failed to start (continuing without it)', err); }
       // Notifications (console → Notifications): watch for trips and post them to the configured channels.
-      const tenant = this.envConfig?.auth?.mode === 'gateway' ? undefined : this.envConfig?.autotask?.username;
+      const tenant = this.envConfig?.autotask?.username;
       if (tenant) {
         startNotifyWatch({ tenant, lastRun: () => getShadowRuntime()?.lastRun() ?? null, lastVerify: () => getShadowRuntime()?.lastVerify() ?? null });
         // Vendor monitor (stale imports, renewals, contracts ending, sync drift) — daily at MCP_VENDOR_MONITOR_HOUR_UTC; off when unset.
@@ -354,13 +268,10 @@ export class AutotaskMcpServer {
 
   /**
    * Start with HTTP Streamable transport
-   * In gateway mode, credentials are extracted from request headers on each request
    */
   private async startHttpTransport(): Promise<void> {
     const port = this.envConfig?.transport?.port || 8080;
     const host = this.envConfig?.transport?.host || '0.0.0.0';
-    const isGatewayMode = this.envConfig?.auth?.mode === 'gateway';
-
     // One dual-era handler for the process: modern (2026-07-28 envelope)
     // traffic is served natively; legacy 2025-era traffic is served by the
     // default stateless fallback ('stateless') — a fresh factory-built server
@@ -379,12 +290,12 @@ export class AutotaskMcpServer {
 
       // CORS headers applied to every response so browser-based MCP clients
       // (e.g. claude.ai custom connectors) can reach the server. '*' is safe
-      // because credentials are carried via request headers, not cookies.
+      // because nothing here relies on cookies.
       res.setHeader('Access-Control-Allow-Origin', '*');
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, DELETE');
       res.setHeader(
         'Access-Control-Allow-Headers',
-        'Content-Type, Accept, Authorization, Mcp-Session-Id, X-API-Key, X-API-Secret, X-Integration-Code'
+        'Content-Type, Accept, Authorization, Mcp-Session-Id'
       );
       res.setHeader('Access-Control-Max-Age', '86400');
 
@@ -421,16 +332,14 @@ export class AutotaskMcpServer {
         // Streamable HTTP), not whether the service is served over HTTP/HTTPS.
         // `version` is included so operators can curl-check which build is
         // running without going through the MCP handshake.
-        // Single-tenant only: a compact Autotask-budget summary (counts only —
-        // the per-entity breakdown is behind the authenticated
-        // autotask_get_api_usage tool).
-        const apiUser = !isGatewayMode ? this.envConfig?.autotask?.username : undefined;
+        // A compact Autotask-budget summary (counts only — the per-entity
+        // breakdown is behind the autotask_get_api_usage tool).
+        const apiUser = this.envConfig?.autotask?.username;
         const u = apiUser ? usageSnapshot(apiUser.toLowerCase(), 0) : null;
         res.end(JSON.stringify({
           status: 'ok',
           version: getServerVersion(this.envConfig?.server?.version),
           mcpTransport: 'http',
-          authMode: isGatewayMode ? 'gateway' : 'env',
           timestamp: new Date().toISOString(),
           ...(u ? { apiUsage: { upstreamLastHour: u.upstreamLastHour, upstreamLastFiveMinutes: u.upstreamLastFiveMinutes, savedPct: u.savedPct, rateLimited: u.rateLimited, cacheEnabled: u.cacheEnabled } } : {}),
           ...shadowHealth(),
@@ -445,56 +354,12 @@ export class AutotaskMcpServer {
       // MCP endpoint — dual-era handler (fresh factory-built server per
       // request in both eras; nothing is shared between requests)
       if (url.pathname === '/mcp') {
-        // Gateway S2S verification (gateway#377 parity). Runs before any
-        // credential extraction — see src/mcp/s2s-verify.ts. Empty secret
-        // means S2S enforcement isn't provisioned for this vendor yet, so
-        // we don't call verifyS2sHeader at all (dark-by-default).
-        const s2sSecret = process.env.CONDUIT_S2S_SECRET || '';
-        if (s2sSecret) {
-          const s2sHeader = req.headers[S2S_HEADER] as string | undefined;
-          if (!verifyS2sHeader(s2sHeader, s2sSecret)) {
-            this.logger.warn('Rejected request with missing/invalid gateway S2S header');
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-              jsonrpc: '2.0',
-              error: {
-                code: -32001,
-                message: 'Unauthorized: missing or invalid gateway S2S authentication header',
-              },
-              id: null,
-            }));
-            return;
-          }
-        }
-
-        // In gateway mode, require the injected credential headers up front.
-        // Falling through to the env-configured handlers would serve the
-        // server operator's tenant data to whoever sent the unauthenticated
-        // request — a cross-tenant leak. Reject explicitly instead. The
-        // factory re-reads the same headers from ctx.requestInfo to build the
-        // per-request, tenant-isolated AutotaskService.
-        if (isGatewayMode) {
-          const credentials = parseCredentialsFromHeaders(req.headers as Record<string, string | string[] | undefined>);
-          if (!credentials.username || !credentials.secret || !credentials.integrationCode) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-              jsonrpc: '2.0',
-              error: {
-                code: -32001,
-                message: 'Unauthorized: missing required gateway credentials (X-API-Key, X-API-Secret, X-Integration-Code)',
-              },
-              id: null,
-            }));
-            return;
-          }
-        }
-
         // Capture the transport-derived origin (peer address / X-Forwarded-For
         // / User-Agent) once, at the entry, and run the whole request dispatch
         // inside a per-request context carrying it. AsyncLocalStorage keeps it
         // available to callTool/audit for calling-container attribution without
         // threading `req` through the stack — and without leaking between
-        // concurrent requests on the shared (env-mode) handler.
+        // concurrent requests.
         const origin = extractRequestOrigin(req);
 
         // Delegate to the dual-era handler. Legacy (2025) traffic is served
@@ -529,7 +394,6 @@ export class AutotaskMcpServer {
       this.httpServer!.listen(port, host, () => {
         this.logger.info(`PSArelay listening on http://${host}:${port}/mcp`);
         this.logger.info(`Health check available at http://${host}:${port}/health`);
-        this.logger.info(`Authentication mode: ${isGatewayMode ? 'gateway (header-based)' : 'env (environment variables)'}`);
         resolve();
       });
     });

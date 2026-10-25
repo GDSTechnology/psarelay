@@ -1,5 +1,4 @@
 // Project/task attachment listing (Phase 4 §5.7 read, #45). Mocked http.
-jest.mock('autotask-node', () => ({ AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) } }));
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';
 import type { McpServerConfig } from '../src/types/mcp';

@@ -75,7 +75,7 @@ describe('console version', () => {
   beforeAll(async () => {
     global.fetch = realFetch;
     const store = { sessionUser: async () => null } as unknown as AdminStore;
-    const handler = adminHandler({ store, pool: null, startedAt: Date.now(), opts: { logger, service: {} as any, version: '3.59.0', authMode: 'gateway', env: { MCP_ADMIN_UI_DIR: resolve(__dirname, '..', 'admin-ui') } } });
+    const handler = adminHandler({ store, pool: null, startedAt: Date.now(), opts: { logger, service: {} as any, version: '3.59.0', env: { MCP_ADMIN_UI_DIR: resolve(__dirname, '..', 'admin-ui') } } });
     server = createServer((q, r) => { void handler(q, r); });
     await new Promise<void>((ok) => server.listen(0, '127.0.0.1', () => ok()));
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -84,10 +84,10 @@ describe('console version', () => {
 
   test('the page carries its version and versioned asset URLs; API answers carry the server version', async () => {
     const html = await (await fetch(base + '/')).text();
-    expect(html).toContain('<meta name="atmcp-version" content="3.59.0">');
+    expect(html).toContain('<meta name="psarelay-version" content="3.59.0">');
     expect(html).toContain('src="/app.js?v=3.59.0"');
     expect(html).toContain('href="/app.css?v=3.59.0"');
     expect((await fetch(base + '/app.js?v=3.59.0')).status).toBe(200);
-    expect((await fetch(base + '/api/me')).headers.get('x-atmcp-version')).toBe('3.59.0');
+    expect((await fetch(base + '/api/me')).headers.get('x-psarelay-version')).toBe('3.59.0');
   });
 });

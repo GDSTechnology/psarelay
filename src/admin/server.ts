@@ -10,7 +10,7 @@
 //   - Local console users, scrypt-hashed; roles 'admin' and 'viewer'.
 //   - Session cookie: random 256-bit token, HttpOnly, SameSite=Strict, Secure
 //     behind HTTPS; only its SHA-256 is stored. 12 h idle / 7 day maximum.
-//   - Every state-changing request must carry the `X-Atmcp: 1` header (a
+//   - Every state-changing request must carry the `X-PSArelay: 1` header (a
 //     cross-site page cannot set it without a CORS preflight this server never
 //     approves) and, when the browser sends an Origin, it must be this host.
 //   - Failed logins are throttled per IP and per username.
@@ -54,7 +54,6 @@ export interface AdminConsoleOptions {
   logger: Logger;
   service: AutotaskService;
   version: string;
-  authMode: 'env' | 'gateway';
   apiUsername?: string | undefined;
   env?: NodeJS.ProcessEnv;
 }
@@ -111,7 +110,7 @@ class HttpError extends Error { constructor(public status: number, message: stri
 
 let serverVersion = '';
 function send(res: ServerResponse, status: number, body: unknown, headers: Record<string, string | string[]> = {}): void {
-  res.writeHead(status, { ...SECURITY_HEADERS, 'X-Atmcp-Version': serverVersion, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers });
+  res.writeHead(status, { ...SECURITY_HEADERS, 'X-PSArelay-Version': serverVersion, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers });
   res.end(JSON.stringify(body));
 }
 
@@ -178,8 +177,8 @@ function isHttps(req: IncomingMessage, mode: string): boolean {
   return header(req, 'x-forwarded-proto')?.split(',')[0]?.trim() === 'https';
 }
 
-const COOKIE_SECURE = '__Host-atmcp_session';
-const COOKIE_PLAIN = 'atmcp_session';
+const COOKIE_SECURE = '__Host-psarelay_session';
+const COOKIE_PLAIN = 'psarelay_session';
 
 function readCookie(req: IncomingMessage): string | null {
   for (const part of (header(req, 'cookie') ?? '').split(';')) {
@@ -199,7 +198,7 @@ function sessionCookie(token: string | null, secure: boolean): string {
 
 /** Reject cross-site state changes: custom header + same-origin Origin (when sent). */
 export function csrfProblem(req: IncomingMessage): string | null {
-  if (header(req, 'x-atmcp') !== '1') return 'Missing X-Atmcp header.';
+  if (header(req, 'x-psarelay') !== '1') return 'Missing X-PSArelay header.';
   const origin = header(req, 'origin');
   if (origin && origin !== 'null') {
     const host = header(req, 'x-forwarded-host') ?? header(req, 'host');
@@ -352,7 +351,7 @@ export function adminHandler(deps: AdminDeps) {
       const v = encodeURIComponent(opts.version);
       const html = page.body.toString('utf8')
         .replace('src="/app.js"', `src="/app.js?v=${v}"`).replace('href="/app.css"', `href="/app.css?v=${v}"`)
-        .replace('<head>', `<head>\n  <meta name="atmcp-version" content="${opts.version.replace(/[^\w.+-]/g, '')}">`);
+        .replace('<head>', `<head>\n  <meta name="psarelay-version" content="${opts.version.replace(/[^\w.+-]/g, '')}">`);
       statics.set(route, { ...page, body: Buffer.from(html, 'utf8') });
     }
   }
@@ -378,7 +377,7 @@ export function adminHandler(deps: AdminDeps) {
 
   const status = async () => {
     const rt = getShadowRuntime();
-    const tenant = opts.authMode === 'env' ? opts.apiUsername?.toLowerCase() : undefined;
+    const tenant = opts.apiUsername?.toLowerCase();
     // Autotask's own counter costs an API call — refresh at most every 5 minutes.
     // Errors are kept only a minute, so a fixed account shows up quickly.
     const ttl = thresholdCache && (thresholdCache.value as { error?: unknown } | null)?.error ? 60_000 : 300_000;
@@ -405,7 +404,6 @@ export function adminHandler(deps: AdminDeps) {
       startedAt: new Date(deps.startedAt).toISOString(),
       uptimeSeconds: Math.round((Date.now() - deps.startedAt) / 1000),
       node: process.version,
-      authMode: opts.authMode,
       autotaskAuth: tenant ? authBlockStatus(tenant) : null,
       outsideTraffic: tenant ? outsideTraffic() : null,
       mcpTraffic: mcpTrafficSummary(24),
@@ -582,7 +580,7 @@ export function adminHandler(deps: AdminDeps) {
 
     if (path === '/api/actions/auth-retry' && method === 'POST') {
       requireUser(ctx, 'admin');
-      const tenant = opts.authMode === 'env' ? opts.apiUsername?.toLowerCase() : undefined;
+      const tenant = opts.apiUsername?.toLowerCase();
       const cleared = tenant ? clearAuthBlock(tenant) : false;
       thresholdCache = null; // re-check usage (the probe) on the next dashboard refresh
       void log(ctx, 'action.auth_retry', { cleared });

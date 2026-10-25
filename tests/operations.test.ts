@@ -2,10 +2,6 @@
 // `_operation` in write results, the claim → replay / conflict / partial
 // rules, and linking the MCP's own audit events back to their operation.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { parseWrite, noteOperationWrite, runInOperation } from '../src/utils/operation-context';
 import { mayWrite, argsDigest, operationClaimResult } from '../src/utils/operations';
 import type { ClaimResult, OperationInput, OperationRecord } from '../src/db/operation-store';

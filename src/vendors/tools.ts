@@ -12,7 +12,7 @@ type H = (a: Record<string, any>, ctx: CallerContext) => Promise<Result>;
 
 const MAX_BYTES = 10 * 1024 * 1024;
 const CONF_RANK: Record<string, number> = { high: 3, medium: 2, low: 1, none: 0 };
-const who = (ctx: CallerContext) => ctx.trustedActingUserEmail ?? ctx.requestingUserEmail ?? (ctx.source !== 'unknown' ? ctx.source : null);
+const who = (ctx: CallerContext) => ctx.requestingUserEmail ?? (ctx.source !== 'unknown' ? ctx.source : null);
 const unavailable: Result = { result: { status: 'unavailable' }, message: 'Vendor reconciliation needs the Postgres store (MCP_PG_ENABLED=true and migration 0010).' };
 
 function companyLookup(s: AutotaskService): CompanyLookup {

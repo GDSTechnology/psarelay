@@ -1,10 +1,6 @@
 // #23 §16 slice 2 — webhook writes (guarded). Pure payload/validation +
 // dry-run-first create/update/excluded-resources + delete, service mocked.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { buildWebhookPayload, validateWebhookCreate, buildWebhookFieldRow } from '../src/utils/webhook-entities';
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';

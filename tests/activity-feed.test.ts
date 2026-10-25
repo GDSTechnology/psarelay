@@ -3,10 +3,6 @@
 // pending (not dropped), the ingest lock, actor classification + filters,
 // and the tool end-to-end against an in-memory ledger.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { ingestActivity, decodeCursor, encodeCursor, eventType, feedActor, clampSince, type FeedDeps } from '../src/db/activity-feed';
 import type { AuditEvent } from '../src/utils/audit-events';
 import type { ClassifyContext } from '../src/utils/actor-classify';

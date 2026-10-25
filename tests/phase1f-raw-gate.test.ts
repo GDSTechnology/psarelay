@@ -1,12 +1,6 @@
 // Raw-request gatekeeping (Expansion Spec §3.4, issue #17). administrator-only
 // under permissions, DELETE disabled by default, production read-only switch.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: {
-    create: jest.fn().mockRejectedValue(new Error('Mock: Cannot connect to Autotask API')),
-  },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { AutotaskToolHandler } from '../src/handlers/tool.handler';
 import { Logger } from '../src/utils/logger';

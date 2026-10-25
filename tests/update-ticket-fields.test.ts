@@ -3,10 +3,6 @@
 // T20261007.0010 sat in "Purchasing", belonged in "Tier 1 Support", and the
 // agent couldn't move it — queueID was writable but not in the tool schema.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { AutotaskToolHandler } from '../src/handlers/tool.handler';
 import { TOOL_DEFINITIONS } from '../src/handlers/tool.definitions';

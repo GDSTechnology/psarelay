@@ -2,10 +2,6 @@
 // operator registry, and reference technicians. Unknown is never silently
 // human; this MCP's own writes (n8n / Nexus) are a service account.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { classifyActor, parseRegistry, parseReference, registryLineProblem, referenceLineProblem, type ClassifyContext } from '../src/utils/actor-classify';
 import { coerceSetting, setOverride, _resetSettings } from '../src/admin/settings';
 import { AutotaskService } from '../src/services/autotask.service';

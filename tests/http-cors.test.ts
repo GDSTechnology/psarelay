@@ -3,7 +3,7 @@
 // to /mcp; without CORS headers the preflight fails and the connector reports
 // "Couldn't reach the MCP server."
 
-import { AutotaskMcpServer } from '../src/mcp/server.js';
+import { PsarelayServer } from '../src/mcp/server.js';
 import { Logger } from '../src/utils/logger.js';
 import type { EnvironmentConfig } from '../src/utils/config.js';
 import type { McpServerConfig } from '../src/types/mcp.js';
@@ -11,16 +11,15 @@ import type { McpServerConfig } from '../src/types/mcp.js';
 function buildEnvConfig(port: number): EnvironmentConfig {
   return {
     autotask: {},
-    server: { name: 'autotask-mcp-test', version: '0.0.0-test' },
+    server: { name: 'psarelay-test', version: '0.0.0-test' },
     transport: { type: 'http', port, host: '127.0.0.1' },
     logging: { level: 'error', format: 'simple' },
-    auth: { mode: 'env' },
   };
 }
 
 function buildMcpConfig(): McpServerConfig {
   return {
-    name: 'autotask-mcp-test',
+    name: 'psarelay-test',
     version: '0.0.0-test',
     autotask: { username: '', secret: '', integrationCode: '' },
   } as McpServerConfig;
@@ -32,13 +31,13 @@ function pickPort(): number {
 }
 
 describe('HTTP transport CORS preflight', () => {
-  let server: AutotaskMcpServer;
+  let server: PsarelayServer;
   let port: number;
 
   beforeEach(async () => {
     port = pickPort();
     const logger = new Logger('error', 'simple');
-    server = new AutotaskMcpServer(buildMcpConfig(), logger, buildEnvConfig(port));
+    server = new PsarelayServer(buildMcpConfig(), logger, buildEnvConfig(port));
     await server.start();
   });
 

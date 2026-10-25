@@ -3,10 +3,6 @@
 // description, isActive, entityType}; ChecklistLibraryChecklistItems {id,
 // checklistLibraryID, itemName, isImportant, knowledgebaseArticleID, position}.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { TOOL_DEFINITIONS, TOOL_CATEGORIES } from '../src/handlers/tool.definitions';
 import { Logger } from '../src/utils/logger';

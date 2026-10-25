@@ -3,10 +3,6 @@
 // company + commercial linkage. Best-effort: a failing section is recorded under
 // `errors`, never fails the whole call. Composed methods are mocked.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';
 import type { McpServerConfig } from '../src/types/mcp';

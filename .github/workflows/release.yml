@@ -3,8 +3,8 @@ name: Release
 # GDS-native automated release. On push to main, semantic-release computes the
 # next version from conventional commits, creates a git tag + GitHub Release with
 # notes; if (and only if) a release was cut, a traceable Docker image is built and
-# pushed to GHCR under the GDS namespace. No wyre reusable workflows, no registry
-# token for the SDK (autotask-node is the public github: fork).
+# pushed to GHCR under the GDS namespace. No external reusable workflows, no
+# registry token.
 #
 # .releaserc.json has no @semantic-release/git plugin, so nothing is pushed back
 # to main; the release version lives in the git tag / GitHub Release, and the

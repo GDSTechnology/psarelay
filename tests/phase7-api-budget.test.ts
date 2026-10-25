@@ -3,10 +3,6 @@
 // and Autotask limits per-integration requests per hour AND concurrent
 // requests — so the expensive paths must be sequential, batched and skippable.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';
 import type { McpServerConfig } from '../src/types/mcp';

@@ -8,7 +8,7 @@ import { GAP_PRIORITIES, GAP_STATUSES, GapStore, type GapInput, type GapPriority
 
 type Result = { result: unknown; message: string };
 type H = (a: Record<string, any>, ctx: CallerContext) => Promise<Result>;
-const who = (ctx: CallerContext) => ctx.trustedActingUserEmail ?? ctx.requestingUserEmail ?? (ctx.source !== 'unknown' ? ctx.source : ctx.origin?.userAgent ?? null);
+const who = (ctx: CallerContext) => ctx.requestingUserEmail ?? (ctx.source !== 'unknown' ? ctx.source : ctx.origin?.userAgent ?? null);
 
 export function gapToolHandlers(getPool: () => Pool | null): Array<[string, H]> {
   return [

@@ -1,10 +1,6 @@
 // #46 — SOW→project build engine. Pure blueprint ordering + the idempotent,
 // resumable, dry-run-first build orchestrator. Service methods are mocked; no I/O.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { orderPhasesForCreate, planProjectBuild, buildMarker, hasBuildMarker } from '../src/utils/project-build';
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';
@@ -51,6 +47,12 @@ describe('project-build (pure)', () => {
     const m = buildMarker('10:Deploy');
     expect(hasBuildMarker(`notes\n${m}`, '10:Deploy')).toBe(true);
     expect(hasBuildMarker('notes', '10:Deploy')).toBe(false);
+  });
+
+  test('projects built before the rename (old marker) are still found', () => {
+    expect(buildMarker('10:Deploy')).toBe('[psarelay-build-key:10:Deploy]');
+    expect(hasBuildMarker('notes\n[atmcp-build-key:10:Deploy]', '10:Deploy')).toBe(true);
+    expect(hasBuildMarker('notes\n[atmcp-build-key:10:Other]', '10:Deploy')).toBe(false);
   });
 });
 

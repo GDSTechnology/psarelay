@@ -1,10 +1,6 @@
 // Weekly billing-leakage sweep — reconciliation rules + history-based assignee
 // recovery. Modeled on live ticket 200510. Pure functions; service sweep mocked.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { reconcileServiceCall, recoverAssignees } from '../src/utils/service-call-reconciliation';
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';

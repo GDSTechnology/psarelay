@@ -231,7 +231,7 @@ function render(t: TicketCard): void {
   root.replaceChildren(el("div", "card", el("div", "card__bar"), body));
 }
 
-// autotask-mcp wraps tool results as { message, data } and attaches the
+// PSArelay wraps tool results as { message, data } and attaches the
 // normalized card to ticket-details results as data._card.
 function extractCard(obj: unknown): TicketCard | null {
   const o = obj as { data?: { _card?: TicketCard } };

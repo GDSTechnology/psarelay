@@ -88,7 +88,7 @@ try {
   // 7. Pack the bundle
   console.log('\n=== Packing MCPB bundle ===');
   // Strip the npm scope (e.g. @gdstechnology/) so the bundle is written to a
-  // flat file (autotask-mcp.mcpb) instead of a scoped path that breaks upload.
+  // flat file (psarelay.mcpb) instead of a scoped path that breaks upload.
   const bundleName = pkg.name.replace(/^@.*\//, '');
   const bundlePath = join(ROOT, `${bundleName}.mcpb`);
   run(`npx mcpb pack "${STAGING}" "${bundlePath}"`, { cwd: ROOT });

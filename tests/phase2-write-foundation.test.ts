@@ -8,10 +8,6 @@
 //   - Projects.contractID and Projects.opportunityID are both writable, so
 //     commercial linkage needs no new entity — only a guarded write path.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { TOOL_DEFINITIONS } from '../src/handlers/tool.definitions';
 import { CREATE_TOOL_META } from '../src/utils/create-result';

@@ -3,7 +3,7 @@
 > **GDS note:** GDS builds the image **locally** (it is not published to a
 > registry) — see [`DEPLOY.md`](DEPLOY.md). The `ghcr.io/gdstechnology/psarelay`
 > pull commands below are illustrative; substitute your locally-built
-> `autotask-mcp-gds:latest`, or an image you publish via `scripts/build-image.sh`.
+> `psarelay:latest`, or an image you publish via `scripts/build-image.sh`.
 
 This document provides comprehensive instructions for running PSArelay using Docker.
 
@@ -54,9 +54,9 @@ Create a `docker-compose.yml`:
 version: '3.8'
 
 services:
-  autotask-mcp:
+  psarelay:
     image: ghcr.io/gdstechnology/psarelay:latest
-    container_name: autotask-mcp
+    container_name: psarelay
     restart: unless-stopped
     environment:
       - AUTOTASK_USERNAME=${AUTOTASK_USERNAME}
@@ -91,24 +91,24 @@ docker-compose up -d
 ```bash
 # Clone the repository
 git clone https://github.com/GDSTechnology/psarelay.git
-cd autotask-mcp
+cd psarelay
 
 # Build the Docker image
-docker build -t autotask-mcp:local .
+docker build -t psarelay:local .
 ```
 
 ### Build with Custom Tags
 
 ```bash
 # Build with version tag
-docker build -t autotask-mcp:v1.0.1 .
+docker build -t psarelay:v1.0.1 .
 
 # Build with build arguments
 docker build \
   --build-arg VERSION=1.0.1 \
   --build-arg COMMIT_SHA=$(git rev-parse HEAD) \
   --build-arg BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
-  -t autotask-mcp:custom .
+  -t psarelay:custom .
 ```
 
 ## Environment Variables
@@ -186,7 +186,7 @@ For a persistent HTTP-based MCP server:
 ```bash
 # Start the container (HTTP transport, default)
 docker run -d \
-  --name autotask-mcp-server \
+  --name psarelay-server \
   -p 8080:8080 \
   --env-file .env \
   ghcr.io/gdstechnology/psarelay:latest
@@ -201,33 +201,33 @@ curl http://localhost:8080/health
 
 ```bash
 # View all logs
-docker logs autotask-mcp
+docker logs psarelay
 
 # Follow logs in real-time
-docker logs -f autotask-mcp
+docker logs -f psarelay
 
 # View last 100 lines
-docker logs --tail 100 autotask-mcp
+docker logs --tail 100 psarelay
 ```
 
 ### Health Checks
 
 ```bash
 # Check container health
-docker inspect autotask-mcp | grep -A 10 '"Health"'
+docker inspect psarelay | grep -A 10 '"Health"'
 
 # Manual health check
-docker exec autotask-mcp node -e "console.log('Health check passed')"
+docker exec psarelay node -e "console.log('Health check passed')"
 ```
 
 ### Resource Monitoring
 
 ```bash
 # Monitor resource usage
-docker stats autotask-mcp
+docker stats psarelay
 
 # View container details
-docker inspect autotask-mcp
+docker inspect psarelay
 ```
 
 ## Troubleshooting
@@ -237,7 +237,7 @@ docker inspect autotask-mcp
 #### Container Exits Immediately
 ```bash
 # Check logs for errors
-docker logs autotask-mcp
+docker logs psarelay
 
 # Common causes:
 # - Missing required environment variables
@@ -325,19 +325,19 @@ docker run -d \
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: autotask-mcp
+  name: psarelay
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: autotask-mcp
+      app: psarelay
   template:
     metadata:
       labels:
-        app: autotask-mcp
+        app: psarelay
     spec:
       containers:
-      - name: autotask-mcp
+      - name: psarelay
         image: ghcr.io/gdstechnology/psarelay:latest
         env:
         - name: AUTOTASK_USERNAME
@@ -370,7 +370,7 @@ spec:
 version: '3.8'
 
 services:
-  autotask-mcp:
+  psarelay:
     image: ghcr.io/gdstechnology/psarelay:latest
     deploy:
       replicas: 1
@@ -404,8 +404,8 @@ secrets:
 docker pull ghcr.io/gdstechnology/psarelay:latest
 
 # Stop and remove old container
-docker stop autotask-mcp
-docker rm autotask-mcp
+docker stop psarelay
+docker rm psarelay
 
 # Start new container
 docker run -d \

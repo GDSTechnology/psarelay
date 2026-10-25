@@ -2,10 +2,6 @@
 // parsed change history with actor attribution, the original email (RFC 822),
 // multi-field picklists, and labelled notes. Asserts the filters sent upstream.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { AutotaskToolHandler } from '../src/handlers/tool.handler';
 import { Logger } from '../src/utils/logger';

@@ -70,11 +70,12 @@ describe('Notifier', () => {
     expect(log).toHaveBeenCalledWith(expect.stringMatching(/"Ops" \(discord\) failed/));
   });
 
-  test('generic channels sign the body (X-Atmcp-Signature)', async () => {
+  test('generic channels sign the body (X-PSArelay-Signature, plus the deprecated X-Atmcp-Signature)', async () => {
     const fetch = okFetch();
     const n = new Notifier({ fetch: fetch as never, server: 'S' });
     await n.send(ch({ kind: 'generic', url: 'https://example.com/hook', secret: 'k' }), EVT);
     const init = (fetch.mock.calls[0] as any)[1];
-    expect(init.headers['X-Atmcp-Signature']).toBe(`sha256=${createHmac('sha256', 'k').update(init.body).digest('hex')}`);
+    expect(init.headers['X-PSArelay-Signature']).toBe(`sha256=${createHmac('sha256', 'k').update(init.body).digest('hex')}`);
+    expect(init.headers['X-Atmcp-Signature']).toBe(init.headers['X-PSArelay-Signature']);
   });
 });

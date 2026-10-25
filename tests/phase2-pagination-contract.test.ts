@@ -10,12 +10,6 @@
 // offset parameter, so these tests drive a fake cursor-paginated dataset and
 // assert the offset-style contract the MCP exposes on top of it.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: {
-    create: jest.fn().mockRejectedValue(new Error('Mock: Cannot connect to Autotask API')),
-  },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';
 import type { McpServerConfig } from '../src/types/mcp';

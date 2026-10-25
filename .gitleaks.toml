@@ -2,7 +2,7 @@
 # set of KNOWN placeholder example credentials that appear in documentation
 # (verified: no real secrets exist in the repo or its history, 2026-09-16).
 #
-# The migration guide's gateway-mode `curl` examples use placeholder header
+# Documentation `curl` examples (historically the gateway migration guide) use placeholder header
 # values (your-api-user@example.com / your-api-secret / your-integration-code),
 # which the built-in `curl-auth-header` rule flags. These regexes allowlist only
 # those exact placeholders — a real credential pasted into the docs would not

@@ -4,12 +4,6 @@
 //  - expanded update_time_entry passes the new billing/time fields through
 //  - duration-vs-hoursWorked mismatch warns
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: {
-    create: jest.fn().mockRejectedValue(new Error('Mock: Cannot connect to Autotask API')),
-  },
-}));
-
 import { hasOffset, zonedLocalToUTC, normalizeTimestamp, durationHours } from '../src/utils/timezone';
 import { billingTreatmentFields, applyBillingTreatment } from '../src/utils/billing-treatment';
 import { AutotaskService } from '../src/services/autotask.service';

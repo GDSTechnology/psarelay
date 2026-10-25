@@ -15,7 +15,7 @@ import { companyRecord, contactRecord, discover, inventory, loadCompanies, loadC
 
 type Result = { result: unknown; message: string };
 type H = (a: Record<string, any>, ctx: CallerContext) => Promise<Result>;
-const who = (ctx: CallerContext) => ctx.trustedActingUserEmail ?? ctx.requestingUserEmail ?? (ctx.source !== 'unknown' ? ctx.source : null);
+const who = (ctx: CallerContext) => ctx.requestingUserEmail ?? (ctx.source !== 'unknown' ? ctx.source : null);
 const ids = (v: unknown): number[] => (Array.isArray(v) ? v : v == null || v === '' ? [] : [v]).map((x) => Number(x)).filter((n) => Number.isInteger(n) && n > 0);
 
 export function mergeToolHandlers(s: AutotaskService, getPool: () => Pool | null): Array<[string, H]> {

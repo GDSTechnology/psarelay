@@ -31,15 +31,6 @@ export interface CallerContext {
   refs?: Record<string, string>;
   timestamp: string;
   /**
-   * Acting identity injected by a TRUSTED gateway header (behind S2S), used for
-   * "act as this user" (Teams handoff, #42). Set ONLY server-side from the
-   * request headers in gateway mode — never populated by `extractCallerContext`
-   * from client-supplied `_meta`/`_context` (which are spoofable). Takes
-   * precedence over the payload `requestingUserEmail` when resolving the caller.
-   */
-  trustedActingResourceId?: number;
-  trustedActingUserEmail?: string;
-  /**
    * Transport-derived origin of the request (peer address / X-Forwarded-For /
    * User-Agent), captured server-side at the HTTP entry — NEVER from client
    * `_meta`/`_context`. Used for audit attribution of the calling container.

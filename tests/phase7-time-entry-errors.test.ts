@@ -3,10 +3,6 @@
 // collaboration writers, the ticket-details Autotask link, and role checks on
 // service-call resource assignments. Service mocked.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';
 import { classifyTimeEntryWriteError } from '../src/utils/time-entry-errors';

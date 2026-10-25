@@ -2,10 +2,6 @@
 // Autotask role model verified live: Resources.defaultServiceDeskRoleID, the
 // ResourceRoles association, and the Roles entity. Mocked http / service.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { AutotaskToolHandler } from '../src/handlers/tool.handler';
 import { TOOL_DEFINITIONS, TOOL_CATEGORIES } from '../src/handlers/tool.definitions';

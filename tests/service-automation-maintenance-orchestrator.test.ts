@@ -4,10 +4,6 @@
 // and coverage gaps are computed in-memory (Autotask null filters on CI FKs
 // return 0 rows — verified live). Mocked service.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { TOOL_DEFINITIONS, TOOL_CATEGORIES } from '../src/handlers/tool.definitions';
 import { Logger } from '../src/utils/logger';

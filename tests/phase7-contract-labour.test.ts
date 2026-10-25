@@ -2,12 +2,6 @@
 // contractType so unbilled/leakage reports can tell a real leak from a contract
 // working as designed.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: {
-    create: jest.fn().mockRejectedValue(new Error('Mock: Cannot connect to Autotask API')),
-  },
-}));
-
 import { classifyContractLabourBilling } from '../src/utils/contract-labour';
 import { AutotaskService } from '../src/services/autotask.service';
 import { AutotaskToolHandler } from '../src/handlers/tool.handler';

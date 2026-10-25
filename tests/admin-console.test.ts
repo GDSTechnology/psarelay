@@ -3,10 +3,6 @@
 // CSRF and last-admin rules against an in-memory store. The real Postgres
 // path (migration 0004, CLI init, browser sign-in) was verified on the local dev DB.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { createServer, Server } from 'node:http';
 import { AddressInfo } from 'node:net';
 import { resolve } from 'node:path';
@@ -169,7 +165,7 @@ describe('admin HTTP API', () => {
     store = new FakeStore();
     await store.createUser('admin', 'initial-temp-password', 'admin', 'cli', true);
     const handler = adminHandler({ store: store as unknown as AdminStore, pool: null, startedAt: Date.now(),
-      opts: { logger, service: {} as any, version: 't', authMode: 'gateway', env: { MCP_ADMIN_UI_DIR: resolve(__dirname, '..', 'admin-ui') } } });
+      opts: { logger, service: {} as any, version: 't', env: { MCP_ADMIN_UI_DIR: resolve(__dirname, '..', 'admin-ui') } } });
     server = createServer((q, r) => { void handler(q, r); });
     await new Promise<void>((ok) => server.listen(0, '127.0.0.1', () => ok()));
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -177,7 +173,7 @@ describe('admin HTTP API', () => {
   afterEach(() => new Promise<void>((ok) => server.close(() => ok())));
 
   const call = async (method: string, path: string, body?: unknown, cookie?: string, extra: Record<string, string> = {}) => {
-    const r = await fetch(base + path, { method, headers: { 'X-Atmcp': '1', 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}), ...extra }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+    const r = await fetch(base + path, { method, headers: { 'X-PSArelay': '1', 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}), ...extra }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
     return { status: r.status, body: await r.json().catch(() => null) as any, cookie: r.headers.get('set-cookie') };
   };
   const login = async (u: string, p: string) => { const r = await call('POST', '/api/login', { username: u, password: p }); return { ...r, jar: r.cookie?.split(';')[0] }; };
@@ -276,7 +272,7 @@ describe('admin HTTP API', () => {
 
   test('cookie is Secure (__Host-) behind an HTTPS proxy', async () => {
     const r = await call('POST', '/api/login', { username: 'admin', password: 'initial-temp-password' }, undefined, { 'X-Forwarded-Proto': 'https' });
-    expect(r.cookie).toMatch(/^__Host-atmcp_session=.*; Secure$/);
+    expect(r.cookie).toMatch(/^__Host-psarelay_session=.*; Secure$/);
   });
 });
 

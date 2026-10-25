@@ -1,11 +1,5 @@
 // Protected-company and unsafe-name hard gates (brief §7.31).
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: {
-    create: jest.fn().mockRejectedValue(new Error('Mock: Cannot connect to Autotask API')),
-  },
-}));
-
 import {
   getProtectedCompanyIds,
   isProtectedCompanyId,

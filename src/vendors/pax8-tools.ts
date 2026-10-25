@@ -12,7 +12,7 @@ import { documentChecks, sha256 } from './service.js';
 
 type Result = { result: unknown; message: string };
 type H = (a: Record<string, any>, ctx: CallerContext) => Promise<Result>;
-const who = (ctx: CallerContext) => ctx.trustedActingUserEmail ?? ctx.requestingUserEmail ?? (ctx.source !== 'unknown' ? ctx.source : null);
+const who = (ctx: CallerContext) => ctx.requestingUserEmail ?? (ctx.source !== 'unknown' ? ctx.source : null);
 
 export function pax8ToolHandlers(getPool: () => Pool | null, env: NodeJS.ProcessEnv = process.env): Array<[string, H]> {
   return [

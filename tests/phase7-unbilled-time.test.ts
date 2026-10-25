@@ -1,12 +1,6 @@
 // report_unbilled_time: billable time not yet approved for billing, per resource,
 // aged, valued at the role's bill rate (null-survives when no rate).
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: {
-    create: jest.fn().mockRejectedValue(new Error('Mock: Cannot connect to Autotask API')),
-  },
-}));
-
 import { summarizeUnbilledTime, UnbilledTimeEntry } from '../src/utils/unbilled-time';
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';

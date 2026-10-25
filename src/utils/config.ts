@@ -1,6 +1,5 @@
 // Configuration Utility
 // Handles loading configuration from environment variables and MCP client arguments
-// Supports gateway mode where credentials come via HTTP headers
 
 import { McpServerConfig } from '../types/mcp.js';
 import { LogLevel } from './logger.js';
@@ -23,7 +22,6 @@ export function getServerVersion(override?: string): string {
 }
 
 export type TransportType = 'stdio' | 'http';
-export type AuthMode = 'env' | 'gateway';
 
 export interface EnvironmentConfig {
   autotask: {
@@ -45,78 +43,19 @@ export interface EnvironmentConfig {
     level: LogLevel;
     format: 'json' | 'simple';
   };
-  auth: {
-    mode: AuthMode;
-  };
   lazyLoading?: boolean;
-}
-
-/**
- * Gateway credentials extracted from HTTP request headers
- * The MCP Gateway injects credentials via these headers:
- * - X-API-Key: Contains the Autotask username
- * - X-API-Secret: Contains the Autotask secret
- * - X-Integration-Code: Contains the Autotask integration code
- */
-export interface GatewayCredentials {
-  username: string | undefined;
-  secret: string | undefined;
-  integrationCode: string | undefined;
-  apiUrl: string | undefined;
-}
-
-/**
- * Extract credentials from gateway-injected environment variables
- * The gateway proxies headers as environment variables:
- * - X-API-Key header -> X_API_KEY env var
- * - X-API-Secret header -> X_API_SECRET env var
- * - X-Integration-Code header -> X_INTEGRATION_CODE env var
- */
-export function getCredentialsFromGateway(): GatewayCredentials {
-  return {
-    username: process.env.X_API_KEY || process.env.AUTOTASK_USERNAME,
-    secret: process.env.X_API_SECRET || process.env.AUTOTASK_SECRET,
-    integrationCode: process.env.X_INTEGRATION_CODE || process.env.AUTOTASK_INTEGRATION_CODE,
-    apiUrl: process.env.X_API_URL || process.env.AUTOTASK_API_URL,
-  };
-}
-
-/**
- * Parse credentials from HTTP request headers (for per-request credential handling)
- * Header names follow HTTP convention (lowercase with hyphens)
- */
-export function parseCredentialsFromHeaders(headers: Record<string, string | string[] | undefined>): GatewayCredentials {
-  const getHeader = (name: string): string | undefined => {
-    const value = headers[name] || headers[name.toLowerCase()];
-    return Array.isArray(value) ? value[0] : value;
-  };
-
-  return {
-    username: getHeader('x-api-key'),
-    secret: getHeader('x-api-secret'),
-    integrationCode: getHeader('x-integration-code'),
-    apiUrl: getHeader('x-api-url'),
-  };
 }
 
 /**
  * Load configuration from environment variables
  */
 export function loadEnvironmentConfig(): EnvironmentConfig {
-  // Support both direct env vars and gateway-injected vars
-  // Gateway vars (X_API_KEY, etc.) take precedence when in gateway mode
-  const authMode = (process.env.AUTH_MODE as AuthMode) || 'env';
-
-  // getCredentialsFromGateway falls back to AUTOTASK_* env vars internally,
-  // so it works for both modes. In env mode, use AUTOTASK_* vars directly.
-  const creds = authMode === 'gateway'
-    ? getCredentialsFromGateway()
-    : {
-        username: process.env.AUTOTASK_USERNAME,
-        secret: process.env.AUTOTASK_SECRET,
-        integrationCode: process.env.AUTOTASK_INTEGRATION_CODE,
-        apiUrl: process.env.AUTOTASK_API_URL,
-      };
+  const creds = {
+    username: process.env.AUTOTASK_USERNAME,
+    secret: process.env.AUTOTASK_SECRET,
+    integrationCode: process.env.AUTOTASK_INTEGRATION_CODE,
+    apiUrl: process.env.AUTOTASK_API_URL,
+  };
 
   // Filter out undefined values to satisfy exactOptionalPropertyTypes
   const autotaskConfig: { username?: string; secret?: string; integrationCode?: string; apiUrl?: string } = {};
@@ -144,9 +83,6 @@ export function loadEnvironmentConfig(): EnvironmentConfig {
     logging: {
       level: (process.env.LOG_LEVEL as LogLevel) || 'info',
       format: (process.env.LOG_FORMAT as 'json' | 'simple') || 'simple'
-    },
-    auth: {
-      mode: authMode
     },
     lazyLoading: process.env.LAZY_LOADING === 'true' || process.env.LAZY_LOADING === '1'
   };
@@ -343,21 +279,13 @@ export function getConfigHelp(): string {
   return `
 PSArelay Configuration:
 
-=== Local Mode (default) ===
 Required Environment Variables:
   AUTOTASK_USERNAME         - Autotask API username (email)
   AUTOTASK_SECRET          - Autotask API secret key
   AUTOTASK_INTEGRATION_CODE - Autotask integration code
 
-=== Gateway Mode (hosted deployment) ===
-When AUTH_MODE=gateway, credentials are injected by the MCP Gateway:
-  X_API_KEY                - Autotask API username (from X-API-Key header)
-  X_API_SECRET             - Autotask API secret (from X-API-Secret header)
-  X_INTEGRATION_CODE       - Autotask integration code (from X-Integration-Code header)
-
 === Common Options ===
   AUTOTASK_API_URL         - Autotask API base URL (auto-detected if not provided)
-  AUTH_MODE                - Authentication mode: env (default), gateway
   MCP_SERVER_NAME          - Server name (default: psarelay)
   MCP_SERVER_VERSION       - Override the reported server version. Defaults to the version baked into the image's package.json at build time. Useful for stamping a custom build identifier.
   MCP_TRANSPORT            - Transport type: stdio, http (default: stdio)
@@ -372,9 +300,5 @@ Example (Local Mode):
   AUTOTASK_SECRET=your-secret-key
   AUTOTASK_INTEGRATION_CODE=your-integration-code
 
-Example (Gateway Mode):
-  AUTH_MODE=gateway
-  MCP_TRANSPORT=http
-  # Credentials injected by gateway via X-API-Key, X-API-Secret, X-Integration-Code headers
 `.trim();
 }

@@ -3,10 +3,6 @@
 // the candidate resolver's company↔contact linking, and the search_* identity
 // mode leaving plain mode untouched. Nothing here may ever create a record.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { AutotaskToolHandler } from '../src/handlers/tool.handler';
 import { Logger } from '../src/utils/logger';

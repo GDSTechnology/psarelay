@@ -5,10 +5,6 @@
 // integration user. Prompt-and-bind elicits the Autotask username when the app
 // didn't identify the user. Mocked http / service.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { AutotaskToolHandler } from '../src/handlers/tool.handler';
 import { AutotaskHttpClient } from '../src/services/autotask-http';

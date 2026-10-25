@@ -4,10 +4,6 @@
 // VALIDATED against the resource's active roles (GDS 2026-09-28: Engineer vs
 // Technician are not interchangeable). Service mocked.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';
 import { TOOL_DEFINITIONS } from '../src/handlers/tool.definitions';

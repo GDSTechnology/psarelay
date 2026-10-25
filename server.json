@@ -45,16 +45,9 @@
         },
         {
           "name": "MCP_TRANSPORT",
-          "description": "Transport mode for the server. Set to 'stdio' for local CLI use; the image defaults to 'http' for gateway hosting.",
+          "description": "Transport mode for the server. Set to 'stdio' for local CLI use; the image defaults to 'http'.",
           "isRequired": false,
           "default": "stdio",
-          "format": "string"
-        },
-        {
-          "name": "AUTH_MODE",
-          "description": "Credential source: 'env' reads vars locally, 'gateway' expects header injection from the MCP Gateway.",
-          "isRequired": false,
-          "default": "env",
           "format": "string"
         },
         {

@@ -1,10 +1,6 @@
 // #23 §16 — webhook management (read/discovery). Entity catalog (pure) +
 // search/get through the service (mocked HTTP).
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { resolveWebhookEntity, WEBHOOK_ENTITIES, WEBHOOK_ENTITY_KEYS } from '../src/utils/webhook-entities';
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';

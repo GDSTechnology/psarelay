@@ -1,12 +1,6 @@
 // Validation + route defects (brief §6.1 owner, §6.2 note length, §6.3 contact
 // search, §4.7 opportunity collection PATCH).
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: {
-    create: jest.fn().mockRejectedValue(new Error('Mock: Cannot connect to Autotask API')),
-  },
-}));
-
 import { buildContactSearchFilter, normalizeContactNote, CONTACT_NOTE_MAX_LENGTH } from '../src/utils/contact';
 import { resolveCompanyOwnerResourceID } from '../src/utils/company-owner';
 import { AutotaskService } from '../src/services/autotask.service';

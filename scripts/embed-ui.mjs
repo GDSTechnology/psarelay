@@ -1,5 +1,5 @@
 // Embeds the vite-built single-file UI (ui/dist/index.html) as a TypeScript
-// module so every runtime — stdio, Node HTTP, and Cloudflare Workers (no
+// module so every runtime — stdio and Node HTTP (no
 // filesystem) — can serve it from the compiled bundle.
 //
 // Run via: npm run build:ui   (vite build && node scripts/embed-ui.mjs)

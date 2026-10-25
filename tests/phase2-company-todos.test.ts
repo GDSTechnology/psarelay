@@ -1,11 +1,5 @@
 // Company To-Dos (CRM calendar follow-ups) — brief §4.1 / §4.10.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: {
-    create: jest.fn().mockRejectedValue(new Error('Mock: Cannot connect to Autotask API')),
-  },
-}));
-
 import { resolveActionType } from '../src/utils/company-todo';
 import { AutotaskService } from '../src/services/autotask.service';
 import { AutotaskToolHandler } from '../src/handlers/tool.handler';

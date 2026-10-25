@@ -9,11 +9,11 @@
 - Do not suggest style changes unless they cause bugs or violate existing patterns
 
 ## Project Context
-- **Stack**: TypeScript (ESM), MCP SDK (`@modelcontextprotocol/sdk`), vendor-specific Node.js client library
-- **Transport**: Dual-mode — stdio (local/Claude Desktop) and Streamable HTTP (gateway)
-- **Auth modes**: Local (env vars) and Gateway (credentials injected via HTTP headers by the gateway proxy)
+- **Stack**: TypeScript (ESM), MCP SDK (`@modelcontextprotocol/server`), own Autotask REST client (`src/services/autotask-http.ts`)
+- **Transport**: stdio (local/Claude Desktop) and Streamable HTTP
+- **Credentials**: one Autotask API user per instance, from environment variables only
 - **Tool pattern**: Decision-tree — a navigation tool exposes domains first, then dynamically loads domain-specific tools to avoid overwhelming Claude with 20+ tools at once
-- **Packaging**: MCPB bundles (`.mcpb`) for one-click Claude Desktop install, Docker images for gateway deployment
+- **Packaging**: MCPB bundles (`.mcpb`) for one-click Claude Desktop install, Docker images for server deployment
 - **CI/CD**: GitHub Actions — CI on push, semantic-release on main, Docker build + MCPB upload on release
 - **Testing**: Jest with `ts-jest`
 
@@ -21,9 +21,8 @@
 
 ### Security
 - Credentials must NEVER be logged, even at debug level — check `logger.debug()` calls for leaked API keys, tokens, or secrets
-- Gateway header parsing (`parseCredentialsFromHeaders`) must validate all required fields before use
 - Input validation: tool parameters from Claude must be validated via Zod schemas before hitting vendor APIs
-- No hardcoded credentials, API keys, or URLs — everything must come from env vars or gateway headers
+- No hardcoded credentials, API keys, or URLs — everything must come from env vars
 - HTTP requests to vendor APIs must use HTTPS only
 
 ### Correctness

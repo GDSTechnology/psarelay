@@ -156,7 +156,6 @@ describe('AutotaskHttpClient read cache', () => {
 
 describe('autotask_get_api_usage', () => {
   test('reports Autotask\'s live counter and this server\'s view', async () => {
-    jest.mock('autotask-node', () => ({ AutotaskClient: { create: jest.fn() } }));
     const { AutotaskService } = require('../src/services/autotask.service');
     const { AutotaskToolHandler } = require('../src/handlers/tool.handler');
     (global.fetch as jest.Mock).mockResolvedValue(ok({ externalRequestThreshold: 10000, currentTimeframeRequestCount: 2115, requestThresholdTimeframe: 60 }));

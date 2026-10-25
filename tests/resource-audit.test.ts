@@ -3,10 +3,6 @@
 // collector against a fake Autotask (filters sent upstream, budget, cache),
 // and the signed webhook ingest.
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { createHmac } from 'crypto';
 import { historyEvent, noteEvent, timeEntryEvent, webhookEvents, rowDiffEvents, isAfterHours, localClock } from '../src/utils/audit-events';
 import { buildDailyAudit } from '../src/utils/daily-audit';

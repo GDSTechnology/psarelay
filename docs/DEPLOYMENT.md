@@ -34,7 +34,6 @@ Set `AUTOTASK_IMPERSONATION_MODE` on each container:
 |-----------|-----------|
 | `off` (default) | Never impersonate. Writes are attributed to the integration (API) user. Use for n8n / cron / any unattended automation. |
 | `caller`  | Resolve the calling user (from `requestingUserEmail` / bound identity) and tunnel writes as them via `ImpersonationResourceId`. Degrades to the integration user when the caller can't be identified — never blocks. Use for the ChatGPT / Teams instance. |
-| `gateway` | Impersonate **only** from the trusted, S2S-verified gateway header (`x-acting-resource-id` / `x-acting-user-email`). The client payload never selects the acting user. Use behind the conduit gateway. |
 
 Legacy `AUTOTASK_IMPERSONATION=on` (no mode set) maps to `caller`; unset maps to
 `off`. Native impersonation also requires the API user's Autotask security level
@@ -52,12 +51,10 @@ Do not assume a flag accepts `on` / `1` / `yes` — the accepted truthy value
 
 | Env var | Turn ON with (exact) | Default (unset) | Effect |
 |---------|----------------------|-----------------|--------|
-| `AUTOTASK_IMPERSONATION_MODE` | `caller` or `gateway` | `off` | Impersonation posture (see table above). `off` disables it. |
+| `AUTOTASK_IMPERSONATION_MODE` | `caller` | `off` | Impersonation posture (see table above). `off` disables it. |
 | `AUTOTASK_IMPERSONATION` (legacy) | `on`, `true`, `1`, or `yes` | off | Back-compat only; maps to `caller`. Prefer `_MODE`. Ignored when `_MODE` is set. |
 | `AUTOTASK_IMPERSONATION_SOURCES` | comma list, e.g. `chatgpt,hermes-teams` | empty = **all** sources may impersonate | `caller` mode only: allowlist of declared sources permitted to impersonate. Valid sources: `chatgpt`, `hermes-teams`, `telegram`, `n8n`, `cron`. |
 | `MCP_INSTANCE_LABEL` | any non-empty string, e.g. `gpt-teams` | empty = field omitted from audit | Stamps `instanceLabel` on every audit record. Observability only. |
-| `AUTH_MODE` | `gateway` | `env` | `gateway` reads per-request credentials + acting identity from headers (behind S2S). `env` uses the container's Autotask creds. |
-| `CONDUIT_S2S_SECRET` | any non-empty secret | empty = S2S check **disabled** (dark-by-default) | Required to enforce the gateway S2S gate on `/mcp`. |
 | `MCP_TRANSPORT` | `http` | `stdio` | Serve over HTTP vs stdio. |
 | `LAZY_LOADING` | `true` or `1` **only** (not `on`/`yes`) | off | Expose only the 3 discovery meta-tools initially. |
 | `MCP_PERMISSIONS_ENABLED` | `true` **only** | off | Enforce role→risk permission intersection on mutating tools. Needs `AUTOTASK_ROLE_MAP`. |

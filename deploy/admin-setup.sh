@@ -266,7 +266,9 @@ access_steps() {
 
 case "$TUNNEL" in
   new)
-    TDIR="$DIR/autotask-mcp-admin-tunnel"
+    TDIR="$DIR/psarelay-admin-tunnel"
+    # Installs from before the rename keep their tunnel directory (and so its compose project).
+    [ -d "$DIR/autotask-mcp-admin-tunnel" ] && TDIR="$DIR/autotask-mcp-admin-tunnel"
     sub "Before you start, you need"
     info " - a Cloudflare account (the free plan is fine): https://dash.cloudflare.com/sign-up"
     info " - a domain whose DNS is ON Cloudflare (nameservers point to Cloudflare)."
@@ -278,7 +280,7 @@ case "$TUNNEL" in
     sub "Create the tunnel"
     info "${B}Zero Trust > Networks > Tunnels > Create a tunnel${N}  (newer: Networking > Tunnels)"
     info "    Connector   : ${B}Cloudflared${N}"
-    info "    Tunnel name : ${B}autotask-mcp-admin${N}"
+    info "    Tunnel name : ${B}psarelay-admin${N}"
     info "Save. The next page shows install commands; choose the ${B}Docker${N} tab. It looks like"
     info "    docker run cloudflare/cloudflared:latest tunnel --no-autoupdate run --token ${B}eyJh...${N}"
     info "Copy only the long part after ${B}--token${N}. ${Y}Do not run that command yourself${N}:"
@@ -302,7 +304,7 @@ case "$TUNNEL" in
 # Its own compose project, so MCP deploys and updates never touch it.
 # Joins the MCP's Docker network so it can reach $SERVICE:$PORT by name.
 # The token is in .env next to this file (chmod 600); never commit it.
-name: autotask-mcp-admin-tunnel
+name: $(basename "$TDIR")
 services:
   cloudflared:
     image: cloudflare/cloudflared:latest

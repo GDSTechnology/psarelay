@@ -1,13 +1,13 @@
 
 
 services:
-  autotask-mcp:
+  psarelay:
     build:
       context: .
       dockerfile: Dockerfile
       target: production
-    image: autotask-mcp:latest
-    container_name: autotask-mcp-server
+    image: psarelay:latest
+    container_name: psarelay-server
     restart: unless-stopped
     env_file:
       - .env
@@ -19,7 +19,7 @@ services:
       
       # Optional configuration
       - AUTOTASK_API_URL=${AUTOTASK_API_URL:-}
-      - MCP_SERVER_NAME=${MCP_SERVER_NAME:-autotask-mcp}
+      - MCP_SERVER_NAME=${MCP_SERVER_NAME:-psarelay}
       - MCP_SERVER_VERSION=${MCP_SERVER_VERSION:-1.0.0}
       
       # Logging configuration
@@ -28,7 +28,7 @@ services:
       - NODE_ENV=production
     volumes:
       # Mount logs directory for persistence
-      - autotask-mcp-logs:/app/logs
+      - psarelay-logs:/app/logs
     # Note: MCP servers typically use stdio transport, not HTTP
     # If you need HTTP interface in the future, uncomment the ports section
     # ports:
@@ -53,14 +53,14 @@ services:
           memory: 128M
 
   # Development service - runs once for testing, doesn't restart
-  autotask-mcp-dev:
+  psarelay-dev:
     profiles: ["dev"]
     build:
       context: .
       dockerfile: Dockerfile
       target: builder
-    image: autotask-mcp:dev
-    container_name: autotask-mcp-dev
+    image: psarelay:dev
+    container_name: psarelay-dev
     working_dir: /app
     restart: "no"  # Don't restart in dev mode
     command: npm run dev
@@ -81,14 +81,14 @@ services:
       # Mount source code for hot reload in development
       - .:/app
       - /app/node_modules
-      - autotask-mcp-dev-logs:/app/logs
+      - psarelay-dev-logs:/app/logs
     stdin_open: true
     tty: true
 
 volumes:
-  autotask-mcp-logs:
+  psarelay-logs:
     driver: local
-  autotask-mcp-dev-logs:
+  psarelay-dev-logs:
     driver: local
 
 # Example .env file structure (create this file with your actual credentials):

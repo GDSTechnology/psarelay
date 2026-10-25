@@ -1,10 +1,6 @@
 // Full-access product/inventory CRUD: read dispatch + confirmation gating on the
 // count-mutating writes (transfer/add = inventory-movement, remove = destructive).
 
-jest.mock('autotask-node', () => ({
-  AutotaskClient: { create: jest.fn().mockRejectedValue(new Error('Mock: no API')) },
-}));
-
 import { AutotaskService } from '../src/services/autotask.service';
 import { AutotaskToolHandler } from '../src/handlers/tool.handler';
 import { Logger } from '../src/utils/logger';

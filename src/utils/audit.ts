@@ -47,7 +47,7 @@ export function emitAudit(logger: Logger, ctx: CallerContext, entry: AuditEntry)
     correlationId: ctx.correlationId,
     // Which of the operator's containers served this (env, operator truth).
     ...(instanceLabel ? { instanceLabel } : {}),
-    // This instance's impersonation posture (off / caller / gateway).
+    // This instance's impersonation posture (off / caller).
     impersonationMode: getImpersonationMode(),
     // Where the request actually came from (transport, server-derived).
     ...(origin?.remoteAddr ? { originRemoteAddr: origin.remoteAddr } : {}),
@@ -55,10 +55,6 @@ export function emitAudit(logger: Logger, ctx: CallerContext, entry: AuditEntry)
     ...(origin?.userAgent ? { originUserAgent: origin.userAgent } : {}),
     ...(ctx.requestingUserEmail ? { requestingUserEmail: ctx.requestingUserEmail } : {}),
     ...(ctx.autotaskResourceId !== undefined ? { autotaskResourceId: ctx.autotaskResourceId } : {}),
-    // Impersonation trail (#42): record when a trusted gateway header set the
-    // acting identity, so every impersonated write is attributable.
-    ...(ctx.trustedActingResourceId !== undefined ? { impersonatedResourceId: ctx.trustedActingResourceId } : {}),
-    ...(ctx.trustedActingUserEmail ? { impersonatedUserEmail: ctx.trustedActingUserEmail } : {}),
     ...(ctx.idempotencyKey ? { idempotencyKey: ctx.idempotencyKey } : {}),
     ...(ctx.intent ? { intent: ctx.intent } : {}),
     ...(ctx.conversationId ? { conversationId: ctx.conversationId } : {}),

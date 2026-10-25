@@ -75,7 +75,7 @@ export interface NotifyChannel {
   url: string;
   events: NotifyEventType[];
   enabled: boolean;
-  /** generic only: HMAC-SHA256 key for the X-Atmcp-Signature header. */
+  /** generic only: HMAC-SHA256 key for the X-PSArelay-Signature header (also sent as the deprecated X-Atmcp-Signature until the next major release). */
   secret?: string;
 }
 
@@ -187,9 +187,13 @@ export class Notifier {
   /** Send one event to one channel now (console "Send test"); resolves with the outcome. */
   async send(c: NotifyChannel, e: NotifyEvent): Promise<{ ok: boolean; status?: number; error?: string }> {
     const st = this.channelStatus(c.id);
-    const body = JSON.stringify(formatPayload(c.kind, { ...e, at: e.at ?? new Date().toISOString() }, this.opts.server ?? 'autotask-mcp'));
+    const body = JSON.stringify(formatPayload(c.kind, { ...e, at: e.at ?? new Date().toISOString() }, this.opts.server ?? 'PSArelay'));
     const headers: Record<string, string> = { 'Content-Type': 'application/json', 'User-Agent': 'psarelay-notifier' };
-    if (c.kind === 'generic' && c.secret) headers['X-Atmcp-Signature'] = `sha256=${createHmac('sha256', c.secret).update(body).digest('hex')}`;
+    if (c.kind === 'generic' && c.secret) {
+      const sig = `sha256=${createHmac('sha256', c.secret).update(body).digest('hex')}`;
+      headers['X-PSArelay-Signature'] = sig;
+      headers['X-Atmcp-Signature'] = sig; // deprecated name, kept so existing receivers keep verifying
+    }
     const doFetch: Fetch = this.opts.fetch ?? (globalThis.fetch as unknown as Fetch);
     const attempt = async () => {
       const ctl = new AbortController();

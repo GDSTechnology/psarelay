@@ -96,7 +96,6 @@ import {
   ACTING_ROLE_FIELDS,
   CURRENT_USER_DEFAULT_TOOLS,
 } from '../utils/caller-resolution.js';
-import { TrustedActing } from '../utils/impersonation.js';
 import {
   runWithRequestContext,
   getImpersonationMode,
@@ -255,14 +254,11 @@ export class AutotaskToolHandler {
 
   private async getMappingService(): Promise<MappingService> {
     if (!this.mappingService) {
-      // Per-toolHandler MappingService instance. In gateway mode this
-      // toolHandler is created per-request (see McpServer.buildPerRequestHandlers),
-      // so each tenant gets a MappingService bound to its own AutotaskService —
-      // company/resource caches cannot leak across tenants. The tenantKey
-      // lets same-tenant instances share warmed cache DATA across requests
-      // (keyed by credential, so isolation still holds) — without it, every
-      // request re-walked the tenant's full company list, stalling responses
-      // past the gateway timeout on large tenants.
+      // Per-toolHandler MappingService instance, bound to this handler's
+      // AutotaskService. The tenantKey lets instances share warmed cache DATA
+      // (keyed by credential, so tenants never mix) — without it, a cold
+      // handler re-walked the tenant's full company list, stalling responses
+      // on large tenants.
       this.mappingService = await MappingService.create(this.autotaskService, this.logger, {
         lazyLoading: this.lazyLoading,
         tenantKey: this.autotaskService.getTenantKey() ?? undefined,
@@ -324,16 +320,6 @@ export class AutotaskToolHandler {
    */
   setServer(server: Server): void {
     this.mcpServer = server;
-  }
-
-  /**
-   * Trusted acting identity from a gateway header (#42). Set ONLY on a
-   * per-request, gateway-mode handler after the S2S gate — never on the shared
-   * env-mode handler — so it can't leak across requests.
-   */
-  private trustedActing: TrustedActing | undefined;
-  setTrustedActingContext(acting: TrustedActing | undefined): void {
-    this.trustedActing = acting;
   }
 
   /**
@@ -2089,7 +2075,7 @@ export class AutotaskToolHandler {
       }],
       ['autotask_get_my_day', async (a) => {
         if (a.resourceID == null) {
-          return { result: null, message: 'Could not determine the acting user. Provide resourceID, or call as an identified user (currentUser / gateway impersonation).' };
+          return { result: null, message: 'Could not determine the acting user. Provide resourceID, or call as an identified user (currentUser).' };
         }
         const r = await s.getMyDay(a.resourceID, a.date, a.timeZone);
         const gaps = r.totals.missingTime ? ` — ${r.totals.missingTime} service-call ticket(s) with NO time logged: ${(r.missingTime as TimeGap[]).map((g) => g.ticketID).join(', ')}` : '';
@@ -2097,7 +2083,7 @@ export class AutotaskToolHandler {
       }],
       ['autotask_start_work_on_ticket', async (a) => {
         if (a.resourceID == null) {
-          return { result: null, message: 'Could not determine who is starting work. Provide resourceID, or call as an identified user (currentUser / gateway impersonation).' };
+          return { result: null, message: 'Could not determine who is starting work. Provide resourceID, or call as an identified user (currentUser).' };
         }
         const r = await s.startWorkOnTicket({ ticketID: a.ticketID, resourceID: a.resourceID, roleID: a.roleID, status: a.status, takeOver: a.takeOver === true, dryRun: a.dryRun === true });
         const t = r.ticketNumber ?? `ticket ${a.ticketID}`;
@@ -2113,7 +2099,7 @@ export class AutotaskToolHandler {
       }],
       ['autotask_add_ticket_update', async (a) => {
         if (a.resourceID == null) {
-          return { result: null, message: 'Could not determine who is posting the update. Provide resourceID, or call as an identified user (currentUser / gateway impersonation).' };
+          return { result: null, message: 'Could not determine who is posting the update. Provide resourceID, or call as an identified user (currentUser).' };
         }
         const text = String(a.update ?? '').trim();
         if (!text) return { result: null, message: 'update (the note text) is required — nothing written.' };
@@ -2185,7 +2171,7 @@ export class AutotaskToolHandler {
       }],
       ['autotask_log_my_time', async (a) => {
         if (a.resourceID == null) {
-          return { result: null, message: 'Could not determine who to log time as. Provide resourceID, or call as an identified user (currentUser / gateway impersonation).' };
+          return { result: null, message: 'Could not determine who to log time as. Provide resourceID, or call as an identified user (currentUser).' };
         }
         // Regular Time (no ticket/task): resolve a category to its internal billing code (mirrors create_time_entry).
         const isRegular = !a.ticketID && !a.taskID;
@@ -3674,21 +3660,6 @@ export class AutotaskToolHandler {
       cacheAll(res);
       return { status: 'resolved', via: 'explicit-name', resource: res };
     }
-    // 3.5 Trusted gateway impersonation (#42): a verified gateway header (behind
-    // S2S) said "act as this user". Trusted — outranks the payload email and the
-    // static map, but not an explicit in-call resource (1-3). A resource id is
-    // authoritative; an email is matched live against Autotask Resources.
-    if (ctx.trustedActingResourceId != null) {
-      const res: ResolvedResource = { id: ctx.trustedActingResourceId, name: `Resource ${ctx.trustedActingResourceId}` };
-      cacheAll(res);
-      return { status: 'resolved', via: 'gateway-impersonation', resource: res };
-    }
-    if (ctx.trustedActingUserEmail) {
-      const r = classifyEmailMatch(ctx.trustedActingUserEmail, toCandidates(await this.autotaskService.searchResourcesByEmail(ctx.trustedActingUserEmail)));
-      if (r.status === 'resolved') { cacheAll(r.resource); return { ...r, via: 'gateway-impersonation' }; }
-      return r;
-    }
-
     // 4. Static override map (Telegram handles / non-email identities).
     for (const k of keys) {
       const id = this.userMap.get(k);
@@ -3809,7 +3780,7 @@ export class AutotaskToolHandler {
     // Admin console "Calls" log (in memory; caller + outcome, never arguments).
     noteToolAudit({
       outcome: entry.outcome, durationMs: entry.durationMs, source: ctx.source,
-      user: ctx.trustedActingUserEmail ?? ctx.requestingUserEmail,
+      user: ctx.requestingUserEmail,
       ip: ctx.origin?.forwardedFor ?? ctx.origin?.remoteAddr, userAgent: ctx.origin?.userAgent, error: entry.error,
     });
   }
@@ -3822,13 +3793,6 @@ export class AutotaskToolHandler {
     // Caller context (who/where/correlation) for audit + future permissions
     // (§3.5/§23). Strip the reserved `_context` key so it never reaches tool logic.
     const ctx = extractCallerContext(meta, args);
-    // Overlay the trusted gateway acting identity (#42) — this comes from a
-    // verified gateway header (behind S2S), NOT from the client payload, so it
-    // outranks `requestingUserEmail` when resolving the caller (see resolveCaller).
-    if (this.trustedActing) {
-      if (this.trustedActing.resourceId != null) ctx.trustedActingResourceId = this.trustedActing.resourceId;
-      if (this.trustedActing.email) ctx.trustedActingUserEmail = this.trustedActing.email;
-    }
     // Attach the transport-derived origin captured at the HTTP entry (server-
     // side, via AsyncLocalStorage) so the audit trail records where the request
     // actually came from — not just the client-declared `source`.
@@ -3958,7 +3922,7 @@ export class AutotaskToolHandler {
       opInput = {
         operationId: opScope.operationId, correlationId: ctx.correlationId, decisionId: ctx.decisionId, idempotencyKey: ctx.idempotencyKey,
         tool: name, argsDigest: argsDigest(args), source: ctx.source, refs: ctx.refs,
-        caller: { user: ctx.trustedActingUserEmail ?? ctx.requestingUserEmail ?? null, resourceId: ctx.trustedActingResourceId ?? ctx.autotaskResourceId ?? null, conversationId: ctx.conversationId ?? null, userAgent: ctx.origin?.userAgent ?? null },
+        caller: { user: ctx.requestingUserEmail ?? null, resourceId: ctx.autotaskResourceId ?? null, conversationId: ctx.conversationId ?? null, userAgent: ctx.origin?.userAgent ?? null },
       };
       if (this.operations && ctx.idempotencyKey && mayWrite(name, args)) {
         const claim = await this.claimOperation({ ...opInput, idempotencyKey: ctx.idempotencyKey });
@@ -3982,8 +3946,6 @@ export class AutotaskToolHandler {
       // deployment's posture is set per-instance by AUTOTASK_IMPERSONATION_MODE:
       //
       //   off      no impersonation (integration user; e.g. n8n/cron instance)
-      //   gateway  ONLY the trusted, S2S-verified gateway header may impersonate;
-      //            the client payload never picks the acting user
       //   caller   resolve the CALLER (distinct from a ticket's assignee)
       //            best-effort and impersonate them, degrading to the integration
       //            user when unidentified (never prompts here)
@@ -3994,9 +3956,7 @@ export class AutotaskToolHandler {
       let impersonationResourceId: number | undefined;
       const impersonationMode = getImpersonationMode();
       if (impersonationMode !== 'off' && isMutatingTool(name)) {
-        if (ctx.trustedActingResourceId != null) {
-          impersonationResourceId = ctx.trustedActingResourceId;
-        } else if (impersonationMode === 'caller' && isImpersonationAllowedForSource(ctx.source)) {
+        if (impersonationMode === 'caller' && isImpersonationAllowedForSource(ctx.source)) {
           const callerRes = await this.resolveCaller(ctx);
           if (callerRes.status === 'resolved') impersonationResourceId = callerRes.resource.id;
         }

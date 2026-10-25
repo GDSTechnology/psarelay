@@ -88,7 +88,7 @@ async function legacyLeg() {
   check(
     'InitializeResult has protocolVersion + serverInfo + capabilities',
     typeof result?.protocolVersion === 'string' &&
-      result?.serverInfo?.name === 'autotask-mcp' &&
+      result?.serverInfo?.name === 'psarelay' &&
       typeof result?.capabilities === 'object',
     `protocolVersion=${result?.protocolVersion} serverInfo=${result?.serverInfo?.name}`
   );

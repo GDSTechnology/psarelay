@@ -161,15 +161,13 @@ migrations, restarts, waits for `/health` and prints the version — and refuses
 
 - **Postgres layer** (mirror, plans, bulk jobs, audit): [POSTGRES](docs/POSTGRES.md)
 - **Admin console** (guided setup wizard, Cloudflare Tunnel walkthrough): [ADMIN](docs/ADMIN.md)
-- **Behind an MCP gateway** (credentials per request via headers, acting-user headers): [MIGRATION_GUIDE](docs/MIGRATION_GUIDE.md)
 
 ## Configuration
 
 | Variable | Default | |
 |---|---|---|
-| `AUTOTASK_USERNAME` / `AUTOTASK_SECRET` / `AUTOTASK_INTEGRATION_CODE` | — | API user credentials (required in `env` auth mode) |
+| `AUTOTASK_USERNAME` / `AUTOTASK_SECRET` / `AUTOTASK_INTEGRATION_CODE` | — | API user credentials (required) |
 | `AUTOTASK_API_URL` | auto-detected | Override the zone URL |
-| `AUTH_MODE` | `env` | `gateway`: credentials come from request headers |
 | `AUTOTASK_IMPERSONATION` | `off` | `on`: writes are recorded as the identified requesting user |
 | `MCP_TRANSPORT` / `MCP_HTTP_PORT` / `MCP_HTTP_HOST` | `stdio` / `8080` / `0.0.0.0` | Transport |
 | `MCP_PG_ENABLED`, `MCP_PG_*` | off | Postgres layer → [POSTGRES](docs/POSTGRES.md) |
@@ -215,7 +213,6 @@ Extensions & Integrations) breaks calls down per API user. → [THROTTLING](docs
 | [docs/DESIGN.md](docs/DESIGN.md) | Architecture and design decisions |
 | [docs/ITIL-ALIGNMENT.md](docs/ITIL-ALIGNMENT.md) | Aligning an Autotask tenant with ITIL 4, with the MCP as the enforcement layer |
 | [docs/DEVELOPER_GUIDE_MCP_AUTOTASK.md](docs/DEVELOPER_GUIDE_MCP_AUTOTASK.md) | Patterns and gotchas of the Autotask REST API |
-| [docs/MIGRATION_GUIDE.md](docs/MIGRATION_GUIDE.md) | Local → gateway (hosted) deployment |
 | [docs/mapping.md](docs/mapping.md) | ID-to-name enrichment of results |
 | [CHANGELOG.md](CHANGELOG.md) | Every release (generated) |
 
@@ -244,8 +241,7 @@ Contributions: see [CONTRIBUTING.md](CONTRIBUTING.md) and the [Contributor Licen
 Built on the original **Autotask MCP Server** by **[WYRE Technology](https://github.com/wyre-technology)** and
 **Aaron Sachs ([@asachs01](https://github.com/asachs01))** and its contributors, published at
 [WYRE-AI/autotask-mcp](https://github.com/WYRE-AI/autotask-mcp) — the baseline this work is founded on; see
-[NOTICE](NOTICE). Uses the [Model Context Protocol](https://modelcontextprotocol.io/) and the public
-[GDSTechnology/autotask-node](https://github.com/GDSTechnology/autotask-node) fork (no private registry or token needed to build).
+[NOTICE](NOTICE). Uses the [Model Context Protocol](https://modelcontextprotocol.io/).
 
 | | | |
 |---|---|---|
