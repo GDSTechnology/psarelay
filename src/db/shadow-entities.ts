@@ -3,7 +3,8 @@
 // backfill can walk `id > cursor`), and these are the queryable change fields.
 
 export type ShadowEntityName = 'Tickets' | 'TimeEntries' | 'Tasks' | 'Projects' | 'ServiceCalls' | 'CompanyToDos' | 'Companies' | 'Contacts' | 'Contracts' | 'ContractServices' | 'ContractBlocks' | 'Resources'
-  | 'Invoices' | 'BillingItems' | 'TicketCharges' | 'ProjectCharges' | 'ContractCharges' | 'TicketNotes';
+  | 'Invoices' | 'BillingItems' | 'TicketCharges' | 'ProjectCharges' | 'ContractCharges' | 'TicketNotes'
+  | 'ExpenseItems' | 'Opportunities' | 'ConfigurationItems';
 
 import type { ShadowFilter } from './shadow-sql.js';
 
@@ -118,6 +119,18 @@ export const SHADOW_ENTITIES: ShadowEntity[] = [
     window: (c) => ({ op: 'gte', field: 'datePurchased', value: c }),
     windowCovers: (fs, c) => lowerBoundAtLeast(fs, ['datePurchased'], c),
   })),
+  // Expense lines (2026-10-25: billing checks read them live): windowed by the expense date, like the charges.
+  {
+    name: 'ExpenseItems', watermarkField: null, createField: null, requiredFields: ['expenseDate'],
+    watermarkCandidates: ['lastModifiedDateTime', 'lastModifiedDate'], refreshEveryMinutes: 60,
+    window: (c) => ({ op: 'gte', field: 'expenseDate', value: c }),
+    windowCovers: (fs, c) => lowerBoundAtLeast(fs, ['expenseDate'], c),
+  },
+  // Sales pipeline: mirrored whole; incremental when the tenant has a modified stamp, else refreshed hourly.
+  { name: 'Opportunities', watermarkField: null, createField: 'createDate', watermarkCandidates: ['lastModifiedDateTime', 'lastModifiedDate', 'lastActivity'], fullEveryMinutes: 60 },
+  // Assets (UPS / firewall alerts look them up by serial number): mirrored whole; incremental when possible,
+  // otherwise a full refresh every 6 hours (CIs are many and change rarely).
+  { name: 'ConfigurationItems', watermarkField: null, createField: 'createDate', watermarkCandidates: ['lastModifiedTime', 'lastModifiedDateTime', 'lastActivityDate'], fullEveryMinutes: 360 },
 ];
 
 export const shadowEntity = (name: string): ShadowEntity | undefined =>

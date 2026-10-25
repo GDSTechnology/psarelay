@@ -103,7 +103,8 @@ import {
   getRequestAuth,
   isImpersonationAllowedForSource,
 } from '../utils/request-context.js';
-import { settingValue } from '../admin/settings.js';
+import { settingValue, tenantCompanyDefaults } from '../admin/settings.js';
+import { withCompanyDefaults } from '../utils/company-defaults.js';
 import { TOOL_DEFINITIONS, TOOL_CATEGORIES } from './tool.definitions.js';
 import { toolBlockReason, toolListed, toolLockedReason } from '../admin/tool-gate.js';
 import { runToolCall, noteToolAudit, noteRawRequest } from '../services/call-log.js';
@@ -1506,7 +1507,9 @@ export class AutotaskToolHandler {
         return { result: r, message: identityMessage(`possible duplicate(s) of contact ${id}`, r) };
       }],
       ['autotask_create_company', async (a) => {
-        const id = await s.createCompany(a); return { result: id, message: `Successfully created company with ID: ${id}` };
+        const { applied } = withCompanyDefaults(a, tenantCompanyDefaults());
+        const id = await s.createCompany(a);
+        return { result: id, message: `Successfully created company with ID: ${id}${applied.length ? ` (tenant defaults applied: ${applied.join(', ')})` : ''}` };
       }],
       ['autotask_update_company', async (a) => {
         await s.updateCompany(a.id, a); return { result: undefined, message: `Successfully updated company ID: ${a.id}` };

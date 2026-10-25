@@ -373,6 +373,11 @@ export const TOOL_DEFINITIONS: McpTool[] = [
         countryID: { type: 'number', description: 'Country ID (Autotask Countries entity)' },
         webAddress: { type: 'string', description: 'Website, e.g. https://example.com' },
         billToAddressToUse: { type: 'number', description: '1 = use the company address for billing' },
+        invoiceTemplateID: { type: 'number', description: 'Invoice template. Omit to use the tenant default (console → Settings → Defaults); without one Autotask applies its own.' },
+        quoteTemplateID: { type: 'number', description: 'Quote template (tenant default when omitted)' },
+        taxRegionID: { type: 'number', description: 'Tax region (tenant default when omitted)' },
+        invoiceEmailMessageID: { type: 'number', description: 'Email message used to send invoices (tenant default when omitted)' },
+        quoteEmailMessageID: { type: 'number', description: 'Email message used to send quotes (tenant default when omitted)' },
         userDefinedFields: {
           type: 'array',
           description: 'Company UDFs as [{ name, value }] (e.g. [{ "name": "DBA / AKA", "value": "..." }])',
@@ -1239,7 +1244,7 @@ export const TOOL_DEFINITIONS: McpTool[] = [
   },
   {
     name: 'autotask_search_ticket_charges',
-    description: 'Search ticket charges (materials, costs, expenses). Provide ticketId for best performance. Max 10 if unfiltered.',
+    description: 'Search ticket charges (materials, costs, expenses). Returns full rows (name, quantity, unit price/cost, billable amount, billed status, billing code, contract), so no per-charge reads are needed. Give ticketId, or ticketIds for many tickets in ONE call (e.g. a billing check over a month). Max 10 if unfiltered. Served from the Postgres mirror when it is on (0 Autotask calls).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1247,11 +1252,24 @@ export const TOOL_DEFINITIONS: McpTool[] = [
           type: 'number',
           description: 'Filter by ticket ID (recommended)'
         },
+        ticketIds: {
+          type: 'array',
+          items: { type: 'number' },
+          description: 'Charges of up to 500 tickets in one call'
+        },
+        isBilled: {
+          type: 'boolean',
+          description: 'true = already billed (on an invoice), false = not yet billed'
+        },
+        purchasedAfter: {
+          type: 'string',
+          description: 'Only charges purchased (dated) on or after this date (ISO, e.g. 2026-10-01). With the mirror on, a dated search costs 0 Autotask calls.'
+        },
         pageSize: {
           type: 'number',
-          description: 'Number of results to return (default: 25, max: 100)',
+          description: 'Number of results to return (default: 25, 500 with ticketIds; max: 500)',
           minimum: 1,
-          maximum: 100
+          maximum: 500
         }
       },
       required: []
@@ -1542,12 +1560,12 @@ export const TOOL_DEFINITIONS: McpTool[] = [
   },
   {
     name: 'autotask_shadow_query',
-    description: 'READ-ONLY, 0 Autotask API calls. Query the Postgres shadow with the SAME filter format as the Autotask API — [{op, field, value}], ops eq/noteq/gt/gte/lt/lte/beginsWith/endsWith/contains/exist/notExist/in/notIn, and {op:"and"|"or", items:[…]} groups. Use it for heavy reads (thousands of tickets / time entries / companies) instead of paging the live API. Returns rows, the total match count, and freshness (data age; "backfilling" means incomplete).',
+    description: 'READ-ONLY, 0 Autotask API calls. Query the Postgres shadow with the SAME filter format as the Autotask API — [{op, field, value}], ops eq/noteq/gt/gte/lt/lte/beginsWith/endsWith/contains/exist/notExist/in/notIn, and {op:"and"|"or", items:[…]} groups. Use it for heavy reads (thousands of tickets / time entries / companies) instead of paging the live API. Text ops (contains/beginsWith/endsWith) ignore case and whitespace differences (double spaces, line breaks). Time-entry text is in summaryNotes AND internalNotes — search both with {op:"or",items:[…]}. Transactional tables hold a history window (the message says from when); older rows are not in the shadow. Returns rows, the total match count, and freshness (data age; "backfilling" means incomplete).',
     annotations: { title: 'Query the shadow (SQL)', readOnlyHint: true },
     inputSchema: {
       type: 'object',
       properties: {
-        entity: { type: 'string', description: 'Tickets, TimeEntries, Tasks, Projects, Companies, Contacts, Contracts, ContractServices, ContractBlocks or Resources' },
+        entity: { type: 'string', description: 'Tickets, TimeEntries, Tasks, Projects, ServiceCalls, CompanyToDos, Companies, Contacts, Contracts, ContractServices, ContractBlocks, Resources, Invoices, BillingItems, TicketCharges, ProjectCharges, ContractCharges, TicketNotes, ExpenseItems, Opportunities or ConfigurationItems' },
         filters: { type: 'array', items: { type: 'object' }, description: 'Autotask-style filters, AND-ed. E.g. [{"op":"eq","field":"contractID","value":29685345},{"op":"gte","field":"dateWorked","value":"2026-04-01"}]. A UDF filter adds "udf": true with the UDF name as field: {"op":"eq","field":"Nexus-Status","value":"7","udf":true}.' },
         fields: { type: 'array', items: { type: 'string' }, description: 'Only these fields (id always included). Omit for whole records.' },
         orderBy: { type: 'string', description: 'Field to sort by (default newest id first); "month:dateWorked" style also works' },
@@ -4091,6 +4109,10 @@ export const TOOL_DEFINITIONS: McpTool[] = [
         searchTerm: {
           type: 'string',
           description: 'Search term matched against the CI reference title (name)'
+        },
+        serialNumber: {
+          type: 'string',
+          description: 'Exact serial number (case-insensitive) — matched against the serial number and the reference number (asset tag). Use it to find the asset behind a UPS / firewall / backup alert.'
         },
         companyID: {
           type: 'number',

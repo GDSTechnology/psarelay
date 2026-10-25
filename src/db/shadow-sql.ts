@@ -22,6 +22,14 @@ export class SqlBuilder {
 
 const text = (f: string) => `(data->>'${f}')`;
 
+/**
+ * Text for word matching: non-breaking spaces and runs of whitespace (double spaces, line breaks, tabs) become one
+ * space, so "replaced the" finds "replaced  the" and "replaced\nthe" — notes pasted from email or typed on a phone are
+ * full of those. Case is already ignored (ILIKE).
+ */
+const words = (expr: string) => `regexp_replace(translate(${expr}, E'\\u00a0', ' '), '\\s+', ' ', 'g')`;
+const wordsValue = (v: unknown) => String(v).replace(/\u00a0/g, ' ').replace(/\s+/g, ' ');
+
 /** UDF names are labels ("Nexus-Status", "Opp Tag #2"): letters, digits, space and a few marks. */
 const UDF_NAME = /^[A-Za-z0-9][A-Za-z0-9 _\-.#/()&]{0,99}$/;
 export function assertUdfName(n: unknown): string {
@@ -61,9 +69,9 @@ export function filterToSql(f: ShadowFilter, b: SqlBuilder): string {
       if (typeof v === 'number') return `(${t})::numeric ${sym} ${b.bind(v)}`;
       return `${t} ${sym} ${b.bind(String(v))}`;
     }
-    case 'beginswith': return `${t} ILIKE ${b.bind(likeEscape(String(v)) + '%')}`;
-    case 'endswith': return `${t} ILIKE ${b.bind('%' + likeEscape(String(v)))}`;
-    case 'contains': return `${t} ILIKE ${b.bind('%' + likeEscape(String(v)) + '%')}`;
+    case 'beginswith': return `${words(t)} ILIKE ${b.bind(likeEscape(wordsValue(v)) + '%')}`;
+    case 'endswith': return `${words(t)} ILIKE ${b.bind('%' + likeEscape(wordsValue(v)))}`;
+    case 'contains': return `${words(t)} ILIKE ${b.bind('%' + likeEscape(wordsValue(v)) + '%')}`;
     case 'exist': case 'isnotnull': return `${t} IS NOT NULL`;
     case 'notexist': case 'isnull': return `${t} IS NULL`;
     case 'in': case 'notin': {
@@ -82,9 +90,9 @@ function udfFilterToSql(op: string, f: ShadowFilter, b: SqlBuilder): string {
   switch (op) {
     case 'eq': return v === null ? `${t} IS NULL` : `lower(${t}) = lower(${b.bind(String(v))})`;
     case 'noteq': return v === null ? `${t} IS NOT NULL` : `(${t} IS NULL OR lower(${t}) <> lower(${b.bind(String(v))}))`;
-    case 'beginswith': return `${t} ILIKE ${b.bind(likeEscape(String(v)) + '%')}`;
-    case 'endswith': return `${t} ILIKE ${b.bind('%' + likeEscape(String(v)))}`;
-    case 'contains': return `${t} ILIKE ${b.bind('%' + likeEscape(String(v)) + '%')}`;
+    case 'beginswith': return `${words(t)} ILIKE ${b.bind(likeEscape(wordsValue(v)) + '%')}`;
+    case 'endswith': return `${words(t)} ILIKE ${b.bind('%' + likeEscape(wordsValue(v)))}`;
+    case 'contains': return `${words(t)} ILIKE ${b.bind('%' + likeEscape(wordsValue(v)) + '%')}`;
     case 'exist': case 'isnotnull': return `${t} IS NOT NULL`;
     case 'notexist': case 'isnull': return `${t} IS NULL`;
     case 'in': case 'notin': {

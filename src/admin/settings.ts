@@ -7,13 +7,14 @@
 // cache) can read settings cheaply. admin/apply.ts pushes values into the
 // shadow runtime.
 
+import { companyCreateDefaults, companyDefaultLineProblem } from '../utils/company-defaults.js';
 import { registryLineProblem, referenceLineProblem } from '../utils/actor-classify.js';
 
 export type SettingType = 'boolean' | 'integer' | 'string[]' | 'lines';
 
 export interface SettingDef {
   key: string;
-  group: 'Security' | 'Tools' | 'Postgres shadow' | 'Autotask API' | 'Diagnostics' | 'Actors';
+  group: 'Security' | 'Tools' | 'Defaults' | 'Postgres shadow' | 'Autotask API' | 'Diagnostics' | 'Actors';
   label: string;
   description: string;
   type: SettingType;
@@ -76,6 +77,12 @@ export const SETTINGS: SettingDef[] = [
     key: 'shadow.pauseAtPct', group: 'Postgres shadow', type: 'integer', min: 1, max: 100, requires: 'shadow', label: 'Pause sync at API usage %',
     description: "Skip a sync run while the tenant's hourly Autotask API usage is at or above this percentage. Keep it high (85): a run costs at most 100 calls, while a stale mirror sends every read to Autotask live.",
     envDefault: (env) => intEnv(env.MCP_PG_SHADOW_PAUSE_AT_PCT, 85),
+  },
+  {
+    key: 'companies.createDefaults', group: 'Defaults', type: 'lines', label: 'New company defaults',
+    description: 'Set on every company PSArelay creates (AI, imports, orders) unless the request gives its own value — otherwise Autotask applies its defaults. One per line, field=value with this tenant\'s Autotask ids: invoiceTemplateID, quoteTemplateID, taxRegionID, invoiceEmailMessageID, quoteEmailMessageID, currencyID, billToAddressToUse, isTaxExempt (true/false). Example: invoiceTemplateID=12.',
+    lineProblem: companyDefaultLineProblem,
+    envDefault: (env) => (env.MCP_COMPANY_DEFAULTS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
   },
   {
     key: 'callers.labels', group: 'Diagnostics', type: 'lines', label: 'Caller names',
@@ -177,3 +184,6 @@ export function clearOverride(key: string): void { overrides.delete(key); }
 
 /** Tests only. */
 export function _resetSettings(): void { overrides = new Map(); }
+
+/** The tenant's new-company defaults (Settings → Defaults), as company fields. */
+export const tenantCompanyDefaults = (): Record<string, number | boolean> => companyCreateDefaults(settingValue<string[]>('companies.createDefaults') ?? []);
