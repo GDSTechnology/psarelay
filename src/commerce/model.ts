@@ -193,3 +193,77 @@ export function buildOrderPlan(input: OrderInput, quote: Quote, catalog: Map<str
   }
   return { rows, startDate };
 }
+
+// ── subscription changes: upgrades, add-ons, seat changes, downgrades, cancellation ──────────────
+
+const d0 = (s: string) => new Date(`${s.slice(0, 10)}T00:00:00Z`);
+const iso10 = (d: Date) => d.toISOString().slice(0, 10);
+const addMonths = (s: string, n: number) => { const d = d0(s); const day = d.getUTCDate(); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + n); const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate(); d.setUTCDate(Math.min(day, last)); return iso10(d); };
+const days = (a: string, b: string) => Math.round((d0(b).getTime() - d0(a).getTime()) / 86_400_000);
+
+/** The monthly billing period (from the contract start) that contains a date. */
+export function periodOf(contractStart: string, date: string): { start: string; end: string } {
+  let n = Math.max(0, (d0(date).getUTCFullYear() - d0(contractStart).getUTCFullYear()) * 12 + d0(date).getUTCMonth() - d0(contractStart).getUTCMonth() - 1);
+  while (addMonths(contractStart, n + 1) <= date.slice(0, 10)) n++;
+  const start = addMonths(contractStart, n);
+  const next = addMonths(contractStart, n + 1);
+  const end = new Date(d0(next).getTime() - 86_400_000);
+  return { start, end: iso10(end) };
+}
+/** The start of the period after the one containing `date`. */
+export const nextPeriodStart = (contractStart: string, date: string) => { const p = periodOf(contractStart, date); return iso10(new Date(d0(p.end).getTime() + 86_400_000)); };
+
+export interface CurrentLine { contractServiceId: number; serviceId: number; units: number; unitPrice: number | null }
+export interface ChangeLine { offering: string; name: string; from: number; to: number; delta: number; unitPrice: number; effectiveDate: string; kind: 'add' | 'increase' | 'decrease' | 'remove'; prorated: number | null }
+
+/**
+ * Plan a subscription change on an existing recurring contract: each target { offering, quantity } sets that line
+ * to the new quantity (0 removes it). Increases and new lines take effect on `effectiveDate` (default today — Autotask
+ * prorates the rest of the period, and that prorated amount is what gets invoiced now); decreases and removals on
+ * `decreaseDate` (default the next period start — no mid-period credit). Lines not named stay as they are.
+ */
+export function buildChangePlan(o: {
+  contractId: number; contractStart: string; today: string; effectiveDate?: string; decreaseDate?: string;
+  current: CurrentLine[]; targets: OrderLineInput[]; catalog: Map<string, Offering>; servicePrice: (serviceId: number) => number | null;
+}): { rows: PlanRowInput[]; lines: ChangeLine[]; problems: string[]; modules: string[]; recurringAfter: number } {
+  const problems: string[] = []; const lines: ChangeLine[] = []; const rows: PlanRowInput[] = [];
+  const up = o.effectiveDate ?? o.today;
+  const down = o.effectiveDate ?? o.decreaseDate ?? nextPeriodStart(o.contractStart, o.today);
+  const byService = new Map(o.current.map((c) => [c.serviceId, c]));
+  const seen = new Set<string>();
+  for (const [i, t] of o.targets.entries()) {
+    const off = o.catalog.get(String(t?.offering ?? ''));
+    if (!off) { problems.push(`line ${i + 1}: no offering "${t?.offering}".`); continue; }
+    if (off.kind !== 'recurring' || !off.autotaskServiceId) { problems.push(`line ${i + 1}: "${off.code}" is not a recurring offering — sell one-time services with action=create.`); continue; }
+    if (seen.has(off.code)) { problems.push(`line ${i + 1}: "${off.code}" is listed twice.`); continue; }
+    seen.add(off.code);
+    const to = off.perUnit ? Number(t.quantity ?? 0) : Number(t.quantity ?? 1) > 0 ? 1 : 0;
+    if (!Number.isInteger(to) || to < 0 || to > 10_000) { problems.push(`line ${i + 1}: quantity must be a whole number from 0 (0 removes it).`); continue; }
+    const cur = byService.get(off.autotaskServiceId);
+    const from = cur?.units ?? 0;
+    if (to === from) continue;
+    if (to > from && !off.active) { problems.push(`line ${i + 1}: "${off.code}" is archived — it can be reduced or removed, not added.`); continue; }
+    const price = t.unitPrice != null ? Number(t.unitPrice) : cur?.unitPrice != null && cur.units > 0 ? cur.unitPrice : off.unitPrice ?? o.servicePrice(off.autotaskServiceId);
+    if (price == null || !(price >= 0)) { problems.push(`line ${i + 1}: no price for "${off.code}".`); continue; }
+    const delta = to - from; const eff = delta > 0 ? up : down;
+    const kind: ChangeLine['kind'] = from === 0 ? 'add' : to === 0 ? 'remove' : delta > 0 ? 'increase' : 'decrease';
+    let prorated: number | null = null;
+    if (delta > 0) { const p = periodOf(o.contractStart, eff); const total = days(p.start, p.end) + 1; const left = days(eff, p.end) + 1; prorated = r2(delta * price * left / total); }
+    lines.push({ offering: off.code, name: off.name, from, to, delta, unitPrice: r2(price), effectiveDate: eff, kind, prorated });
+    rows.push({ action: 'create', entity: 'ContractServiceAdjustments', targetId: null,
+      label: `${off.name}: ${from} → ${to} ${off.unitLabel}${to === 1 ? '' : 's'} from ${eff}${prorated != null ? ` (≈ ${prorated} prorated)` : ''}`,
+      before: null, after: { contractID: o.contractId, ...(cur ? { contractServiceID: cur.contractServiceId } : {}), serviceID: off.autotaskServiceId, unitChange: delta, adjustedUnitPrice: r2(price), effectiveDate: eff },
+      reason: `subscription ${kind}`, blocked: null, meta: { step: 'service', offering: off.code, change: kind } });
+  }
+  // What the subscription is after the change (lines matched to offerings by their Autotask Service).
+  const after = new Map<string, number>();
+  for (const c of o.current) { const off = [...o.catalog.values()].find((x) => x.autotaskServiceId === c.serviceId); if (off && c.units > 0) after.set(off.code, c.units); }
+  for (const l of lines) { if (l.to > 0) after.set(l.offering, l.to); else after.delete(l.offering); }
+  const modules = [...new Set([...after.keys()].flatMap((c) => o.catalog.get(c)?.modules ?? []))].sort();
+  const recurringAfter = r2([...after.entries()].reduce((t, [c, q]) => {
+    const l = lines.find((x) => x.offering === c); const cur = o.current.find((x) => x.serviceId === o.catalog.get(c)?.autotaskServiceId);
+    return t + q * (l?.unitPrice ?? cur?.unitPrice ?? 0);
+  }, 0));
+  if (!problems.length && !rows.length) problems.push('nothing changes — every line is already at that quantity.');
+  return { rows, lines, problems, modules, recurringAfter };
+}

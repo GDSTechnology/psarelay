@@ -9,7 +9,8 @@ import { PlanStore, type Plan } from '../change-plans/store.js';
 import { rowId } from '../change-plans/execute.js';
 import { notify } from '../services/notifier.js';
 import type { Logger } from '../utils/logger.js';
-import { buildOrderPlan, offeringProblems, orderProblems, quoteOrder, type Offering, type OrderInput } from './model.js';
+import { buildChangePlan, buildOrderPlan, offeringProblems, orderProblems, quoteOrder, type CurrentLine, type Offering, type OrderInput, type OrderLineInput } from './model.js';
+import { dayBefore, unitsOn, type QueryFn } from '../vendors/contract-io.js';
 import { OfferingStore, OrderStore, type Order, type OrderStatus, type Payment } from './store.js';
 
 type Result = { result: unknown; message: string };
@@ -29,6 +30,8 @@ export function offeringFromInput(x: Record<string, any>): Offering {
   };
 }
 
+const isChange = (o: Pick<Order, 'totals'>) => ['change', 'cancel'].includes(String((o.totals as { kind?: string } | null)?.kind ?? ''));
+
 /**
  * Where an order stands, from its plan and from Autotask billing (read-only): which company / contract /
  * tickets the plan created, whether its charges / contract have been invoiced, and whether that invoice is paid
@@ -47,6 +50,8 @@ export async function trackOrder(s: AutotaskService, plans: PlanStore, orders: O
     const bad = rows.some((r) => r.status === 'failed' || r.status === 'stale');
     const some = rows.some((r) => r.status === 'applied' || r.status === 'skipped');
     if (['planned', 'provisioning', 'failed'].includes(status)) status = bad ? 'failed' : done ? 'provisioned' : some ? 'provisioning' : 'planned';
+    // A change that only reduces or removes lines has nothing to invoice: it is complete once it is in.
+    if (status === 'provisioned' && isChange(o) && !o.lines.some((l) => Number((l as { delta?: number }).delta) > 0)) status = 'complete';
   }
   let payment: Payment = o.payment;
   if (['provisioned', 'invoiced'].includes(status) && payment.status !== 'paid') {
@@ -68,7 +73,9 @@ export async function trackOrder(s: AutotaskService, plans: PlanStore, orders: O
   if (changed) {
     await orders.update(o.id, { status, companyId, contractId, ticketIds, payment });
     const fields = { order: o.id, company: String(companyId ?? ''), contract: String(contractId ?? ''), tickets: ticketIds.join(', '), modules: String(((o.totals ?? {}) as { modules?: string[] }).modules?.join(', ') ?? '') };
-    if (status !== o.status && status === 'provisioned') emit({ type: 'commerce.order_ready', severity: 'info', title: 'Order set up in Autotask — ready to invoice', detail: `Order ${o.id}: company, users, contract and tickets are in place. Next: the invoice (from the delivery ticket / contract).`, fields, dedupeKey: `commerce.ready:${o.id}` });
+    // Subscription changes: tell the control plane at once (entitlements follow the contract).
+    if (status !== o.status && (status === 'provisioned' || status === 'complete') && isChange(o)) emit({ type: 'commerce.subscription_changed', severity: 'info', title: 'Subscription changed', detail: `Order ${o.id}: ${o.lines.map((l) => `${(l as { name?: string }).name} ${(l as { from?: number }).from}→${(l as { to?: number }).to}`).join(', ')} on contract ${contractId}.`, fields: { ...fields, change: String((o.totals as { kind?: string } | null)?.kind ?? '') }, dedupeKey: `commerce.changed:${o.id}` });
+    if (status !== o.status && status === 'provisioned' && !isChange(o)) emit({ type: 'commerce.order_ready', severity: 'info', title: 'Order set up in Autotask — ready to invoice', detail: `Order ${o.id}: company, users, contract and tickets are in place. Next: the invoice (from the delivery ticket / contract).`, fields, dedupeKey: `commerce.ready:${o.id}` });
     if (status !== o.status && status === 'invoiced') emit({ type: 'commerce.order_invoiced', severity: 'info', title: `Order invoiced: ${payment.invoiceNumbers?.join(', ')}`, detail: `Order ${o.id}: invoice ${payment.invoiceNumbers?.join(', ')} (${payment.amount}) — waiting for payment.`, fields: { ...fields, invoices: payment.invoiceNumbers?.join(', ') ?? '' }, dedupeKey: `commerce.invoiced:${o.id}` });
     if (status !== o.status && status === 'paid') emit({ type: 'commerce.order_paid', severity: 'info', title: `Order paid: ${payment.invoiceNumbers?.join(', ')}`, detail: `Order ${o.id} is paid (${payment.amount}). Build the account and start onboarding.`, fields: { ...fields, invoices: payment.invoiceNumbers?.join(', ') ?? '', amount: String(payment.amount ?? '') }, dedupeKey: `commerce.paid:${o.id}` });
     if (status !== o.status && status === 'failed') emit({ type: 'commerce.order_failed', severity: 'warning', title: 'Order set-up failed in Autotask', detail: `Order ${o.id}: a plan row failed or went stale — review plan ${o.planId}.`, fields, dedupeKey: `commerce.failed:${o.id}` });
@@ -177,6 +184,42 @@ export function commerceToolHandlers(s: AutotaskService, getPool: () => Pool | n
         return { result: { order: orderView(order, plan), quote: q },
           message: `Order ${order.id} placed: ${plan.rows.length} step(s) in plan ${plan.id} (hash ${plan.hash}) — one-time ${q.oneTime}, recurring ${q.recurring}.${blocked.length ? ` ${blocked.length} step(s) BLOCKED: ${blocked.map((r) => r.blocked).join('; ')}.` : ''} Next: approve it (autotask_change_plan_review action=approve, planId, hash) and run it (autotask_change_plan_execute). Then autotask_commerce_order action=status follows it to its invoice and payment.` };
       }
+      if (action === 'change' || action === 'cancel_subscription') {
+        // A change to an existing recurring contract: upgrade / add-on / seats / downgrade / cancel.
+        const contractId = Number(a.contractId);
+        if (!(contractId > 0)) return { result: { status: 'invalid_value', field: 'contractId' }, message: 'contractId: the customer’s recurring contract.' };
+        const http = await s.httpClient();
+        const contract = await http.get<Record<string, any>>('Contracts', contractId).catch(() => null);
+        if (!contract) return { result: { status: 'not_found' }, message: `No contract ${contractId}.` };
+        if (Number(contract.contractType) !== 7) return { result: { status: 'invalid' }, message: `Contract ${contractId} is not a recurring service contract (type ${contract.contractType}).` };
+        const q: QueryFn = (e, f, opts) => http.query(e, f as never, opts);
+        const t = today();
+        const lineRows = await q<Record<string, any>>('ContractServices', [{ op: 'eq', field: 'contractID', value: contractId }], { maxRecords: 200, includeFields: ['id', 'serviceID'], noCache: true });
+        const current: CurrentLine[] = [];
+        for (const l of lineRows) { const u = await unitsOn(q, 'service', Number(l.id), t); current.push({ contractServiceId: Number(l.id), serviceId: Number(l.serviceID), units: u?.units ?? 0, unitPrice: u?.unitPrice ?? null }); }
+        const catalog = await st.offerings.catalog();
+        const targets: OrderLineInput[] = action === 'cancel_subscription'
+          ? current.filter((c) => c.units > 0).map((c) => [...catalog.values()].find((x) => x.autotaskServiceId === c.serviceId && x.kind === 'recurring')).filter((x): x is Offering => !!x).map((x) => ({ offering: x.code, quantity: 0 }))
+          : (Array.isArray(a.lines) ? a.lines : []);
+        const plan = buildChangePlan({ contractId, contractStart: String(contract.startDate).slice(0, 10), today: t, ...(a.effectiveDate ? { effectiveDate: String(a.effectiveDate).slice(0, 10) } : {}), current, targets, catalog,
+          servicePrice: await servicePrices(catalog, targets.map((x) => x.offering)) });
+        if (plan.problems.length) return { result: { status: 'invalid', problems: plan.problems, current }, message: `Not placed: ${plan.problems.join(' ')}` };
+        const rows = [...plan.rows];
+        // Cancelling: optionally end the contract the day before the last line stops.
+        if (action === 'cancel_subscription' && a.endContract === true && plan.lines.length) {
+          const last = plan.lines.map((l) => l.effectiveDate).sort().slice(-1)[0]!;
+          rows.push({ action: 'update', entity: 'Contracts', targetId: contractId, label: `End contract ${contractId} on ${dayBefore(last)}`, before: { endDate: contract.endDate }, after: { endDate: dayBefore(last) }, reason: 'subscription cancelled', blocked: null, meta: { step: 'contract_end' } });
+        }
+        const kindTitle = action === 'cancel_subscription' ? 'Cancel subscription' : 'Change subscription';
+        const p = await st.plans.create({ kind: 'commerce_change', title: `${kindTitle}: contract ${contractId} — ${plan.lines.map((l) => `${l.name} ${l.from}→${l.to}`).join(', ')}`.slice(0, 200), params: { contractId, lines: plan.lines }, rows, by: who(ctx), supersedeKind: false });
+        const prorated = Math.round(plan.lines.reduce((x, l) => x + (l.prorated ?? 0), 0) * 100) / 100;
+        const order = await st.orders.create({ customer: { companyId: Number(contract.companyID) }, contacts: [], lines: plan.lines as unknown as Array<Record<string, unknown>>,
+          totals: { kind: action === 'cancel_subscription' ? 'cancel' : 'change', proratedNow: prorated, recurringAfter: plan.recurringAfter, modules: plan.modules },
+          startDate: plan.lines.map((l) => l.effectiveDate).sort()[0]!, planId: p.id, notes: a.notes ? String(a.notes) : null, by: who(ctx), companyId: Number(contract.companyID), contractId });
+        return { result: { order: orderView(order, p), lines: plan.lines, proratedNow: prorated, recurringAfter: plan.recurringAfter, modulesAfter: plan.modules, otherLines: current.filter((c) => ![...catalog.values()].some((x) => x.autotaskServiceId === c.serviceId)) },
+          message: `${kindTitle} placed as order ${order.id}: ${plan.lines.map((l) => `${l.name} ${l.from}→${l.to} from ${l.effectiveDate}`).join('; ')}.${prorated ? ` About ${prorated} prorated for this period (Autotask calculates the exact amount).` : ''} Recurring after: ${plan.recurringAfter}. Modules after: ${plan.modules.join(', ') || 'none'}. Approve plan ${p.id} (hash ${p.hash}) and run it like any other plan.` };
+      }
+
       const o = a.orderId ? await st.orders.get(String(a.orderId)) : null;
       if (!o) return { result: { status: 'not_found' }, message: `No order ${a.orderId ?? ''} (action=list shows them).` };
       if (action === 'status') {
@@ -197,7 +240,7 @@ export function commerceToolHandlers(s: AutotaskService, getPool: () => Pool | n
         if (o.planId) await st.plans.setStatus(o.planId, 'cancelled');
         return { result: { status: 'cancelled' }, message: `Order ${o.id} cancelled; its plan will not run.` };
       }
-      return { result: { status: 'invalid_value', field: 'action' }, message: 'action: create | status | list | track | invoice_queue | mark_paid | cancel.' };
+      return { result: { status: 'invalid_value', field: 'action' }, message: 'action: create | change | cancel_subscription | status | list | track | invoice_queue | mark_paid | cancel.' };
     }],
   ];
 }

@@ -146,3 +146,45 @@ describe('tracking an order to invoice and payment', () => {
     expect(quiet.events).toEqual([]); // nothing changed, nothing sent
   });
 });
+
+describe('subscription changes', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { buildChangePlan, periodOf, nextPeriodStart } = require('../src/commerce/model');
+  test('monthly periods from the contract start, month ends handled', () => {
+    expect(periodOf('2026-01-31', '2026-03-05')).toEqual({ start: '2026-02-28', end: '2026-03-30' });
+    expect(periodOf('2026-11-01', '2026-11-15')).toEqual({ start: '2026-11-01', end: '2026-11-30' });
+    expect(nextPeriodStart('2026-11-01', '2026-11-15')).toBe('2026-12-01');
+    expect(periodOf('2026-11-10', '2026-12-09')).toEqual({ start: '2026-11-10', end: '2026-12-09' });
+  });
+  const current = [{ contractServiceId: 61, serviceId: 501, units: 3, unitPrice: 22 }, { contractServiceId: 62, serviceId: 999, units: 1, unitPrice: 50 }];
+  const base = { contractId: 4, contractStart: '2026-11-01', today: '2026-11-16', current, catalog, servicePrice: prices };
+  test('seats up today (line keeps its price, prorated), add-on added at catalog price; unnamed lines untouched', () => {
+    const r = buildChangePlan({ ...base, targets: [{ offering: 'psarelay-pro', quantity: 5 }, { offering: 'addon-vendor' }] });
+    expect(r.problems).toEqual([]);
+    expect(r.lines).toEqual([
+      { offering: 'psarelay-pro', name: 'PSArelay Pro', from: 3, to: 5, delta: 2, unitPrice: 22, effectiveDate: '2026-11-16', kind: 'increase', prorated: 22 }, // 2 × 22 × 15/30
+      { offering: 'addon-vendor', name: 'Vendor billing add-on', from: 0, to: 1, delta: 1, unitPrice: 99, effectiveDate: '2026-11-16', kind: 'add', prorated: 49.5 },
+    ]);
+    expect(r.rows[0]!.after).toEqual({ contractID: 4, contractServiceID: 61, serviceID: 501, unitChange: 2, adjustedUnitPrice: 22, effectiveDate: '2026-11-16' });
+    expect(r.rows[1]!.after).not.toHaveProperty('contractServiceID');
+    expect(r.modules).toEqual(['core', 'reports', 'vendor']);
+    expect(r.recurringAfter).toBe(5 * 22 + 99);
+  });
+  test('decrease and remove wait for the next period (no mid-period credit); nothing-to-do and archived adds are refused', () => {
+    const r = buildChangePlan({ ...base, targets: [{ offering: 'psarelay-pro', quantity: 0 }] });
+    expect(r.lines[0]).toMatchObject({ from: 3, to: 0, delta: -3, effectiveDate: '2026-12-01', kind: 'remove', prorated: null });
+    expect(r.modules).toEqual([]);
+    expect(buildChangePlan({ ...base, targets: [{ offering: 'psarelay-pro', quantity: 3 }] }).problems).toEqual([expect.stringMatching(/nothing changes/)]);
+    expect(buildChangePlan({ ...base, targets: [{ offering: 'old', quantity: 1 }] }).problems).toEqual([expect.stringMatching(/not a recurring offering/)]);
+    expect(buildChangePlan({ ...base, targets: [{ offering: 'security-audit' }] }).problems).toEqual([expect.stringMatching(/not a recurring offering/)]);
+  });
+  test('a downgrade-only change is complete once it is in — no invoice to wait for — and announces the change', async () => {
+    const plan: Plan = { id: 'p9', kind: 'commerce_change', title: 't', params: null, hash: 'h', status: 'done', createdBy: null, createdAt: 'x', rows: [
+      { rowNo: 1, action: 'create', entity: 'ContractServiceAdjustments', targetId: null, label: 'a', before: null, after: {}, reason: null, blocked: null, meta: { step: 'service' }, status: 'applied', approvedBy: 'u', approvedAt: 'x', result: { id: 0 }, executedAt: 'x' }] };
+    const o: Order = { id: 'o9', status: 'planned', customer: { companyId: 314 }, contacts: [], lines: [{ name: 'PSArelay Pro', from: 3, to: 1, delta: -2 }], totals: { kind: 'change', modules: ['core'] }, startDate: '2026-12-01', planId: 'p9', companyId: 314, contractId: 4, ticketIds: [], payment: { status: 'unpaid' }, notes: null, createdBy: null, createdAt: 'x', updatedAt: 'x' };
+    const events: string[] = [];
+    const t = await trackOrder({ httpClient: async () => ({ query: async () => [] }) } as never, { get: async () => plan } as never, { update: async () => undefined } as never, o, ((e: { type: string }) => events.push(e.type)) as never);
+    expect(t.status).toBe('complete');
+    expect(events).toEqual(['commerce.subscription_changed']);
+  });
+});
