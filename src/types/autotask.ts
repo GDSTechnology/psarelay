@@ -687,6 +687,8 @@ export interface AutotaskQueryOptionsExtended extends AutotaskQueryOptions {
   externalID?: string;
   // Expense item filters
   expenseReportId?: number;
+  /** Expense items logged against this ticket (its "Charges & Expenses"). */
+  ticketId?: number;
   startDate?: string;
   endDate?: string;
 }

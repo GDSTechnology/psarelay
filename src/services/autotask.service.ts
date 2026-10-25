@@ -6455,6 +6455,9 @@ export class AutotaskService {
       if (options.expenseReportId) {
         filters.push({ field: 'expenseReportID', op: 'eq', value: options.expenseReportId });
       }
+      if (options.ticketId != null) {
+        filters.push({ field: 'ticketID', op: 'eq', value: options.ticketId });
+      }
       if (options.startDate) {
         filters.push({ field: 'expenseDate', op: 'gte', value: options.startDate });
       }

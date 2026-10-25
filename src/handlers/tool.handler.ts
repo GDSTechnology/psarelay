@@ -3073,6 +3073,10 @@ export class AutotaskToolHandler {
       }],
 
       // Expense Items
+      ['autotask_search_expense_items', async (a) => {
+        const r = await s.searchExpenseItems({ ticketId: a.ticketId, expenseReportId: a.expenseReportId, startDate: a.startDate, endDate: a.endDate, pageSize: Math.min(a.pageSize ?? 25, 100) });
+        return { result: r, message: `Found ${r.length} expense items` };
+      }],
       ['autotask_create_expense_item', async (a) => {
         const id = await s.createExpenseItem({ expenseReportID: a.expenseReportId, description: a.description, expenseDate: a.expenseDate, expenseCategory: a.expenseCategory, expenseCurrencyExpenseAmount: a.amount, companyID: a.companyId ?? 0, haveReceipt: a.haveReceipt ?? false, isBillableToCompany: a.isBillableToCompany ?? false, isReimbursable: a.isReimbursable ?? true, paymentType: a.paymentType ?? 10 });
         return { result: id, message: `Successfully created expense item with ID: ${id}` };
