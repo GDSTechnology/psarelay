@@ -88,6 +88,7 @@ flowchart LR
   companies, contacts, contracts, services, billing items, invoices and more — kept current by watermark /
   window sync and a nightly **mirror check** that re-reads a random sample and repairs differences. In
   production it answers about **80% of reads** with no Autotask call. → [POSTGRES](docs/POSTGRES.md)
+- **Setup check** (`autotask_setup_check` and the console's Setup page): connection, the API user, live read-permission probes per module with the write access each needs, mirror progress, and how to connect each AI client.
 - **Admin console** (optional): server health, Autotask API usage (whole tenant vs this MCP), who is calling,
   reads per entity, mirror status, feature switches without a restart, a **Requests** page for missing
   capabilities, **Bulk jobs** and **When does the team work?** (activity per hour, by person / integration).
@@ -176,6 +177,7 @@ migrations, restarts, waits for `/health` and prints the version — and refuses
 | `MCP_ADMIN_ENABLED`, `MCP_ADMIN_PORT` | off / `8090` | Admin console → [ADMIN](docs/ADMIN.md) |
 | `MCP_BULK_SLOW_AT_PCT` / `MCP_BULK_STOP_AT_PCT` | `40` / `65` | Bulk-job back-off by tenant API usage |
 | `AUTOTASK_MAX_CONCURRENT_PER_ENDPOINT` | `2` | Concurrent calls per endpoint (Autotask allows 3) |
+| `MCP_PUBLIC_URL` | — | The address AI clients use for this server; the console's Setup page shows it with connection steps |
 | `LOG_LEVEL` / `LOG_FORMAT` | `info` / `simple` | `json` for production |
 
 Most operational settings (read-only switch, mirror serving, caller names, actor registry, notifications to

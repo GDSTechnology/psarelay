@@ -18,6 +18,7 @@ description: Environment variables for credentials, transport, the Postgres laye
 | `MCP_BULK_SLOW_AT_PCT` / `MCP_BULK_STOP_AT_PCT` | `40` / `65` | Bulk jobs halve their pace / wait at this tenant usage |
 | `AUTOTASK_MAX_CONCURRENT_PER_ENDPOINT` | `2` | Concurrent calls per endpoint (Autotask allows 3) |
 | `AUTOTASK_AUTH_PAUSE_SECONDS` | `300` | Pause after a rejected login (doubles up to an hour) |
+| `MCP_PUBLIC_URL` | — | The address AI clients use for this server (e.g. your tunnel); shown on the Setup page |
 | `LOG_LEVEL` / `LOG_FORMAT` | `info` / `simple` | `json` for production |
 
 Many operational settings — the read-only switch, serving reads from the mirror, mirror pause threshold, caller

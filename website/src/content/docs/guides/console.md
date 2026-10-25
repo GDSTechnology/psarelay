@@ -15,6 +15,7 @@ Tunnel.
 | **Calls** | Who is calling (by caller and background job), errors and not-found results, Autotask calls per tool, reads per entity with what could be mirrored, the server log. |
 | **Actors** | Which Autotask resources are people, integrations or the system — and which technicians are the reference standard. |
 | **Requests** | Capabilities the MCP is missing: reported by AI agents (`autotask_report_gap`), added by people, or captured when a client calls a tool that doesn't exist. |
+| **Setup** | Connection and API user, live read-permission probes per module (Ready / Blocked / Not fully checked) with the write access each needs, mirror backfill progress, and copy-ready steps to connect ChatGPT, Claude and n8n. |
 | **Bulk jobs** | Prepare, review, approve, start, pause, resume, retry, cancel and archive mass changes, with live progress and per-record lists. Plus *When does the team work?* — activity per hour by person, integration or this MCP, with a drill-down by hour. |
 | **Notifications** | Discord, Teams or Slack channels for events such as backpressure, login holds, overdue billing exceptions and bulk-job pauses. |
 | **Settings** | Switches applied **without a restart**: read-only mode, serving reads from the mirror, sync thresholds, caller names, the actor registry. |

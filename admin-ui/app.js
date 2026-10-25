@@ -77,6 +77,7 @@ const ROUTES = [
   { hash: '#/actors', label: 'Actors', view: actors },
   { hash: '#/requests', label: 'Requests', view: requests },
   { hash: '#/bulk', label: 'Bulk jobs', view: bulk },
+  { hash: '#/setup', label: 'Setup', view: setup },
   { hash: '#/notifications', label: 'Notifications', view: notifications },
   { hash: '#/settings', label: 'Settings', view: settings },
   { hash: '#/users', label: 'Users', view: users, admin: true },
@@ -596,6 +597,55 @@ async function actors(body) {
     h('p', { class: 'muted' }, 'Who changed a ticket: a person, or automation. Ticket history and the activity feed use this, and anything learning from technicians (Hermes) must only learn from "Person" — never from automation, including this MCP\'s own n8n / Nexus changes. "Unknown" needs confirming. ★ Reference technicians are the trusted standard.'),
     h('section', { class: 'panel' }, h('div', { class: 'row', style: 'margin-bottom:10px' }, search, typeSel, inactive), content));
   await draw();
+}
+
+// ── setup: connection, API-user permissions per module, mirror progress, connecting AI clients ──
+const SETUP_STATUS = { ready: ['Ready', 'ok'], blocked: ['Blocked', 'bad'], unknown: ['Not fully checked', 'warn'] };
+async function setup(body) {
+  const isAdmin = me.role === 'admin';
+  const out = h('div', { class: 'muted' }, 'Loading…');
+  const copy = (text) => h('button', { class: 'small secondary', onclick: async () => { try { await navigator.clipboard.writeText(text); toast('Copied.'); } catch { toast('Copy failed — select and copy it.'); } } }, 'Copy');
+  const draw = (r) => {
+    if (!r) { out.replaceChildren(h('p', { class: 'muted' }, isAdmin ? 'No check run yet on this server — press Run check (about 30 Autotask calls).' : 'No check run yet — ask an administrator to run it.')); return; }
+    const c = r.connection;
+    out.replaceChildren(
+      h('section', { class: 'panel' }, h('h2', null, 'Connection'),
+        c.ok ? h('div', null,
+          h('p', null, h('span', { class: 'badge ok' }, 'Connected'), ' Signed in as ', h('strong', null, c.apiUser?.name || `resource #${c.apiUser?.id ?? '?'}`), c.apiUser?.id ? h('span', { class: 'muted' }, ` (#${c.apiUser.id})`) : null),
+          h('p', { class: 'muted', style: 'font-size:13px' }, `Autotask API usage ${c.usage?.usedPct ?? '?'}% of ${fmt(c.usage?.limit)} / hour.`, r.stopped ? h('span', { class: 'error' }, ` Stopped early: ${r.stopped}`) : null))
+          : h('div', { class: 'banner bad' }, `Not connected: ${c.detail}`),
+        h('p', { class: 'muted', style: 'font-size:12px' }, `Checked ${ago(r.at)}.`)),
+      h('section', { class: 'panel' }, h('h2', null, 'Modules'),
+        h('p', { class: 'muted', style: 'font-size:13px' }, 'Read access is probed live. Write access can’t be probed without writing — the security level of the API user must also allow the writes listed.'),
+        h('div', { class: 'table-wrap' }, h('table', null,
+          h('thead', null, h('tr', null, h('th', null, 'Module'), h('th', null, 'Status'), h('th', null, 'Problems'), h('th', null, 'Writes it needs'))),
+          h('tbody', null, r.modules.map((m) => { const [label, cls] = SETUP_STATUS[m.status] || [m.status, '']; return h('tr', null,
+            h('td', null, h('strong', null, m.name)),
+            h('td', null, h('span', { class: `badge ${cls}` }, label)),
+            h('td', { style: 'font-size:13px' }, !c.ok ? h('span', { class: 'muted' }, 'Not checked — connect to Autotask first') : m.denied.length || m.unchecked.length ? [
+              ...m.denied.map((d) => h('div', { class: 'error' }, `No read access: ${d.entity}`)),
+              ...m.unchecked.map((d) => h('div', { class: 'muted' }, `${d.entity}: ${d.detail || 'not checked'}`))] : h('span', { class: 'muted' }, '—')),
+            h('td', { style: 'font-size:12px' }, m.writes.length ? m.writes.map((w) => h('div', null, h('strong', null, w.entity), `: ${w.ops.join(', ')}`, h('span', { class: 'muted' }, ` — ${w.why}`))) : h('span', { class: 'muted' }, 'read only'))); }))))),
+      r.mirror ? h('section', { class: 'panel' }, h('h2', null, 'Mirror'),
+        h('div', { class: 'row', style: 'justify-content:space-between' }, h('strong', null, `${r.mirror.ready} of ${r.mirror.total} entities backfilled`), h('span', { class: 'muted' }, `${fmt(r.mirror.entities.reduce((t, e) => t + e.rows, 0))} rows`)),
+        h('div', { class: 'bar' }, h('span', { style: `width:${r.mirror.total ? Math.round((r.mirror.ready / r.mirror.total) * 100) : 0}%` })),
+        h('div', { class: 'row', style: 'flex-wrap:wrap;gap:6px;margin-top:8px' }, r.mirror.entities.map((e) => h('span', { class: `badge ${e.ready ? 'ok' : 'warn'}`, title: `${fmt(e.rows)} rows` }, e.entity))))
+        : h('section', { class: 'panel' }, h('h2', null, 'Mirror'), h('p', { class: 'muted' }, 'The Postgres mirror is off on this server — every read goes to Autotask.')),
+      h('section', { class: 'panel' }, h('h2', null, 'Connect your AI'),
+        h('div', { class: 'row', style: 'align-items:center;gap:8px' }, h('span', null, 'MCP endpoint:'), h('code', { class: 'mono' }, r.connect.mcpUrl), copy(r.connect.mcpUrl)),
+        /<this-host>/.test(r.connect.mcpUrl) ? h('p', { class: 'muted', style: 'font-size:12px' }, 'Set MCP_PUBLIC_URL to the address clients use (e.g. your tunnel), and this page shows it.') : null,
+        h('div', { class: 'table-wrap' }, h('table', null, h('tbody', null, r.connect.clients.map((x) => h('tr', null, h('th', null, x.client), h('td', { style: 'font-size:13px' }, x.how), h('td', null, copy(x.how)))))))));
+  };
+  const run = h('button', { class: 'primary', onclick: async () => {
+    run.disabled = true; run.textContent = 'Checking…';
+    try { const r = await api('POST', '/api/setup/run', {}); draw(r.report); toast('Check finished.'); } catch (x) { toast(x.message); }
+    finally { run.disabled = false; run.textContent = 'Run check'; }
+  } }, 'Run check');
+  body.replaceChildren(
+    h('div', { class: 'row', style: 'justify-content:space-between;align-items:center' }, h('h1', null, 'Setup'), isAdmin ? run : null),
+    h('p', { class: 'muted' }, 'Is this server connected to Autotask, and is its API user allowed to do what each module needs? Then how to connect ChatGPT, Claude and n8n.'),
+    out);
+  try { const r = await api('GET', '/api/setup'); draw(r.report); } catch (x) { out.replaceChildren(h('div', { class: 'error' }, x.message)); }
 }
 
 // ── bulk jobs: staged mass changes, pushed by the worker at a set pace ────

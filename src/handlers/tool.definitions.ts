@@ -212,6 +212,12 @@ export const TOOL_DEFINITIONS: McpTool[] = [
   },
   // Connection testing
   {
+    name: 'autotask_setup_check',
+    description: 'READ-ONLY. Is this PSArelay instance connected, and is its Autotask API user allowed to do what each module needs? Signs in (one usage read), names the API user, then probes READ access live for every entity the modules use — one 1-row query each, straight to Autotask (never the mirror / cache), ~30 calls — and reports per module: ready / blocked (no read access to …) / not fully checked, plus the write access each module needs from the security level (writes can\u2019t be probed without writing). Also: mirror backfill progress and how to connect ChatGPT, Claude and n8n (MCP endpoint from MCP_PUBLIC_URL). Modules: core, contracts, billing, vendor, cleanup, commerce. cached:true returns the last result without calling Autotask.',
+    annotations: { title: 'Setup check (connection + permissions)', readOnlyHint: true },
+    inputSchema: { type: 'object', properties: { modules: { type: 'array', items: { type: 'string', enum: ['core', 'contracts', 'billing', 'vendor', 'cleanup', 'commerce'] } }, cached: { type: 'boolean' } }, required: [] }
+  },
+  {
     name: 'autotask_test_connection',
     description: 'Test Autotask API connection',
     inputSchema: {
@@ -6394,7 +6400,7 @@ export const TOOL_CATEGORIES: Record<string, { description: string; tools: strin
   },
   utility: {
     description: 'Connection testing and field/picklist discovery',
-    tools: ['autotask_test_connection', 'autotask_report_gap', 'autotask_get_api_usage', 'autotask_get_actor_roster', 'autotask_get_operations', 'autotask_get_backpressure', 'autotask_shadow_status', 'autotask_shadow_query', 'autotask_shadow_aggregate', 'autotask_shadow_sync', 'autotask_list_queues', 'autotask_list_ticket_statuses', 'autotask_list_ticket_priorities', 'autotask_get_field_info', 'autotask_get_picklists', 'autotask_resolve_picklist_value', 'autotask_resolve_record_reference', 'autotask_whoami']
+    tools: ['autotask_test_connection', 'autotask_setup_check', 'autotask_report_gap', 'autotask_get_api_usage', 'autotask_get_actor_roster', 'autotask_get_operations', 'autotask_get_backpressure', 'autotask_shadow_status', 'autotask_shadow_query', 'autotask_shadow_aggregate', 'autotask_shadow_sync', 'autotask_list_queues', 'autotask_list_ticket_statuses', 'autotask_list_ticket_priorities', 'autotask_get_field_info', 'autotask_get_picklists', 'autotask_resolve_picklist_value', 'autotask_resolve_record_reference', 'autotask_whoami']
   },
   companies: {
     description: 'Search, create, and update companies',

@@ -26,6 +26,8 @@ import { Logger } from '../utils/logger.js';
 import { getPool, pgHealthCheck } from '../db/pool.js';
 import { isPgEnabled, loadPgFlags } from '../db/config.js';
 import { getShadowRuntime } from '../db/shadow-runtime.js';
+import { lastSetupReport, runSetupCheck } from '../setup/run.js';
+import { MODULES } from '../setup/check.js';
 import { usageSnapshot } from '../services/http-cache.js';
 import { TOOL_DEFINITIONS } from '../handlers/tool.definitions.js';
 import type { AutotaskService } from '../services/autotask.service.js';
@@ -651,6 +653,18 @@ export function adminHandler(deps: AdminDeps) {
         void log(ctx, 'notify.channel_removed', channelLogDetails(existing));
         return send(res, 200, { ok: true });
       }
+    }
+
+    // ── setup check: connection, API-user permissions per module, mirror progress, how to connect clients ──
+    if (path === '/api/setup' && method === 'GET') {
+      requireUser(ctx);
+      return send(res, 200, { report: lastSetupReport(), modules: MODULES.map((m) => ({ id: m.id, name: m.name })) });
+    }
+    if (path === '/api/setup/run' && method === 'POST') {
+      const u = requireUser(ctx, 'admin');
+      const report = await runSetupCheck(opts.service);
+      void log(ctx, 'setup.check', { by: u.username, connected: report.connection.ok, blocked: report.modules.filter((m) => m.status === 'blocked').map((m) => m.id) });
+      return send(res, 200, { report });
     }
 
     // ── bulk jobs: mass changes staged in Postgres, pushed by the worker at a set pace ──
