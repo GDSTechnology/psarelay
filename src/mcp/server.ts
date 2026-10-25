@@ -43,7 +43,7 @@ import { usageSnapshot } from '../services/http-cache.js';
 import { authBlockStatus } from '../services/autotask-http.js';
 import { backpressure } from '../services/backpressure.js';
 
-export class AutotaskMcpServer {
+export class PsarelayServer {
   private config: McpServerConfig;
   private autotaskService: AutotaskService;
   private resourceHandler: AutotaskResourceHandler;

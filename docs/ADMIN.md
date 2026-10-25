@@ -62,7 +62,7 @@ bash admin-setup.sh
 
 It walks through six steps and changes nothing until you confirm:
 
-1. **Find the MCP**: the compose directory and service (default `autotask-mcp`).
+1. **Find the MCP**: the compose directory and service (default `psarelay`; installs from before the rename keep `autotask-mcp`).
    Stops if the running image is too old to have the console.
 2. **Check Postgres**: stops with instructions if the Postgres layer is off.
 3. **Turn the console on**: adds `MCP_ADMIN_ENABLED=true` and `MCP_ADMIN_PORT`
@@ -116,7 +116,7 @@ known, it is given in brackets.
 1. **Zero Trust → Networks → Tunnels** [Networking → Tunnels] → **Create a
    tunnel**.
 2. Connector type: **Cloudflared** → **Next**.
-3. Name: `autotask-mcp-admin` → **Save tunnel**.
+3. Name: `psarelay-admin` → **Save tunnel**.
 4. The next page shows install commands. Pick the **Docker** tab. The command
    looks like this:
 
@@ -135,9 +135,9 @@ known, it is given in brackets.
 In the wizard, at step 6, choose **1) Set up a NEW Cloudflare Tunnel** and paste
 the token when asked. The input is hidden. The wizard:
 
-- saves the token to `autotask-mcp-admin-tunnel/.env`, readable only by its
+- saves the token to `psarelay-admin-tunnel/.env`, readable only by its
   owner;
-- writes `autotask-mcp-admin-tunnel/docker-compose.yml` and starts
+- writes `psarelay-admin-tunnel/docker-compose.yml` and starts
   `cloudflared`;
 - waits for **"Registered tunnel connection"**.
 
@@ -156,7 +156,7 @@ Back in the dashboard, refresh **Tunnels**. The tunnel should show **HEALTHY**.
    | Domain | your domain, picked from the list |
    | Path | leave empty |
    | Service type | **HTTP** (not HTTPS: the tunnel already encrypts the traffic) |
-   | URL | `autotask-mcp:8090` (the MCP service name, then the console port) |
+   | URL | `psarelay:8090` (the MCP service name, then the console port) |
 
 3. **Save**. Cloudflare creates the DNS record.
 
@@ -195,11 +195,11 @@ e-mail" page first, then the console's sign-in page. The wizard's check reports
 
 | What you see | Cause | Fix |
 |---|---|---|
-| Error **1033** / HTTP **530** | The tunnel isn't connected | `docker compose -f autotask-mcp-admin-tunnel/docker-compose.yml logs --tail 30`. "Unauthorized" means a bad token: re-run the wizard and paste it again |
-| HTTP **502** / "Bad gateway" | Cloudflare can't reach the console | The route's URL must be `autotask-mcp:8090` with type **HTTP**. Check that the console is on: `/health` shows `"admin": {"running": true}` |
+| Error **1033** / HTTP **530** | The tunnel isn't connected | `docker compose -f psarelay-admin-tunnel/docker-compose.yml logs --tail 30`. "Unauthorized" means a bad token: re-run the wizard and paste it again |
+| HTTP **502** / "Bad gateway" | Cloudflare can't reach the console | The route's URL must be `psarelay:8090` with type **HTTP**. Check that the console is on: `/health` shows `"admin": {"running": true}` |
 | The address doesn't resolve | No DNS record | The domain must be **Active** on Cloudflare DNS. Re-save the hostname route |
 | The Access page loops or says "not authorized" | The Access policy doesn't match | Check the e-mail domain or list in the policy |
-| The console says "admin tables are missing" | Migrations not run | `docker compose run --rm --no-deps -T autotask-mcp node dist/db/migrate.js` |
+| The console says "admin tables are missing" | Migrations not run | `docker compose run --rm --no-deps -T psarelay node dist/db/migrate.js` |
 
 ### Other choices in the wizard
 
@@ -218,16 +218,16 @@ so they update along with it.
 
 | What | Where it lives | Changed by an update? |
 |---|---|---|
-| Console on/off and port | the env file (`autotask-mcp.env`) | No |
+| Console on/off and port | the env file (`psarelay.env`) | No |
 | Users, settings, activity log | the MCP's Postgres volume | No (migrations only add tables) |
-| Cloudflare Tunnel and its token | `autotask-mcp-admin-tunnel/`, its own compose project | No |
+| Cloudflare Tunnel and its token | `psarelay-admin-tunnel/`, its own compose project | No |
 
 After a deploy, `/health` should include `"admin": {"enabled": true, "running": true, "schemaReady": true}`.
 
 To update `cloudflared` itself, now and then:
 
 ```bash
-docker compose -f autotask-mcp-admin-tunnel/docker-compose.yml pull && docker compose -f autotask-mcp-admin-tunnel/docker-compose.yml up -d
+docker compose -f psarelay-admin-tunnel/docker-compose.yml pull && docker compose -f psarelay-admin-tunnel/docker-compose.yml up -d
 ```
 
 **Never** run `docker compose down -v` in the MCP's compose directory. The `-v`
@@ -397,7 +397,7 @@ then **Add New Webhook to Workspace**. The URL looks like
 as an n8n Webhook node, PagerDuty or Opsgenie.
 - The body is `{ event, severity, title, detail, fields, at, server }`.
 - With a **signing secret** (16+ characters), each request carries
-  `X-Atmcp-Signature: sha256=<HMAC-SHA256 of the body>`, so the receiver can
+  `X-PSArelay-Signature: sha256=<HMAC-SHA256 of the body>` (the same value is also sent as the deprecated `X-Atmcp-Signature` until the next major release), so the receiver can
   verify it.
 
 **Security**
@@ -569,7 +569,7 @@ bodies. Every export is recorded in the activity log.
 On the host:
 
 ```bash
-docker compose exec autotask-mcp node dist/admin/cli.js reset-password admin
+docker compose exec psarelay node dist/admin/cli.js reset-password admin
 ```
 
 This prints a new temporary password and signs that user out everywhere. Other
@@ -598,7 +598,7 @@ commands:
   them out everywhere.
 
 **Requests**
-- **Cross-site requests are refused.** Every change needs the `X-Atmcp` header,
+- **Cross-site requests are refused.** Every change needs the `X-PSArelay` header,
   which a foreign page can't send, and a same-host `Origin`.
 - **Sign-ins are throttled:** 6 failures per username, or 20 per IP, in 15 minutes.
 - **Strict Content-Security-Policy:** no inline script, nothing loaded from other

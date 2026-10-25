@@ -159,11 +159,11 @@ fi
 # Test Docker build if Docker is available
 if command_exists docker; then
     print_status "Testing Docker build..."
-    if docker build -t autotask-mcp:test .; then
+    if docker build -t psarelay:test .; then
         print_success "Docker build test passed"
         
         # Clean up test image
-        docker rmi autotask-mcp:test >/dev/null 2>&1 || true
+        docker rmi psarelay:test >/dev/null 2>&1 || true
     else
         print_error "Docker build test failed"
         exit 1

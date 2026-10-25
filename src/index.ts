@@ -3,7 +3,7 @@
 // Main Entry Point for PSArelay
 // Initializes configuration, logging, and starts the MCP server
 
-import { AutotaskMcpServer } from './mcp/server.js';
+import { PsarelayServer } from './mcp/server.js';
 import { Logger } from './utils/logger.js';
 import { loadEnvironmentConfig, mergeWithMcpConfig } from './utils/config.js';
 
@@ -31,7 +31,7 @@ async function main() {
     }
 
     // Create the MCP server (don't initialize Autotask yet)
-    const server = new AutotaskMcpServer(mcpConfig, logger, envConfig);
+    const server = new PsarelayServer(mcpConfig, logger, envConfig);
 
     // Set up graceful shutdown
     process.on('SIGINT', async () => {

@@ -84,10 +84,10 @@ describe('console version', () => {
 
   test('the page carries its version and versioned asset URLs; API answers carry the server version', async () => {
     const html = await (await fetch(base + '/')).text();
-    expect(html).toContain('<meta name="atmcp-version" content="3.59.0">');
+    expect(html).toContain('<meta name="psarelay-version" content="3.59.0">');
     expect(html).toContain('src="/app.js?v=3.59.0"');
     expect(html).toContain('href="/app.css?v=3.59.0"');
     expect((await fetch(base + '/app.js?v=3.59.0')).status).toBe(200);
-    expect((await fetch(base + '/api/me')).headers.get('x-atmcp-version')).toBe('3.59.0');
+    expect((await fetch(base + '/api/me')).headers.get('x-psarelay-version')).toBe('3.59.0');
   });
 });

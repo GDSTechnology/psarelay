@@ -10,7 +10,7 @@
 //   - Local console users, scrypt-hashed; roles 'admin' and 'viewer'.
 //   - Session cookie: random 256-bit token, HttpOnly, SameSite=Strict, Secure
 //     behind HTTPS; only its SHA-256 is stored. 12 h idle / 7 day maximum.
-//   - Every state-changing request must carry the `X-Atmcp: 1` header (a
+//   - Every state-changing request must carry the `X-PSArelay: 1` header (a
 //     cross-site page cannot set it without a CORS preflight this server never
 //     approves) and, when the browser sends an Origin, it must be this host.
 //   - Failed logins are throttled per IP and per username.
@@ -110,7 +110,7 @@ class HttpError extends Error { constructor(public status: number, message: stri
 
 let serverVersion = '';
 function send(res: ServerResponse, status: number, body: unknown, headers: Record<string, string | string[]> = {}): void {
-  res.writeHead(status, { ...SECURITY_HEADERS, 'X-Atmcp-Version': serverVersion, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers });
+  res.writeHead(status, { ...SECURITY_HEADERS, 'X-PSArelay-Version': serverVersion, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers });
   res.end(JSON.stringify(body));
 }
 
@@ -177,8 +177,8 @@ function isHttps(req: IncomingMessage, mode: string): boolean {
   return header(req, 'x-forwarded-proto')?.split(',')[0]?.trim() === 'https';
 }
 
-const COOKIE_SECURE = '__Host-atmcp_session';
-const COOKIE_PLAIN = 'atmcp_session';
+const COOKIE_SECURE = '__Host-psarelay_session';
+const COOKIE_PLAIN = 'psarelay_session';
 
 function readCookie(req: IncomingMessage): string | null {
   for (const part of (header(req, 'cookie') ?? '').split(';')) {
@@ -198,7 +198,7 @@ function sessionCookie(token: string | null, secure: boolean): string {
 
 /** Reject cross-site state changes: custom header + same-origin Origin (when sent). */
 export function csrfProblem(req: IncomingMessage): string | null {
-  if (header(req, 'x-atmcp') !== '1') return 'Missing X-Atmcp header.';
+  if (header(req, 'x-psarelay') !== '1') return 'Missing X-PSArelay header.';
   const origin = header(req, 'origin');
   if (origin && origin !== 'null') {
     const host = header(req, 'x-forwarded-host') ?? header(req, 'host');
@@ -351,7 +351,7 @@ export function adminHandler(deps: AdminDeps) {
       const v = encodeURIComponent(opts.version);
       const html = page.body.toString('utf8')
         .replace('src="/app.js"', `src="/app.js?v=${v}"`).replace('href="/app.css"', `href="/app.css?v=${v}"`)
-        .replace('<head>', `<head>\n  <meta name="atmcp-version" content="${opts.version.replace(/[^\w.+-]/g, '')}">`);
+        .replace('<head>', `<head>\n  <meta name="psarelay-version" content="${opts.version.replace(/[^\w.+-]/g, '')}">`);
       statics.set(route, { ...page, body: Buffer.from(html, 'utf8') });
     }
   }

@@ -79,10 +79,13 @@ export function planProjectBuild(plan: ProjectBuildPlan): BuildBlueprint {
  * buildKey is caller-supplied or derived (company + plan name).
  */
 export function buildMarker(buildKey: string): string {
-  return `[atmcp-build-key:${buildKey}]`;
+  return `[psarelay-build-key:${buildKey}]`;
 }
+
+/** The marker written before the rename — projects built then must still be found. */
+const legacyBuildMarker = (buildKey: string) => `[atmcp-build-key:${buildKey}]`;
 
 /** Whether `text` carries the marker for `buildKey`. */
 export function hasBuildMarker(text: string | undefined | null, buildKey: string): boolean {
-  return typeof text === 'string' && text.includes(buildMarker(buildKey));
+  return typeof text === 'string' && (text.includes(buildMarker(buildKey)) || text.includes(legacyBuildMarker(buildKey)));
 }

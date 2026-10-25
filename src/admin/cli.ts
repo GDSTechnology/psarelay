@@ -1,6 +1,6 @@
 // Admin console CLI — run inside the MCP container:
 //
-//   docker compose exec autotask-mcp node dist/admin/cli.js <command>
+//   docker compose exec psarelay node dist/admin/cli.js <command>   (older installs: autotask-mcp)
 //
 //   init [username]                 Create the first administrator (default "admin")
 //                                   with a generated password. Refuses once any

@@ -48,6 +48,12 @@ describe('project-build (pure)', () => {
     expect(hasBuildMarker(`notes\n${m}`, '10:Deploy')).toBe(true);
     expect(hasBuildMarker('notes', '10:Deploy')).toBe(false);
   });
+
+  test('projects built before the rename (old marker) are still found', () => {
+    expect(buildMarker('10:Deploy')).toBe('[psarelay-build-key:10:Deploy]');
+    expect(hasBuildMarker('notes\n[atmcp-build-key:10:Deploy]', '10:Deploy')).toBe(true);
+    expect(hasBuildMarker('notes\n[atmcp-build-key:10:Other]', '10:Deploy')).toBe(false);
+  });
 });
 
 describe('buildProjectFromPlan (orchestrator)', () => {
