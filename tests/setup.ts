@@ -29,6 +29,21 @@ beforeEach(() => {
   _resetAuthBlocks();
 });
 
+// No network in tests: a unit test must never reach Autotask (or anything else) — with real credentials in the
+// environment that would be a live call, and a failed login counts toward locking the shared API user. Calls to a
+// fake host used to "pass" only because the DNS lookup failed fast (inside Docker it hangs until the timeout).
+// Local servers the tests start themselves (127.0.0.1 / localhost) stay reachable; tests that need other answers
+// mock fetch themselves.
+const realFetch = globalThis.fetch;
+beforeEach(() => {
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+    if (url.hostname === '127.0.0.1' || url.hostname === 'localhost' || url.hostname === '[::1]') return realFetch(input, init);
+    throw new TypeError(`fetch failed: network access is disabled in tests (${url.host})`);
+  }) as typeof fetch;
+});
+afterEach(() => { globalThis.fetch = realFetch; });
+
 // Global test cleanup
 afterAll(() => {
   // Any cleanup operations

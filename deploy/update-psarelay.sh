@@ -119,6 +119,25 @@ if [ "$FORCE" = 0 ]; then
   fi
 fi
 
+# The key that encrypts secrets saved in the console (MCP_SECRET_KEY): add one to the PSArelay env file when there
+# is none. Only an env file holding AUTOTASK_USERNAME is touched (never n8n's .env), with a backup first.
+KEY_ADDED=0
+if ! docker exec "$CONTAINER" printenv MCP_SECRET_KEY >/dev/null 2>&1; then
+  for f in "$DIR/psarelay.env" "$DIR/autotask-mcp.env"; do
+    [ -f "$f" ] && grep -q '^AUTOTASK_USERNAME=' "$f" || continue
+    if ! grep -q '^MCP_SECRET_KEY=' "$f"; then
+      cp -p "$f" "$f.bak-$(date +%F-%H%M%S)"
+      KEY="$(openssl rand -base64 32 2>/dev/null || head -c 32 /dev/urandom | base64)"
+      printf '\n# Encrypts secrets saved in the console (added by update-psarelay). Keep it: without it they must be re-entered.\nMCP_SECRET_KEY=%s\n' "$KEY" >> "$f"
+      unset KEY
+      say "Added MCP_SECRET_KEY to $(basename "$f") (backup kept)"
+    fi
+    KEY_ADDED=1
+    break
+  done
+fi
+[ "$KEY_ADDED" = 1 ] && RECREATE=1
+
 say "Pulling ${IMAGE}:latest"
 OLD="$(docker inspect "$CONTAINER" --format '{{.Image}}')"
 docker compose pull "$SERVICE"

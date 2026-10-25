@@ -50,6 +50,8 @@ import { mirrorClassifier, teamActivityHour, teamActivityProfile } from '../bulk
 import { hourlyActivity } from '../services/call-log.js';
 import { clearTokenCache, tokenStore } from '../security/tokens.js';
 import { securityPosture } from '../security/posture.js';
+import { CredentialStore, credentialSource, credentialTester, lookupZone, setCredentialSource, type AutotaskCredentials } from '../setup/credentials.js';
+import { secretKeyStatus } from '../security/secrets.js';
 import { CHANNEL_KINDS, ChannelInputError, NOTIFY_SETTING_KEY, channelFromInput, channelLogDetails, channelView, parseStoredChannels } from './notifications.js';
 
 export interface AdminConsoleOptions {
@@ -653,6 +655,56 @@ export function adminHandler(deps: AdminDeps) {
         await saveChannels(list.filter((x) => x.id !== existing.id));
         void log(ctx, 'notify.channel_removed', channelLogDetails(existing));
         return send(res, 200, { ok: true });
+      }
+    }
+
+    // ── the Autotask API user: entered, tested (carefully — failed logins lock the user) and saved in the console ──
+    if (path.startsWith('/api/autotask/credentials')) {
+      requireUser(ctx, 'admin');
+      const cstore = deps.pool ? new CredentialStore(deps.pool) : null;
+      const stored = cstore ? await cstore.summary().catch(() => null) : null;
+      if (path === '/api/autotask/credentials' && method === 'GET') {
+        const src = credentialSource();
+        return send(res, 200, { source: src.from, problem: src.problem, username: opts.service.apiUsername() || null, stored, key: secretKeyStatus(), pg: !!deps.pool });
+      }
+      const input = async () => {
+        const b = await readJson(req, 4 * 1024);
+        const c: AutotaskCredentials = { username: String(b.username ?? '').trim(), secret: String(b.secret ?? ''), integrationCode: String(b.integrationCode ?? '').trim(), apiUrl: String(b.apiUrl ?? '').trim() || undefined };
+        return c;
+      };
+      // The database this server already mirrors: a different one is refused.
+      const currentCi = async () => stored?.databaseCi ?? (opts.service.apiUsername() ? (await lookupZone(opts.service.apiUsername()).catch(() => null))?.ci ?? null : null);
+      if (path === '/api/autotask/credentials/test' && method === 'POST') {
+        const c = await input();
+        let r;
+        try { r = await credentialTester(opts.logger).test(c, { currentCi: await currentCi() }); } catch (e) { throw new HttpError(429, (e as Error).message, 'limited'); }
+        void log(ctx, 'autotask.credentials_tested', { username: c.username, ok: r.ok });
+        return send(res, 200, r);
+      }
+      if (path === '/api/autotask/credentials' && method === 'POST') {
+        if (!cstore) throw new HttpError(409, 'Saving credentials needs the Postgres layer (MCP_PG_ENABLED).', 'unavailable');
+        const key = secretKeyStatus();
+        if (!key.ok) throw new HttpError(409, key.detail, 'no_key');
+        const c = await input();
+        const passed = credentialTester(opts.logger).passedFor(c);
+        if (!passed) throw new HttpError(409, 'Test these exact values first (a passing test is valid for 10 minutes).', 'untested');
+        const before = opts.service.apiUsername();
+        await cstore.save(c, { databaseCi: passed.zone?.ci ?? null, verifiedAs: passed.apiUser?.name ?? null, by: ctx.user!.username });
+        opts.service.reconfigure(c);
+        setCredentialSource('console');
+        thresholdCache = null;
+        void log(ctx, 'autotask.credentials_saved', { username: c.username, changedUser: before !== c.username.toLowerCase() });
+        const restart = before && before !== c.username.toLowerCase();
+        return send(res, 200, { ok: true, message: restart ? 'Saved and in use. The API user changed: restart the server (update-psarelay --recreate) so background jobs move to the new user too.' : 'Saved and in use — the next Autotask call uses the new credentials.' });
+      }
+      if (path === '/api/autotask/credentials/clear' && method === 'POST') {
+        if (!cstore) throw new HttpError(409, 'Nothing is stored (no Postgres layer).', 'unavailable');
+        const had = await cstore.clear();
+        const env = process.env;
+        if (env.AUTOTASK_USERNAME && env.AUTOTASK_SECRET && env.AUTOTASK_INTEGRATION_CODE) opts.service.reconfigure({ username: env.AUTOTASK_USERNAME, secret: env.AUTOTASK_SECRET, integrationCode: env.AUTOTASK_INTEGRATION_CODE, apiUrl: env.AUTOTASK_API_URL });
+        setCredentialSource('environment');
+        void log(ctx, 'autotask.credentials_cleared', { had });
+        return send(res, 200, { ok: true, message: had ? 'Removed. The server uses the AUTOTASK_* environment variables again.' : 'Nothing was stored.' });
       }
     }
 
