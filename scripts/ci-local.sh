@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Run the CI workflow (.github/workflows/ci.yml) locally with Docker, before pushing.
 #
-#   scripts/ci-local.sh            # Node 20 + 22 test jobs and the Docker image build, in parallel
+#   scripts/ci-local.sh            # Node 20 + 22 test jobs and the Docker image build, one after another
+#   scripts/ci-local.sh --parallel # all three at once (heavy: two full Jest runs + a build crashed Docker Desktop once)
 #   scripts/ci-local.sh --quick    # one Node 22 test job only
 #   scripts/ci-local.sh --arm64    # also build the arm64 image (QEMU; slow)
 #
@@ -14,8 +15,8 @@ export MSYS_NO_PATHCONV=1
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-QUICK=0; ARM=0
-for a in "$@"; do case "$a" in --quick) QUICK=1 ;; --arm64) ARM=1 ;; -h|--help) sed -n '2,10p' "$0"; exit 0 ;; *) echo "unknown option $a" >&2; exit 2 ;; esac; done
+QUICK=0; ARM=0; PAR=0
+for a in "$@"; do case "$a" in --quick) QUICK=1 ;; --arm64) ARM=1 ;; --parallel) PAR=1 ;; -h|--help) sed -n '2,10p' "$0"; exit 0 ;; *) echo "unknown option $a" >&2; exit 2 ;; esac; done
 
 OUT="$ROOT/.ci-local"; rm -rf "$OUT"; mkdir -p "$OUT/src"
 # The source the jobs see: what a checkout of this commit (plus new files) would contain.
@@ -40,13 +41,15 @@ docker_job() {
   docker buildx build --platform "$platforms" --provenance=false --build-arg VERSION=ci-local --build-arg COMMIT_SHA="$(git rev-parse HEAD)" "$HOST_SRC" > "$OUT/docker.log" 2>&1
 }
 
-declare -A PIDS
-if [ "$QUICK" = 1 ]; then test_job 22 & PIDS[node22]=$!
-else test_job 20 & PIDS[node20]=$!; test_job 22 & PIDS[node22]=$!; docker_job & PIDS[docker]=$!; fi
-
+JOBS=(node22); [ "$QUICK" = 1 ] || JOBS=(node20 node22 docker)
+run() { case "$1" in node20) test_job 20 ;; node22) test_job 22 ;; docker) docker_job ;; esac; }
 FAIL=0
-for j in "${!PIDS[@]}"; do
-  if wait "${PIDS[$j]}"; then echo "PASS  $j"; else echo "FAIL  $j  (see .ci-local/$j.log)"; FAIL=1; fi
-done
+report() { if [ "$2" = 0 ]; then echo "PASS  $1"; else echo "FAIL  $1  (see .ci-local/$1.log)"; FAIL=1; fi; }
+if [ "$PAR" = 1 ]; then
+  declare -A PIDS; for j in "${JOBS[@]}"; do run "$j" & PIDS[$j]=$!; done
+  for j in "${JOBS[@]}"; do wait "${PIDS[$j]}"; report "$j" $?; done
+else
+  for j in "${JOBS[@]}"; do run "$j"; report "$j" $?; done
+fi
 for j in node20 node22; do [ -f "$OUT/$j.log" ] && grep -E "^(Tests|Test Suites):" "$OUT/$j.log" | sed "s/^/  $j  /"; done
 exit $FAIL
