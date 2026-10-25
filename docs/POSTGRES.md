@@ -135,7 +135,16 @@ answers it one ticket at a time. Instead it is **indexed** in the audit ledger
   `includeTimestampOnly` always reads live.
 
 **Billing / financial review** (since 3.57): Invoices, BillingItems, and
-TicketCharges, ProjectCharges and ContractCharges.
+TicketCharges, ProjectCharges and ContractCharges; **ExpenseItems** since 6.4
+(windowed by `expenseDate`).
+
+**Sales and assets** (since 6.4): **Opportunities** and **ConfigurationItems**, mirrored whole — incremental when the
+tenant's field list offers a modified stamp, otherwise refreshed in full (hourly / every 6 hours). `search_opportunities`,
+`search_configuration_items` (including the serial-number filter), `search_expense_items` and
+`search_ticket_charges` are answered from the mirror while it is fresh.
+
+**Text matching** in the mirror ignores case and whitespace differences (double spaces, line breaks, non-breaking
+spaces), so "replaced the" finds "replaced  the". Time-entry text lives in `summaryNotes` and `internalNotes`.
 
 - **Window.** Each is limited to the history window by its own date:
   `invoiceDateTime`, `itemDate` and `datePurchased`.

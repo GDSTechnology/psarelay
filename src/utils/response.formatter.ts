@@ -4,7 +4,7 @@
  * per entity type and providing pagination metadata.
  */
 
-export type EntityType = 'tickets' | 'companies' | 'contacts' | 'projects' | 'tasks' | 'resources' | 'billingItems' | 'billingItemApprovalLevels' | 'timeEntries';
+export type EntityType = 'tickets' | 'companies' | 'contacts' | 'projects' | 'tasks' | 'resources' | 'billingItems' | 'billingItemApprovalLevels' | 'timeEntries' | 'ticketCharges';
 
 export interface CompactResponse {
   summary: {
@@ -31,6 +31,8 @@ const SUMMARY_FIELDS: Record<EntityType, string[]> = {
   billingItems: ['id', 'itemName', 'companyID', 'ticketID', 'projectID', 'postedDate', 'totalAmount', 'invoiceID', 'billingItemType'],
   billingItemApprovalLevels: ['id', 'timeEntryID', 'approvalLevel', 'approvalResourceID', 'approvalDateTime'],
   timeEntries: ['id', 'resourceID', 'ticketID', 'projectID', 'taskID', 'dateWorked', 'hoursWorked', 'summaryNotes'],
+  // Everything a billing check needs, so it never reads each charge again.
+  ticketCharges: ['id', 'ticketID', 'name', 'description', 'chargeType', 'status', 'datePurchased', 'createDate', 'unitQuantity', 'unitPrice', 'unitCost', 'extendedCost', 'billableAmount', 'isBillableToCompany', 'isBilled', 'billingCodeID', 'productID', 'contractID', 'contractServiceID', 'contractServiceBundleID', 'purchaseOrderNumber'],
 };
 
 /** Fields shown even when null — "not set" is the answer (search_companies: classification {id, label} or null). */
@@ -119,6 +121,8 @@ export function detectEntityType(toolName: string): EntityType | null {
   if (toolName.includes('billing_item_approval')) return 'billingItemApprovalLevels';
   if (toolName.includes('billing_item')) return 'billingItems';
   if (toolName.includes('time_entr')) return 'timeEntries';
+  // Before 'ticket': a charge is not a ticket (it used to be cut down to ticket fields — only its id survived).
+  if (toolName.includes('ticket_charge')) return 'ticketCharges';
   if (toolName.includes('ticket')) return 'tickets';
   if (toolName.includes('compan')) return 'companies';
   if (toolName.includes('contact')) return 'contacts';

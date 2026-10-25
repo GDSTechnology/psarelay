@@ -20,6 +20,13 @@ describe('filter → SQL', () => {
     expect(sql({ op: 'eq', field: 'emailAddress', value: 'A@x.com' })).toEqual({ s: "lower((data->>'emailAddress')) = lower($1)", p: ['A@x.com'] });
     expect(sql({ op: 'eq', field: 'assignedResourceID', value: null }).s).toBe("(data->>'assignedResourceID') IS NULL");
   });
+  test('text matching ignores case and whitespace runs (double spaces, line breaks, non-breaking spaces)', () => {
+    const r = sql({ op: 'contains', field: 'summaryNotes', value: 'replaced  the' });
+    expect(r.s).toContain("regexp_replace(translate((data->>'summaryNotes')");
+    expect(r.s).toContain('ILIKE');
+    expect(r.p).toEqual(['%replaced the%']);
+    expect(sql({ op: 'contains', field: 'Notes', value: 'x', udf: true }).s).toContain('regexp_replace');
+  });
   test('ranges numeric vs date text; LIKE ops escape wildcards; exist/isnotnull; in/notIn', () => {
     expect(sql({ op: 'gte', field: 'hoursWorked', value: 2 }).s).toBe("((data->>'hoursWorked'))::numeric >= $1");
     expect(sql({ op: 'lt', field: 'dateWorked', value: '2026-10-01' })).toEqual({ s: "(data->>'dateWorked') < $1", p: ['2026-10-01'] });
@@ -48,9 +55,9 @@ describe('filter → SQL', () => {
 describe('entities + write detection', () => {
   test('registry: watermark fields verified live; modifiedAt falls back to the create stamp', () => {
     expect(shadowEntity('timeentries')!.watermarkField).toBe('lastModifiedDateTime');
-    expect(SHADOW_ENTITIES.filter((e) => !e.watermarkField && !e.window).map((e) => e.name)).toEqual(['ContractServices', 'ContractBlocks', 'Resources']);
+    expect(SHADOW_ENTITIES.filter((e) => !e.watermarkField && !e.window).map((e) => e.name)).toEqual(['ContractServices', 'ContractBlocks', 'Resources', 'Opportunities', 'ConfigurationItems']);
     // Billing entities: windowed, watermark resolved per tenant (window refresh when none).
-    expect(SHADOW_ENTITIES.filter((e) => e.watermarkCandidates).map((e) => e.name)).toEqual(['TicketNotes', 'Invoices', 'BillingItems', 'TicketCharges', 'ProjectCharges', 'ContractCharges']);
+    expect(SHADOW_ENTITIES.filter((e) => e.watermarkCandidates).map((e) => e.name)).toEqual(['TicketNotes', 'Invoices', 'BillingItems', 'TicketCharges', 'ProjectCharges', 'ContractCharges', 'ExpenseItems', 'Opportunities', 'ConfigurationItems']);
     expect(modifiedAt(shadowEntity('Tickets')!, { createDate: '2026-10-01T00:00:00Z' })?.toISOString()).toBe('2026-10-01T00:00:00.000Z');
   });
   test('writtenRow: top-level PATCH/POST, by-id DELETE, child-route create; ignores queries and unmirrored entities', () => {
@@ -63,7 +70,7 @@ describe('entities + write detection', () => {
     expect(writtenRow('/Companies/5/Contacts', { firstName: 'x' }, { itemId: 12 })).toEqual({ entity: 'Contacts', id: 12 });
     expect(writtenRow('/Contracts/9/Services', {}, { itemId: 3 })).toEqual({ entity: 'ContractServices', id: 3 });
     expect(writtenRow('/Tickets/query', {}, {})).toBeNull();
-    expect(writtenRow('/Opportunities', { id: 1 }, {})).toBeNull();
+    expect(writtenRow('/Quotes', { id: 1 }, {})).toBeNull();
     expect(writtenRow('/Projects/9/Tasks', { id: 4 }, {})).toEqual({ entity: 'Tasks', id: 4 });
     // raw_request writes arrive as absolute zone URLs (n8n 'update did not verify', 2026-10-09).
     expect(writtenRow('https://webservices3.autotask.net/ATServicesRest/v1.0/Tickets', { id: 210669, priority: 1 }, {})).toEqual({ entity: 'Tickets', id: 210669 });
@@ -190,7 +197,7 @@ describe('ShadowSync', () => {
     expect((await paused.runOnce()).skipped).toMatch(/52\.1% ≥ 50%/);
     expect(at.calls).toHaveLength(0);
     const sync = new ShadowSync(at.http, store as any, logger, { maxCallsPerRun: 1, pauseAtPct: 50, usagePct: async () => 30 });
-    sync.markDirty('tickets', 7); sync.markDirty('Opportunities', 1);
+    sync.markDirty('tickets', 7); sync.markDirty('Quotes', 1);
     expect(sync.dirtyCount()).toBe(1);
     await sync.runOnce();
     expect(at.calls[0]).toEqual({ entity: 'Tickets', filter: [{ op: 'in', field: 'id', value: [7] }] });
@@ -236,7 +243,7 @@ describe('shadowRead (search read path)', () => {
     _setShadowRuntime({ store: s, serveReads: true, maxAgeSeconds: 900 } as any);
     expect(await shadowRead('Tickets', [{ op: 'eq', field: 'status', value: 1 }], 26)).toEqual({ rows: [{ id: 1 }], ageSeconds: 30 });
     expect(s.query).toHaveBeenCalledWith('Tickets', [{ op: 'eq', field: 'status', value: 1 }], { limit: 26, order: 'id_asc' });
-    expect(await shadowRead('Opportunities', [], 10)).toBeNull(); // not mirrored
+    expect(await shadowRead('Quotes', [], 10)).toBeNull(); // not mirrored
     _setShadowRuntime({ store: store({ ready: false, ageSeconds: null }), serveReads: true, maxAgeSeconds: 900 } as any);
     expect(await shadowRead('Tickets', [], 10)).toBeNull(); // still backfilling
     _setShadowRuntime({ store: store({ ready: true, ageSeconds: 2000 }), serveReads: true, maxAgeSeconds: 900 } as any);

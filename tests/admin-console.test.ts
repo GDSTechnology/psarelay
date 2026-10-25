@@ -281,10 +281,10 @@ describe('read-source report', () => {
     const { runToolCall, startApiCall, _resetCallLog } = await import('../src/services/call-log');
     const { readSourceReport } = await import('../src/admin/server');
     _resetCallLog();
-    await runToolCall('autotask_search_opportunities', async () => { for (let i = 0; i < 60; i++) startApiCall('POST', '/Opportunities/query')(200); return {}; });
+    await runToolCall('autotask_search_quotes', async () => { for (let i = 0; i < 60; i++) startApiCall('POST', '/Quotes/query')(200); return {}; });
     await runToolCall('autotask_search_tickets', async () => { for (let i = 0; i < 60; i++) startApiCall('POST', '/Tickets/query')(200); return {}; });
     const r = readSourceReport(24) as { entities: Array<{ entity: string; candidate: boolean; mirrored: boolean; cacheClass: string }> };
-    expect(r.entities.find((e) => e.entity === 'Opportunities')).toMatchObject({ candidate: true, mirrored: false, cacheClass: 'volatile' });
+    expect(r.entities.find((e) => e.entity === 'Quotes')).toMatchObject({ candidate: true, mirrored: false, cacheClass: 'volatile' });
     expect(r.entities.find((e) => e.entity === 'Tickets')).toMatchObject({ candidate: false, mirrored: true });
   });
 });

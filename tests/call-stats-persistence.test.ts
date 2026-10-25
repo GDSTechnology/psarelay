@@ -30,7 +30,7 @@ function fakeDb() {
 }
 
 test('counts round-trip through Postgres and restore ADDS to what arrived since the restart', async () => {
-  await reads('autotask_search_opportunities', '/Opportunities/query', 5);
+  await reads('autotask_search_quotes', '/Quotes/query', 5);
   await raw('PATCH', '/TicketNotes');
   await raw('PATCH', '/TicketNotes');
   const db = fakeDb();
@@ -38,9 +38,9 @@ test('counts round-trip through Postgres and restore ADDS to what arrived since 
   expect([...db.rows.values()].map((r) => r.kind).sort()).toEqual(['gap', 'read']);
 
   _resetCallLog(); // the restart
-  await reads('autotask_search_opportunities', '/Opportunities/query', 2); // traffic before the restore ran
+  await reads('autotask_search_quotes', '/Quotes/query', 2); // traffic before the restore ran
   expect(restoreStats(await loadStats(db as never))).toBe(2);
-  expect(entityReadStats(24).entities.find((e) => e.entity === 'Opportunities')).toMatchObject({ upstream: 7, topCallers: [{ caller: 'autotask_search_opportunities', count: 7 }] });
+  expect(entityReadStats(24).entities.find((e) => e.entity === 'Quotes')).toMatchObject({ upstream: 7, topCallers: [{ caller: 'autotask_search_quotes', count: 7 }] });
   expect(toolGapStats(168).raw).toEqual([expect.objectContaining({ shape: 'PATCH /TicketNotes', calls: 2, callers: [{ caller: 'n8n · 172.19.0.3 · n8n', count: 2 }] })]);
 });
 
@@ -52,11 +52,11 @@ test('a missing table never breaks start: counts stay in memory', async () => {
 });
 
 test('the Overview summary: live reads by entity, and raw_request calls no tool covers vs ones that have a tool', async () => {
-  await reads('autotask_search_opportunities', '/Opportunities/query', 60);
+  await reads('autotask_search_quotes', '/Quotes/query', 60);
   await raw('PATCH', '/TicketNotes');      // no tool covers it
   await raw('POST', '/Tickets/query');     // search_tickets covers it
   const s = mcpTrafficSummary(24) as { reads: { live: number; top: Array<{ entity: string; live: number; candidate: boolean }> }; gaps: { uncoveredCalls: number; uncoveredShapes: number; coveredCalls: number; top: Array<{ shape: string }> } };
   expect(s.reads.live).toBe(60);
-  expect(s.reads.top[0]).toMatchObject({ entity: 'Opportunities', live: 60, candidate: true });
+  expect(s.reads.top[0]).toMatchObject({ entity: 'Quotes', live: 60, candidate: true });
   expect(s.gaps).toMatchObject({ uncoveredCalls: 1, uncoveredShapes: 1, coveredCalls: 1, top: [{ shape: 'PATCH /TicketNotes' }] });
 });

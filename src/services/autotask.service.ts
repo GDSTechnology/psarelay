@@ -10,7 +10,7 @@ import { resolveAutotaskApiUrl, resolveAutotaskWebUrl } from '../utils/config';
 import { AutotaskHttpClient, QueryFilter } from './autotask-http';
 import { usageSnapshot, ApiUsageSnapshot } from './http-cache';
 import { classifyActor, parseRegistry, parseReference, type ActorRecord, type ClassifyContext } from '../utils/actor-classify.js';
-import { settingValue } from '../admin/settings.js';
+import { settingValue, tenantCompanyDefaults } from '../admin/settings.js';
 import { noteTenantUsage } from './call-log.js';
 import {
   classifyReferenceMatches,
@@ -74,6 +74,7 @@ import { RoleChoice, RoleSource } from '../utils/time-entry-role';
 import { classifyTimeEntryWriteError } from '../utils/time-entry-errors';
 import { ContractRow, EntryRow, EntryScope, planContractMove, TicketContractRow } from '../utils/ticket-contract';
 import { shadowRead } from '../db/shadow-runtime';
+import { withCompanyDefaults } from '../utils/company-defaults';
 import { runWithRequestContext, getRequestOrigin } from '../utils/request-context';
 import { applyBillingTreatment, BillingTreatment } from '../utils/billing-treatment';
 import { summarizeUnbilledTime, UnbilledTimeEntry, UnbilledTimeSummary } from '../utils/unbilled-time';
@@ -635,9 +636,11 @@ export class AutotaskService {
     // Owner is required by Autotask (§6.1) — resolve it explicitly (supplied
     // value or AUTOTASK_DEFAULT_OWNER_RESOURCE_ID), never silently omit or pick.
     const ownerResourceID = resolveCompanyOwnerResourceID(company);
+    // The tenant's defaults (console → Settings → Defaults) under the caller's own values.
+    const { company: withDefaults } = withCompanyDefaults(company as Record<string, unknown>, tenantCompanyDefaults());
     try {
-      this.logger.debug('Creating company:', company);
-      const id = await http.create('Companies', { ...company, ownerResourceID });
+      this.logger.debug('Creating company:', withDefaults);
+      const id = await http.create('Companies', { ...withDefaults, ownerResourceID });
       this.logger.info(`Company created with ID: ${id}`);
       return id;
     } catch (error) {
@@ -1775,20 +1778,21 @@ export class AutotaskService {
     }
   }
 
-  async searchTicketCharges(options: AutotaskQueryOptionsExtended & { ticketId?: number } = {}): Promise<AutotaskTicketCharge[]> {
-    const http = await this.ensureClient();
+  async searchTicketCharges(options: AutotaskQueryOptionsExtended & { ticketId?: number; ticketIds?: number[]; isBilled?: boolean; purchasedAfter?: string } = {}): Promise<AutotaskTicketCharge[]> {
     try {
       this.logger.debug('Searching ticket charges with options:', options);
       const filters: QueryFilter[] = [];
-      if (options.ticketId) {
-        filters.push({ op: 'eq', field: 'ticketID', value: options.ticketId });
-      }
-      const pageSize = options.pageSize || (filters.length > 0 ? 25 : 10);
-      return await http.query<AutotaskTicketCharge>(
-        'TicketCharges',
-        filters.length > 0 ? filters : MATCH_ALL,
-        { maxRecords: pageSize }
-      );
+      if (options.ticketId != null) filters.push({ op: 'eq', field: 'ticketID', value: options.ticketId });
+      // Many tickets in one call (a billing check over a month's tickets), instead of one search per ticket.
+      const ids = Array.isArray(options.ticketIds) ? [...new Set(options.ticketIds.map(Number).filter((n) => Number.isInteger(n) && n > 0))].slice(0, 500) : [];
+      if (ids.length) filters.push({ op: 'in', field: 'ticketID', value: ids });
+      if (typeof options.isBilled === 'boolean') filters.push({ op: 'eq', field: 'isBilled', value: options.isBilled });
+      // datePurchased is the mirror's window field: a dated check is answered from Postgres.
+      if (options.purchasedAfter) filters.push({ op: 'gte', field: 'datePurchased', value: options.purchasedAfter });
+      const pageSize = options.pageSize || (filters.length > 0 ? (ids.length ? 500 : 25) : 10);
+      // queryPaged: served from the Postgres shadow when it mirrors TicketCharges and is fresh (0 Autotask calls).
+      const r = await this.queryPaged<AutotaskTicketCharge>('TicketCharges', filters.length > 0 ? filters : MATCH_ALL, { pageSize }, { defaultPageSize: 25, maxPageSize: 500 });
+      return r.items;
     } catch (error) {
       this.logger.error('Failed to search ticket charges:', error);
       throw error;
@@ -4283,7 +4287,6 @@ export class AutotaskService {
   }
 
   async searchConfigurationItems(options: AutotaskQueryOptions = {}): Promise<AutotaskConfigurationItem[]> {
-    const http = await this.ensureClient();
     try {
       this.logger.debug('Searching configuration items with options:', options);
       // Schema-shaped filter args were previously dropped — issue #105.
@@ -4308,14 +4311,16 @@ export class AutotaskService {
       if (o.searchTerm) {
         filters.push({ op: 'contains', field: 'referenceTitle', value: o.searchTerm });
       }
+      // Serial number (UPS / firewall alerts carry it): the serial field, or the reference number many techs put it in.
+      if (o.serialNumber != null && String(o.serialNumber).trim()) {
+        const sn = String(o.serialNumber).trim();
+        filters.push({ op: 'or', items: [{ op: 'eq', field: 'serialNumber', value: sn }, { op: 'eq', field: 'referenceNumber', value: sn }] });
+      }
       mergeFilterEscapeHatch(filters, options.filter);
 
       const pageSize = Math.min(options.pageSize || 25, 500);
-      return await http.query<AutotaskConfigurationItem>(
-        'ConfigurationItems',
-        filters.length > 0 ? filters : MATCH_ALL,
-        { maxRecords: pageSize }
-      );
+      // Served from the Postgres shadow when it mirrors ConfigurationItems and is fresh (0 Autotask calls).
+      return (await this.queryPaged<AutotaskConfigurationItem>('ConfigurationItems', filters.length > 0 ? filters : MATCH_ALL, { pageSize }, { defaultPageSize: 25, maxPageSize: 500 })).items;
     } catch (error) {
       this.logger.error('Failed to search configuration items:', error);
       throw error;
@@ -6448,7 +6453,6 @@ export class AutotaskService {
   }
 
   async searchExpenseItems(options: AutotaskQueryOptionsExtended = {}): Promise<AutotaskExpenseItem[]> {
-    const http = await this.ensureClient();
     try {
       this.logger.debug('Searching expense items with options:', options);
       const filters: QueryFilter[] = [];
@@ -6464,11 +6468,8 @@ export class AutotaskService {
       if (options.endDate) {
         filters.push({ field: 'expenseDate', op: 'lte', value: options.endDate });
       }
-      const items = await http.query<AutotaskExpenseItem>(
-        'ExpenseItems',
-        filters.length > 0 ? filters : MATCH_ALL,
-        { maxRecords: options.pageSize || 25 }
-      );
+      // Served from the Postgres shadow when a date range keeps it inside the mirrored window (0 Autotask calls).
+      const items = (await this.queryPaged<AutotaskExpenseItem>('ExpenseItems', filters.length > 0 ? filters : MATCH_ALL, { pageSize: options.pageSize || 25 }, { defaultPageSize: 25, maxPageSize: 500 })).items;
       this.logger.info(`Retrieved ${items.length} expense items`);
       return items;
     } catch (error) {
@@ -6591,7 +6592,6 @@ export class AutotaskService {
   }
 
   async searchOpportunities(options: AutotaskQueryOptionsExtended = {}): Promise<AutotaskOpportunity[]> {
-    const http = await this.ensureClient();
     try {
       this.logger.debug('Searching opportunities with options:', options);
       const filters: QueryFilter[] = [];
@@ -6604,11 +6604,8 @@ export class AutotaskService {
       if (options.status !== undefined) {
         filters.push({ field: 'status', op: 'eq', value: options.status });
       }
-      const items = await http.query<AutotaskOpportunity>(
-        'Opportunities',
-        filters.length > 0 ? filters : MATCH_ALL,
-        { maxRecords: options.pageSize || 25 }
-      );
+      // Served from the Postgres shadow when it mirrors Opportunities and is fresh (0 Autotask calls).
+      const items = (await this.queryPaged<AutotaskOpportunity>('Opportunities', filters.length > 0 ? filters : MATCH_ALL, { pageSize: options.pageSize || 25 }, { defaultPageSize: 25, maxPageSize: 500 })).items;
       this.logger.info(`Retrieved ${items.length} opportunities`);
       return items;
     } catch (error) {
