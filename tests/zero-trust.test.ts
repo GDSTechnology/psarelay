@@ -183,6 +183,15 @@ describe('HTTP endpoint', () => {
     expect((await init({ Authorization: `Bearer ${newToken()}` })).status).toBe(503);
     expect((await init()).status).toBe(200);
   });
+  test('/ in a browser: a short page saying what the address is — no version, no tenant details', async () => {
+    await start();
+    const r = await fetch(`http://127.0.0.1:${port}/`);
+    const html = await r.text();
+    expect(r.status).toBe(200);
+    expect(r.headers.get('content-type')).toMatch(/text\/html/);
+    expect(html).toContain('AI clients');
+    expect(html).not.toMatch(/0\.0\.0-test|api@example\.com/);
+  });
   test('/health: full on the private network, status + version only through a tunnel', async () => {
     await start();
     const inside = (await (await fetch(`http://127.0.0.1:${port}/health`)).json()) as any;
