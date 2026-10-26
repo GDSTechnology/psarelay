@@ -10,6 +10,18 @@ Each entry lists the merge commit and the PR number. Brief section references
 
 ---
 
+## Unreleased — Free trials and read-only plans in the licence
+
+- Licence claims `trial` and `readOnly` (a trial is read-only unless `readOnly: false`). A read-only plan
+  locks every write tool like a missing module (refused with how to choose a plan, listed as 🔒), stops the
+  bulk worker, and refuses turning **Allow write tools** on (`409 plan_read_only`; the setting shows `lockedByPlan`).
+- An ended trial has no grace period: every module is locked until a plan is chosen; discovery tools, setup and
+  the console stay open. The Plan view adds `trial`, `readOnly` and `writeLock`; the detail shows days left.
+- `PSARELAY_LICENSE_FILE`: the control plane can rewrite the licence file to renew, upgrade or end a trial
+  without a restart (re-read every minute). A missing, unreadable or empty file gives core only, never self-hosted.
+- `POST /api/plan/request` with `plan` sends the new `platform.plan_requested` notification (billing stays
+  with the provider: GDS invoices).
+
 ## Unreleased — Deploy runbook matches the live layout
 
 - `DEPLOY.md` described a `scripts/build-image.sh` + `docker run --name autotask-mcp`

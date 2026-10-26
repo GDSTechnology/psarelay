@@ -1,5 +1,6 @@
 // Security posture: what this instance exposes and who it trusts, as a checklist for the console (zero trust).
 
+import { entitlements } from '../entitlements/index.js';
 import { settingValue } from '../admin/settings.js';
 import { getImpersonationMode } from '../utils/request-context.js';
 import { isPermissionsEnabled } from '../utils/permissions.js';
@@ -38,7 +39,9 @@ export function securityPosture(i: PostureInput): PostureCheck[] {
     ? { id: 'raw', label: 'Raw API requests', status: 'warn', detail: 'autotask_raw_request may DELETE any record.', fix: 'Unset MCP_RAW_ALLOW_DELETE; use the typed delete tools (they are checked and audited).' }
     : { id: 'raw', label: 'Raw API requests', status: rawReadonly ? 'ok' : 'info', detail: rawReadonly ? 'autotask_raw_request is read-only.' : 'autotask_raw_request can create and update (not delete).', ...(rawReadonly ? {} : { fix: 'Set MCP_RAW_READONLY=true to allow only GET, or disable the tool group.' }) });
 
-  out.push(settingValue<boolean>('tools.writesEnabled', env) === false
+  out.push(entitlements().readOnly
+    ? { id: 'writes', label: 'Write tools', status: 'info', detail: 'Read-only plan: no tool can change Autotask until a plan with changes is chosen.' }
+    : settingValue<boolean>('tools.writesEnabled', env) === false
     ? { id: 'writes', label: 'Write tools', status: 'info', detail: 'Read-only: no tool can change Autotask.' }
     : { id: 'writes', label: 'Write tools', status: 'info', detail: 'Write tools are on; what they can change is bounded by the API user\'s Autotask security level.' });
 
