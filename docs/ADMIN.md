@@ -332,6 +332,13 @@ Needs `MCP_PUBLIC_URL` set to the **https** address clients use, and the Postgre
 Autotask user can sign in (Users page); a temporary password must be changed first. Sign-in failures count toward the
 same throttle as console sign-ins. Once every client signs in or has a token, turn on **Require an access token**.
 
+**Which AI clients may connect is the administrator's choice:** **Settings → Security → AI clients allowed to
+connect** — ChatGPT, Claude, Microsoft 365 Copilot, Grok, apps on a computer (Codex, Claude Code, VS Code), other MCP
+clients. All are allowed until one is unticked. A client that isn't ticked gets no card on Connect, can't register or
+sign in, and its existing connections end at their next refresh (within an hour; it has to connect again once
+allowed). A client is recognised by the address its sign-in returns to, which it can't fake. Access tokens for n8n
+and scripts are not affected.
+
 ### Access (tokens for the MCP endpoint)
 
 Admins only. **Zero trust: a call is only as trusted as the token it carries.** Create one token per client (n8n, a
@@ -697,5 +704,6 @@ commands:
 | `MCP_SECRET_KEY` | — (added by `update-psarelay`) | 32 random bytes (base64 or hex) that encrypt secrets saved in the console. Keep it: without it, saved credentials must be re-entered |
 | `MCP_REQUIRE_TOKEN` | `false` | Start value of **Settings → Security → Require an access token on /mcp** (the console setting wins once saved) |
 | `MCP_TRUST_UNVERIFIED_IDENTITY` | `false` | Start value of **Trust identities a client declares without a token** — keep off |
+| `MCP_AI_CLIENTS` | all | Start value of **AI clients allowed to connect**: comma list of `chatgpt`, `claude`, `copilot`, `grok`, `desktop`, `other` |
 | `MCP_CORS_ORIGINS` | claude.ai, chatgpt.com, chat.openai.com | Web origins that may call `/mcp` from a browser (comma-separated); `none` = no browser access. Never `*` |
 | `PSARELAY_LICENSE_PUBLIC_KEY` | — | Hosted only: the control plane's Ed25519 public key (PEM; `\n` escapes allowed) |

@@ -20,6 +20,10 @@ import { dummyPasswordHash, validUsername, verifyPassword } from '../admin/passw
 import { clearLoginFailures, loginThrottled, noteLoginFailure } from '../admin/server.js';
 import { tokenStore } from '../security/tokens.js';
 import { OAuthStore, randomToken, sha256, type OAuthClient, type TokenAuthMethod } from './store.js';
+import { allowedClientKinds, blockedRedirect, clientKindOf, clientLabel, type AiClientKind } from './clients.js';
+
+const notAllowed = (kind: AiClientKind) =>
+  `This PSArelay does not allow ${clientLabel(kind)} to connect. An administrator can allow it: console → Settings → Security → AI clients allowed to connect.`;
 import type { Logger } from '../utils/logger.js';
 
 export const ACCESS_TOKEN_SECONDS = 3600;
@@ -144,6 +148,8 @@ export async function handleOAuth(req: IncomingMessage, res: ServerResponse, url
     if (!uris.length || uris.length > 10 || !uris.every(redirectUriOk)) { oauthError(res, 400, 'invalid_redirect_uri', 'redirect_uris must be 1–10 https URLs (or loopback http for apps on this computer).'); return true; }
     // The name is shown on the sign-in page: drop control characters (it is also HTML-escaped there).
     const name = [...String(b.client_name ?? 'AI client')].filter((ch) => ch.charCodeAt(0) >= 32).join('').trim().slice(0, 80) || 'AI client';
+    const blocked = blockedRedirect(uris);
+    if (blocked) { oauthError(res, 400, 'invalid_redirect_uri', notAllowed(blocked.kind)); return true; }
     const method = registrationMethod(b.token_endpoint_auth_method);
     if (!method) { oauthError(res, 400, 'invalid_client_metadata', 'token_endpoint_auth_method must be none, client_secret_post or client_secret_basic.'); return true; }
     const c = await store.registerClient(name, uris, ip, method);
@@ -164,6 +170,8 @@ export async function handleOAuth(req: IncomingMessage, res: ServerResponse, url
     // Never redirect to an unregistered address: errors before this point are shown here, not sent back.
     if (!client) { page(res, 400, 'Unknown client', '<h1>Unknown client</h1><p>This sign-in link is not from a registered client. Start again from your AI client.</p>'); return true; }
     if (!client.redirectUris.includes(redirectUri)) { page(res, 400, 'Wrong return address', '<h1>Wrong return address</h1><p>The client asked to return to an address it did not register. Nothing was sent.</p>'); return true; }
+    const kind = clientKindOf(redirectUri);
+    if (!allowedClientKinds().includes(kind)) { page(res, 403, 'Not allowed', `<h1>${esc(clientLabel(kind))} is not allowed</h1><p>${esc(notAllowed(kind))}</p>`); return true; }
     const back = (params: Record<string, string>) => {
       const u = new URL(redirectUri);
       for (const [k, v] of Object.entries({ ...params, ...(state ? { state } : {}), iss: base.origin })) u.searchParams.set(k, v);
@@ -234,6 +242,8 @@ ${err ? `<p class="err">${esc(err)}</p>` : ''}
       if (!code || code.clientId !== client.clientId) { oauthError(res, 400, 'invalid_grant', 'The code is unknown, used or expired.'); return true; }
       if (code.redirectUri !== (q.get('redirect_uri') ?? '')) { oauthError(res, 400, 'invalid_grant', 'redirect_uri does not match the authorization request.'); return true; }
       if (!pkceOk(q.get('code_verifier') ?? '', code.codeChallenge)) { oauthError(res, 400, 'invalid_grant', 'PKCE verification failed.'); return true; }
+      const off = blockedRedirect([code.redirectUri]);
+      if (off) { oauthError(res, 400, 'invalid_grant', notAllowed(off.kind)); return true; }
       const out = await issue(code.userId, randomToken(16));
       if (!out) { oauthError(res, 400, 'invalid_grant', 'The person is disabled or no longer linked to an Autotask user.'); return true; }
       json(res, 200, out);
@@ -249,6 +259,14 @@ ${err ? `<p class="err">${esc(err)}</p>` : ''}
         tokens.clearCache();
         deps.logger.warn(`OAuth refresh token reused for ${client.clientName} — sign-in revoked`);
         oauthError(res, 400, 'invalid_grant', 'This refresh token was already used; the connection was revoked for safety. Connect again.');
+        return true;
+      }
+      const off = blockedRedirect(client.redirectUris);
+      if (off) {
+        // The administrator switched this client off: end its sign-in now rather than leave a refresh chain around.
+        await store.revokeFamily(row.family, 'client not allowed');
+        tokens.clearCache();
+        oauthError(res, 400, 'invalid_grant', notAllowed(off.kind));
         return true;
       }
       if (row.expired || !(await store.markRefreshUsed(t))) { oauthError(res, 400, 'invalid_grant', 'The refresh token has expired. Connect again.'); return true; }

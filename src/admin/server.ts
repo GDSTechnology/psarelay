@@ -377,7 +377,7 @@ export function adminHandler(deps: AdminDeps) {
     const shadowOn = !!getShadowRuntime();
     return SETTINGS.map((d) => ({
       key: d.key, group: d.group, label: d.label, description: d.description, type: d.type,
-      ...(d.min != null ? { min: d.min } : {}), ...(d.max != null ? { max: d.max } : {}), ...(d.choices ? { choices: d.choices } : {}),
+      ...(d.min != null ? { min: d.min } : {}), ...(d.max != null ? { max: d.max } : {}), ...(d.choices ? { choices: d.choices } : {}), ...(d.choiceLabels ? { choiceLabels: d.choiceLabels } : {}),
       value: settingValue(d.key, env), default: d.envDefault(env), overridden: isOverridden(d.key),
       available: d.requires === 'shadow' ? shadowOn : true,
     }));
@@ -772,7 +772,7 @@ export function adminHandler(deps: AdminDeps) {
       const reasons = [!base ? 'MCP_PUBLIC_URL is not set to the https address AI clients use (e.g. https://mcp.example.com)' : null, !deps.pool ? 'the Postgres layer is off' : null].filter(Boolean);
       const os = deps.pool ? new OAuthStore(deps.pool) : null;
       return send(res, 200, {
-        mcpUrl: base?.resource ?? mcpUrl(), signIn: { ready: !reasons.length, reasons },
+        mcpUrl: base?.resource ?? mcpUrl(), signIn: { ready: !reasons.length, reasons }, allowedClients: settingValue<string[]>('security.aiClients', env),
         linked: full?.autotaskResourceId != null ? { id: full.autotaskResourceId, name: full.autotaskResourceName } : null,
         connections: os && base ? await os.connectionsOf(u.id).catch(() => []) : [],
       });

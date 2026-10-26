@@ -12,6 +12,9 @@ user**: Autotask applies their own permissions to every change, and the console 
   `https://mcp.example.com`). Hosted PSArelay has this already.
 - **Link people to their Autotask user**: console → **Users** → *Autotask user* → **Link** (their Autotask email).
   Someone who is not linked can't sign in from an AI client.
+- **Choose which AI clients may connect**: console → **Settings → Security → AI clients allowed to connect**.
+  Nothing is forced on you: untick ChatGPT, Claude, Copilot, Grok or any other client and it can't sign in (its
+  existing connections end within an hour). People only see the clients you allow on their Connect page.
 
 ## ChatGPT
 
