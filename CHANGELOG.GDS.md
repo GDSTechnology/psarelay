@@ -10,6 +10,14 @@ Each entry lists the merge commit and the PR number. Brief section references
 
 ---
 
+## Unreleased — Console: free-trial strip and "Choose a plan"
+
+- A strip under the top bar on every page while the plan is a trial or read-only: days left, read-only, and
+  **Choose a plan**; an ended trial shows it in red.
+- Plan page: a "Keep PSArelay after your trial" panel (plan picker, note, **Request this plan** → `platform.plan_requested`).
+- Settings: **Allow write tools** is disabled with the reason while the plan is read-only; the dashboard no longer
+  shows the generic read-only banner for a read-only plan.
+
 ## Unreleased — Free trials and read-only plans in the licence
 
 - Licence claims `trial` and `readOnly` (a trial is read-only unless `readOnly: false`). A read-only plan

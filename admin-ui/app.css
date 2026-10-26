@@ -153,3 +153,10 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
 .login-foot { text-align: center; color: var(--muted); font-size: 13px; margin-top: 18px; }
 .login-foot a { color: var(--muted); }
 .login-foot a:hover { color: var(--accent); }
+
+/* Free trial / read-only plan strip under the top bar */
+.plan-strip { font-size: 14px; }
+.plan-strip .top-inner { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 8px; padding-bottom: 8px; }
+.plan-strip.warn { background: var(--warn-bg); color: var(--warn); }
+.plan-strip.bad { background: var(--bad-bg); color: var(--bad); }
+.plan-strip button { white-space: nowrap; }
