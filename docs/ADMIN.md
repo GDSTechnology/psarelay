@@ -320,10 +320,11 @@ variables instead** removes them.
 
 ### Connect (AI clients sign in)
 
-Every user: **Connect** shows one card per client — ChatGPT, Claude, Codex, n8n — with the address to paste and the
-steps. ChatGPT, Claude and Codex then open a **PSArelay sign-in page**; the person signs in with their console login
+Every user: **Connect** shows one card per client — ChatGPT, Claude, Microsoft 365 Copilot, Codex, n8n — with the
+address to paste and the steps. ChatGPT, Claude, Copilot and Codex then open a **PSArelay sign-in page**; the person signs in with their console login
 and the client works as their linked Autotask user. PSArelay is its own OAuth 2.1 authorization server (MCP
-authorization spec: protected-resource metadata, dynamic client registration, PKCE S256, resource-bound tokens):
+authorization spec: protected-resource metadata, dynamic client registration, PKCE S256, resource-bound tokens;
+Copilot registers as a confidential client and is issued a client secret, which Microsoft requires):
 access tokens last 1 hour and work only on this server; refresh tokens rotate (30 days) and reusing an old one
 disconnects that client. *Signed in as you* lists the person's connected clients with **Disconnect**.
 

@@ -768,6 +768,13 @@ async function connect(body) {
         'Paste the address above → Add → Connect — sign in with this console login.',
         'Team / Enterprise: an owner adds it for the organisation; each person connects and signs in as themselves.',
       ]),
+      card('Microsoft 365 Copilot', [
+        h('span', null, 'An administrator builds the agent once: VS Code with the ', link('https://aka.ms/M365AgentsToolkit', 'Microsoft 365 Agents Toolkit'), ' → ', h('strong', null, 'Create a New Agent/App → Declarative Agent → Add an Action → Start with an MCP Server'), '.'),
+        h('span', null, 'Paste the address above. Authentication: ', h('strong', null, 'OAuth (with dynamic registration)'), '. Name it ', h('strong', null, 'PSArelay'), '.'),
+        h('span', null, h('strong', null, 'Provision'), ', then open ', link('https://m365.cloud.microsoft/chat', 'Copilot'), ' → Agents → PSArelay → ', h('strong', null, 'Sign in'), ' with this console login.'),
+        h('span', null, 'For everyone: ', h('strong', null, 'Publish'), ', approve it in the Teams admin center (Manage apps) and assign it to your staff; each person signs in as themselves.'),
+        h('span', { class: 'muted' }, 'Free Copilot Chat seats may need pay-as-you-go billing turned on (Microsoft 365 admin center) to use agents with actions.'),
+      ]),
       card('Codex', [
         'In a terminal on your computer:',
         code(`codex mcp add psarelay --url ${url}`),
