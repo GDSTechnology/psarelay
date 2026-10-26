@@ -451,6 +451,14 @@ export class PsarelayServer {
         return;
       }
 
+      // A person opening the address in a browser: say what it is (no version, no tenant details — zero trust).
+      if (url.pathname === '/' && req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
+          'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'" });
+        res.end(MCP_ROOT_PAGE);
+        return;
+      }
+
       // 404 for everything else
       res.writeHead(404, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Not found', endpoints: ['/mcp', '/health'] }));
@@ -568,3 +576,11 @@ function refuseMcp(res: ServerResponse, status: number, message: string): void {
   res.writeHead(status, { 'Content-Type': 'application/json', ...(status === 401 ? { 'WWW-Authenticate': challenge } : {}) });
   res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32001, message }, id: null }));
 }
+
+/** What a browser sees at the MCP address: this is for AI clients, and where to go instead. */
+const MCP_ROOT_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PSArelay</title>
+<style>:root{color-scheme:light dark}body{font:16px/1.55 system-ui,sans-serif;margin:0;min-height:100vh;display:grid;place-items:center;background:#0f1115;color:#e7e9ee}
+@media (prefers-color-scheme:light){body{background:#f4f5f7;color:#16181d}main{background:#fff!important;border-color:#dfe2e8!important}}
+main{width:min(520px,calc(100vw - 32px));background:#171a21;border:1px solid #2a2f3a;border-radius:12px;padding:28px}h1{font-size:22px;margin:0 0 8px}a{color:#3b82f6}code{font-size:14px}</style></head>
+<body><main><h1>PSArelay</h1><p>This address is for <strong>AI clients</strong> — ChatGPT, Claude, Codex or n8n connect to <code>/mcp</code> here and sign in. There is nothing to open in a browser.</p>
+<p>To connect yours, open your PSArelay console → <strong>Connect</strong>, or read <a href="https://docs.psarelay.app/guides/connect/">Connect your AI</a>.</p></main></body></html>`;
