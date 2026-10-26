@@ -4,6 +4,15 @@ Task management: Task Master (`task-master` CLI; config in `.taskmaster/`).
 Workflow defaults (commits, changelog, memory) come from the global `~/.claude/CLAUDE.md`.
 
 ## Learnings
+## Learnings - 2026-10-26
+
+- **Microsoft 365 Copilot's MCP connector registers by DCR but refuses a registration without a `client_secret`**
+  (Microsoft Learn, "Configure dynamic client registration"); PKCE stays on. ChatGPT / Claude / Codex register as
+  public clients (`none`). `/oauth/register` now issues a secret for `client_secret_post` / `_basic` (required at
+  the token endpoint) and for an unspecified method (`auto`: checked only when sent, so no existing client breaks).
+  The auth config lives in each tenant's token store (Agents Toolkit creates it), so no prebuilt agent zip can
+  work across MSPs — each admin runs the toolkit once against their own address.
+
 ## Learnings - 2026-10-22
 
 - **`Projects` has no `contactID` in this tenant**: querying it → HTTP 500 "Unable to find contactID in the Project

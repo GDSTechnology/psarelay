@@ -780,29 +780,46 @@ async function connect(body) {
           try { const x = await api('POST', `/api/me/connections/${c.family}/revoke`, {}); toast(x.message); drawConns((await api('GET', '/api/connect')).connections); } catch (x) { toast(x.message); }
         } }, 'Disconnect'))))))) : h('p', { class: 'muted' }, 'No AI client is signed in as you yet.'));
   drawConns(r.connections);
+  const allowed = r.allowedClients || [];
+  const on = (k) => allowed.includes(k);
   fill(body,
     h('h1', null, 'Connect your AI'),
     h('p', { class: 'muted' }, 'Add PSArelay to your AI client, then sign in with this console login. The client then works as ', h('strong', null, r.linked?.name || 'your Autotask user'), ' — Autotask applies your own permissions. Nothing to install or configure on the server.'),
     !r.signIn.ready ? h('div', { class: 'banner warn' }, `Sign-in for AI clients is not available yet: ${r.signIn.reasons.join('; ')}. An administrator sets it; until then use an access token (Account page).`) : null,
     !r.linked ? h('div', { class: 'banner warn' }, 'Your console login is not linked to an Autotask user yet — ask an administrator (Users page). Signing in from an AI client is refused until then.') : null,
     h('section', { class: 'panel' }, h('h2', { style: 'margin-top:0' }, 'Your PSArelay address'), code(url)),
+    allowed.length < 6 ? h('p', { class: 'muted', style: 'font-size:13px' }, 'Only the AI clients your administrator allows are shown (Settings → Security → AI clients allowed to connect).') : null,
     h('div', { class: 'row', style: 'flex-wrap:wrap;gap:12px;align-items:stretch' },
-      card('ChatGPT', [
+      on('chatgpt') && card('ChatGPT', [
         h('span', null, link('https://chatgpt.com/#settings/Connectors', 'ChatGPT → Settings → Connectors'), ' → ', h('strong', null, 'Create'), ' (custom connector).'),
         h('span', null, 'Name it ', h('strong', null, 'PSArelay'), ', paste the address above, Authentication: ', h('strong', null, 'OAuth'), '.'),
         'Press Create / Connect — a PSArelay sign-in opens. Sign in with this console login.',
         'Business / Enterprise: a workspace admin can add it once and share it with the people who should have it; each person still signs in as themselves.',
       ]),
-      card('Claude', [
+      on('claude') && card('Claude', [
         h('span', null, link('https://claude.ai/settings/connectors', 'Claude → Settings → Connectors'), ' → ', h('strong', null, 'Add custom connector'), '.'),
         'Paste the address above → Add → Connect — sign in with this console login.',
         'Team / Enterprise: an owner adds it for the organisation; each person connects and signs in as themselves.',
       ]),
-      card('Codex', [
+      on('copilot') && card('Microsoft 365 Copilot', [
+        h('span', null, 'An administrator builds the agent once: VS Code with the ', link('https://aka.ms/M365AgentsToolkit', 'Microsoft 365 Agents Toolkit'), ' → ', h('strong', null, 'Create a New Agent/App → Declarative Agent → Add an Action → Start with an MCP Server'), '.'),
+        h('span', null, 'Paste the address above. Authentication: ', h('strong', null, 'OAuth (with dynamic registration)'), '. Name it ', h('strong', null, 'PSArelay'), '.'),
+        h('span', null, h('strong', null, 'Provision'), ', then open ', link('https://m365.cloud.microsoft/chat', 'Copilot'), ' → Agents → PSArelay → ', h('strong', null, 'Sign in'), ' with this console login.'),
+        h('span', null, 'For everyone: ', h('strong', null, 'Publish'), ', approve it in the Teams admin center (Manage apps) and assign it to your staff; each person signs in as themselves.'),
+        h('span', { class: 'muted' }, 'Free Copilot Chat seats may need pay-as-you-go billing turned on (Microsoft 365 admin center) to use agents with actions.'),
+      ]),
+      on('grok') && card('Grok', [
+        'If your Grok plan lets you add a remote MCP server (custom connector), add the address above with OAuth sign-in.',
+        'Sign in with this console login when the PSArelay page opens.',
+      ]),
+      on('desktop') && card('Codex', [
         'In a terminal on your computer:',
         code(`codex mcp add psarelay --url ${url}`),
         code('codex mcp login psarelay'),
         'The login opens a browser — sign in with this console login.',
+      ]),
+      on('other') && card('Other MCP clients', [
+        'Any client that supports remote MCP servers with OAuth sign-in: add the address above and sign in with this console login.',
       ]),
       card('n8n and scripts', [
         'They can\'t sign in interactively: create a token for them on your Account page (Connect your AI) — or an administrator creates a service token on the Access page.',
@@ -1209,11 +1226,11 @@ async function settings(body) {
     };
     const checks = (s) => {
       if (s.type !== 'string[]') return null;
-      const boxes = (s.choices || []).map((c) => h('label', null, h('input', { type: 'checkbox', value: c, checked: s.value.includes(c), disabled: !isAdmin }), c.replace(/_/g, ' ')));
+      const boxes = (s.choices || []).map((c) => h('label', null, h('input', { type: 'checkbox', value: c, checked: s.value.includes(c), disabled: !isAdmin }), (s.choiceLabels && s.choiceLabels[c]) || c.replace(/_/g, ' ')));
       return h('div', { class: 'checks' }, boxes, isAdmin ? h('div', null, h('button', { class: 'small', onclick: () => {
         const v = boxes.map((b) => b.querySelector('input')).filter((i) => i.checked).map((i) => i.value);
         save(s.key, { value: v });
-      } }, 'Save groups')) : null);
+      } }, s.choiceLabels ? 'Save' : 'Save groups')) : null);
     };
     body.replaceChildren(
       h('h1', null, 'Settings'),

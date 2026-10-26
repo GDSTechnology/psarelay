@@ -22,6 +22,8 @@ export interface SettingDef {
   max?: number;
   /** Allowed values for string[] settings (filled in by the console at startup). */
   choices?: string[];
+  /** Display names for the choices (default: the value with _ as spaces). */
+  choiceLabels?: Record<string, string>;
   /** For 'lines' settings: why a line is invalid, or null (default: pattern=name). */
   lineProblem?: (line: string) => string | null;
   /** Only meaningful when this subsystem is running. */
@@ -42,6 +44,17 @@ export const SETTINGS: SettingDef[] = [
     key: 'security.trustUnverifiedIdentity', group: 'Security', type: 'boolean', label: 'Trust identities a client declares without a token',
     description: 'Off (recommended) = a call that is not backed by a token naming a person (or a delegate token) runs as the API user: the email a client puts in its request is recorded but never used to write as that person (Autotask impersonation) — any client could claim to be anyone. On = the old behaviour: caller-mode impersonation trusts the declared email.',
     envDefault: (env) => boolEnv(env.MCP_TRUST_UNVERIFIED_IDENTITY, false),
+  },
+  {
+    key: 'security.aiClients', group: 'Security', type: 'string[]', label: 'AI clients allowed to connect',
+    description: 'Which AI clients may sign in to PSArelay. A client that is not ticked gets no card on the Connect page, cannot register or sign in, and its existing connections stop at their next refresh (within an hour). Recognised by where its sign-in returns to. Access tokens you create for n8n and scripts are not affected.',
+    choices: ['chatgpt', 'claude', 'copilot', 'grok', 'desktop', 'other'],
+    choiceLabels: { chatgpt: 'ChatGPT', claude: 'Claude', copilot: 'Microsoft 365 Copilot', grok: 'Grok', desktop: 'Apps on a computer (Codex, Claude Code, VS Code)', other: 'Other MCP clients' },
+    envDefault: (env) => {
+      const all = ['chatgpt', 'claude', 'copilot', 'grok', 'desktop', 'other'];
+      const list = (env.MCP_AI_CLIENTS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter((s) => all.includes(s));
+      return list.length ? [...new Set(list)].sort() : [...all].sort();
+    },
   },
   {
     key: 'tools.writesEnabled', group: 'Tools', type: 'boolean', label: 'Allow write tools',

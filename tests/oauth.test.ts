@@ -3,7 +3,10 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { handleOAuth, oauthBase, pkceOk, redirectUriOk, resourceMetadataUrl } from '../src/oauth/server';
+import { clientAuthenticated, clientCredentials, handleOAuth, oauthBase, pkceOk, redirectUriOk, registrationMethod, resourceMetadataUrl } from '../src/oauth/server';
+import { sha256 } from '../src/oauth/store';
+import { blockedRedirect, clientKindOf } from '../src/oauth/clients';
+import { _resetSettings, setOverride, settingValue } from '../src/admin/settings';
 import { Logger } from '../src/utils/logger';
 
 describe('where sign-in is offered', () => {
@@ -30,6 +33,69 @@ describe('PKCE S256', () => {
     expect(pkceOk(v, c)).toBe(true);
     expect(pkceOk(randomBytes(32).toString('base64url'), c)).toBe(false);
     expect(pkceOk('short', c)).toBe(false);
+  });
+});
+
+describe('confidential clients (Microsoft 365 Copilot needs a client secret issued at registration)', () => {
+  test('the method a registration asks for', () => {
+    expect(registrationMethod('none')).toBe('none');
+    expect(registrationMethod('client_secret_post')).toBe('client_secret_post');
+    expect(registrationMethod('client_secret_basic')).toBe('client_secret_basic');
+    expect(registrationMethod(undefined)).toBe('auto');
+    expect(registrationMethod('')).toBe('auto');
+    expect(registrationMethod('private_key_jwt')).toBeNull();
+  });
+
+  test('credentials from HTTP Basic (form-urlencoded parts) or the body', () => {
+    const basic = 'Basic ' + Buffer.from('psr_client_a%3Ab:s%2Bcret').toString('base64');
+    expect(clientCredentials(basic, new URLSearchParams())).toEqual({ clientId: 'psr_client_a:b', secret: 's+cret', via: 'basic' });
+    expect(clientCredentials(undefined, new URLSearchParams({ client_id: 'c1', client_secret: 'x' }))).toEqual({ clientId: 'c1', secret: 'x', via: 'post' });
+    expect(clientCredentials(undefined, new URLSearchParams({ client_id: 'c1' }))).toEqual({ clientId: 'c1', secret: null, via: null });
+    expect(clientCredentials('Bearer abc', new URLSearchParams({ client_id: 'c1' })).clientId).toBe('c1');
+  });
+
+  test('a public client needs no secret; an issued secret must match; "auto" checks it only when sent', () => {
+    const hash = sha256('psr_cs_right');
+    expect(clientAuthenticated({ tokenAuthMethod: 'none', secretHash: null }, null)).toBe(true);
+    expect(clientAuthenticated({ tokenAuthMethod: 'none', secretHash: null }, 'anything')).toBe(true);
+    for (const m of ['client_secret_post', 'client_secret_basic'] as const) {
+      expect(clientAuthenticated({ tokenAuthMethod: m, secretHash: hash }, 'psr_cs_right')).toBe(true);
+      expect(clientAuthenticated({ tokenAuthMethod: m, secretHash: hash }, 'psr_cs_wrong')).toBe(false);
+      expect(clientAuthenticated({ tokenAuthMethod: m, secretHash: hash }, null)).toBe(false);
+    }
+    expect(clientAuthenticated({ tokenAuthMethod: 'auto', secretHash: hash }, null)).toBe(true);
+    expect(clientAuthenticated({ tokenAuthMethod: 'auto', secretHash: hash }, 'psr_cs_wrong')).toBe(false);
+  });
+
+  test('the Copilot redirect address may be registered', () => {
+    expect(redirectUriOk('https://teams.microsoft.com/api/platform/v1.0/oAuthRedirect')).toBe(true);
+  });
+});
+
+describe('which AI clients may connect (the administrator chooses)', () => {
+  afterEach(() => _resetSettings());
+
+  test('a client is recognised by where its sign-in returns to', () => {
+    expect(clientKindOf('https://chatgpt.com/connector_platform_oauth_redirect')).toBe('chatgpt');
+    expect(clientKindOf('https://claude.ai/api/mcp/auth_callback')).toBe('claude');
+    expect(clientKindOf('https://teams.microsoft.com/api/platform/v1.0/oAuthRedirect')).toBe('copilot');
+    expect(clientKindOf('https://grok.com/connectors/callback')).toBe('grok');
+    expect(clientKindOf('http://127.0.0.1:1455/callback')).toBe('desktop');
+    expect(clientKindOf('https://example.org/cb')).toBe('other');
+    // Look-alike hosts are not the real client.
+    expect(clientKindOf('https://chatgpt.com.evil.example/cb')).toBe('other');
+    expect(clientKindOf('https://notclaude.ai/cb')).toBe('other');
+    expect(clientKindOf('https://teams.microsoft.com.evil.example/cb')).toBe('other');
+  });
+
+  test('every client is allowed until the administrator unticks one; MCP_AI_CLIENTS sets the default', () => {
+    expect(settingValue<string[]>('security.aiClients', {} as NodeJS.ProcessEnv)).toEqual(['chatgpt', 'claude', 'copilot', 'desktop', 'grok', 'other']);
+    expect(settingValue<string[]>('security.aiClients', { MCP_AI_CLIENTS: 'Claude, copilot, bogus' } as NodeJS.ProcessEnv)).toEqual(['claude', 'copilot']);
+    expect(blockedRedirect(['https://claude.ai/api/mcp/auth_callback'])).toBeNull();
+    setOverride('security.aiClients', ['claude', 'copilot']);
+    expect(blockedRedirect(['https://claude.ai/api/mcp/auth_callback', 'https://teams.microsoft.com/api/platform/v1.0/oAuthRedirect'])).toBeNull();
+    expect(blockedRedirect(['https://claude.ai/api/mcp/auth_callback', 'https://chatgpt.com/cb'])).toEqual({ uri: 'https://chatgpt.com/cb', kind: 'chatgpt' });
+    expect(() => setOverride('security.aiClients', ['claude', 'bard'])).toThrow(/Unknown value/);
   });
 });
 

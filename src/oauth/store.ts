@@ -7,7 +7,9 @@ import { createHash, randomBytes } from 'node:crypto';
 export const sha256 = (s: string) => createHash('sha256').update(s, 'utf8').digest('hex');
 export const randomToken = (bytes = 32) => randomBytes(bytes).toString('base64url');
 
-export interface OAuthClient { clientId: string; clientName: string; redirectUris: string[]; createdAt: string; lastUsedAt: string | null }
+/** How a client proves itself at the token endpoint (migration 0022). 'auto' = it did not say: a secret was issued and is checked when sent. */
+export type TokenAuthMethod = 'none' | 'client_secret_post' | 'client_secret_basic' | 'auto';
+export interface OAuthClient { clientId: string; clientName: string; redirectUris: string[]; createdAt: string; lastUsedAt: string | null; tokenAuthMethod: TokenAuthMethod; secretHash: string | null }
 export interface OAuthCode { clientId: string; userId: number; redirectUri: string; codeChallenge: string; resource: string }
 export interface RefreshRow { family: string; clientId: string; userId: number; resource: string; used: boolean; revoked: boolean; expired: boolean }
 
@@ -16,17 +18,21 @@ const iso = (d: unknown) => (d ? new Date(d as string).toISOString() : null);
 export class OAuthStore {
   constructor(private readonly pool: Pool) {}
 
-  async registerClient(name: string, redirectUris: string[], ip: string | null): Promise<OAuthClient> {
+  /** Register a client; a confidential one gets a secret, returned only here. */
+  async registerClient(name: string, redirectUris: string[], ip: string | null, method: TokenAuthMethod = 'none'): Promise<OAuthClient & { secret: string | null }> {
     const id = 'psr_client_' + randomToken(18);
-    const r = await this.pool.query('INSERT INTO oauth_client (client_id, client_name, redirect_uris, created_ip) VALUES ($1, $2, $3, $4) RETURNING *', [id, name, JSON.stringify(redirectUris), ip]);
-    return this.client(r.rows[0]);
+    const secret = method === 'none' ? null : 'psr_cs_' + randomToken(32);
+    const r = await this.pool.query('INSERT INTO oauth_client (client_id, client_name, redirect_uris, created_ip, token_auth_method, client_secret_hash) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+      [id, name, JSON.stringify(redirectUris), ip, method, secret ? sha256(secret) : null]);
+    return { ...this.client(r.rows[0]), secret };
   }
   async getClient(id: string): Promise<OAuthClient | null> {
     const r = await this.pool.query('SELECT * FROM oauth_client WHERE client_id = $1', [id]);
     return r.rows[0] ? this.client(r.rows[0]) : null;
   }
   private client(x: Record<string, any>): OAuthClient {
-    return { clientId: x.client_id, clientName: x.client_name, redirectUris: Array.isArray(x.redirect_uris) ? x.redirect_uris : JSON.parse(x.redirect_uris), createdAt: iso(x.created_at)!, lastUsedAt: iso(x.last_used_at) };
+    return { clientId: x.client_id, clientName: x.client_name, redirectUris: Array.isArray(x.redirect_uris) ? x.redirect_uris : JSON.parse(x.redirect_uris), createdAt: iso(x.created_at)!, lastUsedAt: iso(x.last_used_at),
+      tokenAuthMethod: (x.token_auth_method ?? 'none') as TokenAuthMethod, secretHash: x.client_secret_hash ?? null };
   }
   /** Registrations from one address in the last hour (dynamic registration is open by design — keep it bounded). */
   async recentRegistrations(ip: string): Promise<number> {

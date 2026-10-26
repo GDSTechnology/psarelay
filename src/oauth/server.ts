@@ -2,7 +2,8 @@
 //
 //   /.well-known/oauth-protected-resource   RFC 9728 — which authorization server protects /mcp
 //   /.well-known/oauth-authorization-server RFC 8414 — the endpoints below
-//   POST /oauth/register                     RFC 7591 — dynamic client registration (ChatGPT, Claude, Codex do this)
+//   POST /oauth/register                     RFC 7591 — dynamic client registration (ChatGPT, Claude, Codex: public;
+//                                            Microsoft 365 Copilot: confidential — it needs a client secret issued)
 //   GET|POST /oauth/authorize                the person signs in with their console login and approves the client
 //   POST /oauth/token                        code (+ PKCE S256) → access token; refresh tokens rotate
 //
@@ -18,7 +19,11 @@ import { AdminStore } from '../admin/store.js';
 import { dummyPasswordHash, validUsername, verifyPassword } from '../admin/passwords.js';
 import { clearLoginFailures, loginThrottled, noteLoginFailure } from '../admin/server.js';
 import { tokenStore } from '../security/tokens.js';
-import { OAuthStore, randomToken } from './store.js';
+import { OAuthStore, randomToken, sha256, type OAuthClient, type TokenAuthMethod } from './store.js';
+import { allowedClientKinds, blockedRedirect, clientKindOf, clientLabel, type AiClientKind } from './clients.js';
+
+const notAllowed = (kind: AiClientKind) =>
+  `This PSArelay does not allow ${clientLabel(kind)} to connect. An administrator can allow it: console → Settings → Security → AI clients allowed to connect.`;
 import type { Logger } from '../utils/logger.js';
 
 export const ACCESS_TOKEN_SECONDS = 3600;
@@ -48,6 +53,35 @@ export function redirectUriOk(u: string): boolean {
 export function pkceOk(verifier: string, challenge: string): boolean {
   if (!/^[A-Za-z0-9._~-]{43,128}$/.test(verifier)) return false;
   const a = Buffer.from(createHash('sha256').update(verifier).digest('base64url')), b = Buffer.from(challenge);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+/**
+ * The token-endpoint method a registration asks for (RFC 7591 token_endpoint_auth_method): 'none' = public client
+ * (ChatGPT, Claude, Codex), a secret method = confidential (Microsoft 365 Copilot accepts only a registration that
+ * issues a secret), absent = 'auto' (a secret is issued and checked when sent). null = a method this server lacks.
+ */
+export function registrationMethod(requested: unknown): TokenAuthMethod | null {
+  if (requested == null || requested === '') return 'auto';
+  return requested === 'none' || requested === 'client_secret_post' || requested === 'client_secret_basic' ? requested : null;
+}
+/** The client id and secret a token request carries: HTTP Basic (RFC 6749 §2.3.1, form-urlencoded parts) or the body. */
+export function clientCredentials(authorization: string | undefined, q: URLSearchParams): { clientId: string; secret: string | null; via: 'basic' | 'post' | null } {
+  const m = /^Basic\s+([A-Za-z0-9+/=]+)\s*$/i.exec(authorization ?? '');
+  if (m) {
+    const raw = Buffer.from(m[1]!, 'base64').toString('utf8'), i = raw.indexOf(':');
+    if (i > 0) {
+      const dec = (s: string) => { try { return decodeURIComponent(s.replace(/\+/g, ' ')); } catch { return s; } };
+      return { clientId: dec(raw.slice(0, i)), secret: dec(raw.slice(i + 1)), via: 'basic' };
+    }
+  }
+  const secret = q.get('client_secret');
+  return { clientId: q.get('client_id') ?? '', secret: secret || null, via: secret ? 'post' : null };
+}
+/** Whether a token request proves the client: a public client needs nothing (PKCE does it); a secret, when issued, must match. */
+export function clientAuthenticated(client: Pick<OAuthClient, 'tokenAuthMethod' | 'secretHash'>, secret: string | null): boolean {
+  if (!client.secretHash) return true;
+  if (secret == null) return client.tokenAuthMethod === 'auto';
+  const a = Buffer.from(sha256(secret)), b = Buffer.from(client.secretHash);
   return a.length === b.length && timingSafeEqual(a, b);
 }
 const sameResource = (a: string, b: string) => a.replace(/\/+$/, '').toLowerCase() === b.replace(/\/+$/, '').toLowerCase();
@@ -98,7 +132,7 @@ export async function handleOAuth(req: IncomingMessage, res: ServerResponse, url
     json(res, 200, {
       issuer: base.origin, authorization_endpoint: `${base.origin}/oauth/authorize`, token_endpoint: `${base.origin}/oauth/token`, registration_endpoint: `${base.origin}/oauth/register`,
       response_types_supported: ['code'], grant_types_supported: ['authorization_code', 'refresh_token'], code_challenge_methods_supported: ['S256'],
-      token_endpoint_auth_methods_supported: ['none'], scopes_supported: ['mcp'],
+      token_endpoint_auth_methods_supported: ['none', 'client_secret_post', 'client_secret_basic'], scopes_supported: ['mcp'],
     });
     return true;
   }
@@ -114,9 +148,17 @@ export async function handleOAuth(req: IncomingMessage, res: ServerResponse, url
     if (!uris.length || uris.length > 10 || !uris.every(redirectUriOk)) { oauthError(res, 400, 'invalid_redirect_uri', 'redirect_uris must be 1–10 https URLs (or loopback http for apps on this computer).'); return true; }
     // The name is shown on the sign-in page: drop control characters (it is also HTML-escaped there).
     const name = [...String(b.client_name ?? 'AI client')].filter((ch) => ch.charCodeAt(0) >= 32).join('').trim().slice(0, 80) || 'AI client';
-    const c = await store.registerClient(name, uris, ip);
-    deps.logger.info(`OAuth client registered: ${name} (${c.clientId}) → ${uris.map((u) => new URL(u).host).join(', ')}`);
-    json(res, 201, { client_id: c.clientId, client_name: c.clientName, redirect_uris: c.redirectUris, grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], token_endpoint_auth_method: 'none', client_id_issued_at: Math.floor(Date.parse(c.createdAt) / 1000) });
+    const blocked = blockedRedirect(uris);
+    if (blocked) { oauthError(res, 400, 'invalid_redirect_uri', notAllowed(blocked.kind)); return true; }
+    const method = registrationMethod(b.token_endpoint_auth_method);
+    if (!method) { oauthError(res, 400, 'invalid_client_metadata', 'token_endpoint_auth_method must be none, client_secret_post or client_secret_basic.'); return true; }
+    const c = await store.registerClient(name, uris, ip, method);
+    deps.logger.info(`OAuth client registered: ${name} (${c.clientId}, ${method}) → ${uris.map((u) => new URL(u).host).join(', ')}`);
+    json(res, 201, {
+      client_id: c.clientId, client_name: c.clientName, redirect_uris: c.redirectUris, grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'],
+      token_endpoint_auth_method: method === 'auto' ? 'client_secret_post' : method, client_id_issued_at: Math.floor(Date.parse(c.createdAt) / 1000),
+      ...(c.secret ? { client_secret: c.secret, client_secret_expires_at: 0 } : {}),
+    });
     return true;
   }
 
@@ -128,6 +170,8 @@ export async function handleOAuth(req: IncomingMessage, res: ServerResponse, url
     // Never redirect to an unregistered address: errors before this point are shown here, not sent back.
     if (!client) { page(res, 400, 'Unknown client', '<h1>Unknown client</h1><p>This sign-in link is not from a registered client. Start again from your AI client.</p>'); return true; }
     if (!client.redirectUris.includes(redirectUri)) { page(res, 400, 'Wrong return address', '<h1>Wrong return address</h1><p>The client asked to return to an address it did not register. Nothing was sent.</p>'); return true; }
+    const kind = clientKindOf(redirectUri);
+    if (!allowedClientKinds().includes(kind)) { page(res, 403, 'Not allowed', `<h1>${esc(clientLabel(kind))} is not allowed</h1><p>${esc(notAllowed(kind))}</p>`); return true; }
     const back = (params: Record<string, string>) => {
       const u = new URL(redirectUri);
       for (const [k, v] of Object.entries({ ...params, ...(state ? { state } : {}), iss: base.origin })) u.searchParams.set(k, v);
@@ -175,9 +219,9 @@ ${err ? `<p class="err">${esc(err)}</p>` : ''}
     let q: URLSearchParams;
     try { const raw = await body(req); q = (req.headers['content-type'] ?? '').includes('application/json') ? new URLSearchParams(JSON.parse(raw)) : new URLSearchParams(raw); }
     catch { oauthError(res, 400, 'invalid_request', 'Malformed token request.'); return true; }
-    const clientId = q.get('client_id') ?? '';
-    const client = clientId ? await store.getClient(clientId) : null;
-    if (!client) { oauthError(res, 401, 'invalid_client', 'Unknown client.'); return true; }
+    const cred = clientCredentials(req.headers.authorization, q);
+    const client = cred.clientId ? await store.getClient(cred.clientId) : null;
+    if (!client || !clientAuthenticated(client, cred.secret)) { oauthError(res, 401, 'invalid_client', client ? 'Client authentication failed.' : 'Unknown client.'); return true; }
     const resource = q.get('resource');
     if (resource && !sameResource(resource, base.resource)) { oauthError(res, 400, 'invalid_target', `Tokens are issued only for ${base.resource}.`); return true; }
     const admin = new AdminStore(deps.pool!);
@@ -198,6 +242,8 @@ ${err ? `<p class="err">${esc(err)}</p>` : ''}
       if (!code || code.clientId !== client.clientId) { oauthError(res, 400, 'invalid_grant', 'The code is unknown, used or expired.'); return true; }
       if (code.redirectUri !== (q.get('redirect_uri') ?? '')) { oauthError(res, 400, 'invalid_grant', 'redirect_uri does not match the authorization request.'); return true; }
       if (!pkceOk(q.get('code_verifier') ?? '', code.codeChallenge)) { oauthError(res, 400, 'invalid_grant', 'PKCE verification failed.'); return true; }
+      const off = blockedRedirect([code.redirectUri]);
+      if (off) { oauthError(res, 400, 'invalid_grant', notAllowed(off.kind)); return true; }
       const out = await issue(code.userId, randomToken(16));
       if (!out) { oauthError(res, 400, 'invalid_grant', 'The person is disabled or no longer linked to an Autotask user.'); return true; }
       json(res, 200, out);
@@ -213,6 +259,14 @@ ${err ? `<p class="err">${esc(err)}</p>` : ''}
         tokens.clearCache();
         deps.logger.warn(`OAuth refresh token reused for ${client.clientName} — sign-in revoked`);
         oauthError(res, 400, 'invalid_grant', 'This refresh token was already used; the connection was revoked for safety. Connect again.');
+        return true;
+      }
+      const off = blockedRedirect(client.redirectUris);
+      if (off) {
+        // The administrator switched this client off: end its sign-in now rather than leave a refresh chain around.
+        await store.revokeFamily(row.family, 'client not allowed');
+        tokens.clearCache();
+        oauthError(res, 400, 'invalid_grant', notAllowed(off.kind));
         return true;
       }
       if (row.expired || !(await store.markRefreshUsed(t))) { oauthError(res, 400, 'invalid_grant', 'The refresh token has expired. Connect again.'); return true; }

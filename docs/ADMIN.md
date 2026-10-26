@@ -320,16 +320,24 @@ variables instead** removes them.
 
 ### Connect (AI clients sign in)
 
-Every user: **Connect** shows one card per client — ChatGPT, Claude, Codex, n8n — with the address to paste and the
-steps. ChatGPT, Claude and Codex then open a **PSArelay sign-in page**; the person signs in with their console login
+Every user: **Connect** shows one card per client — ChatGPT, Claude, Microsoft 365 Copilot, Codex, n8n — with the
+address to paste and the steps. ChatGPT, Claude, Copilot and Codex then open a **PSArelay sign-in page**; the person signs in with their console login
 and the client works as their linked Autotask user. PSArelay is its own OAuth 2.1 authorization server (MCP
-authorization spec: protected-resource metadata, dynamic client registration, PKCE S256, resource-bound tokens):
+authorization spec: protected-resource metadata, dynamic client registration, PKCE S256, resource-bound tokens;
+Copilot registers as a confidential client and is issued a client secret, which Microsoft requires):
 access tokens last 1 hour and work only on this server; refresh tokens rotate (30 days) and reusing an old one
 disconnects that client. *Signed in as you* lists the person's connected clients with **Disconnect**.
 
 Needs `MCP_PUBLIC_URL` set to the **https** address clients use, and the Postgres layer. Only users linked to an
 Autotask user can sign in (Users page); a temporary password must be changed first. Sign-in failures count toward the
 same throttle as console sign-ins. Once every client signs in or has a token, turn on **Require an access token**.
+
+**Which AI clients may connect is the administrator's choice:** **Settings → Security → AI clients allowed to
+connect** — ChatGPT, Claude, Microsoft 365 Copilot, Grok, apps on a computer (Codex, Claude Code, VS Code), other MCP
+clients. All are allowed until one is unticked. A client that isn't ticked gets no card on Connect, can't register or
+sign in, and its existing connections end at their next refresh (within an hour; it has to connect again once
+allowed). A client is recognised by the address its sign-in returns to, which it can't fake. Access tokens for n8n
+and scripts are not affected.
 
 ### Access (tokens for the MCP endpoint)
 
@@ -699,5 +707,6 @@ commands:
 | `MCP_SECRET_KEY` | — (added by `update-psarelay`) | 32 random bytes (base64 or hex) that encrypt secrets saved in the console. Keep it: without it, saved credentials must be re-entered |
 | `MCP_REQUIRE_TOKEN` | `false` | Start value of **Settings → Security → Require an access token on /mcp** (the console setting wins once saved) |
 | `MCP_TRUST_UNVERIFIED_IDENTITY` | `false` | Start value of **Trust identities a client declares without a token** — keep off |
+| `MCP_AI_CLIENTS` | all | Start value of **AI clients allowed to connect**: comma list of `chatgpt`, `claude`, `copilot`, `grok`, `desktop`, `other` |
 | `MCP_CORS_ORIGINS` | claude.ai, chatgpt.com, chat.openai.com | Web origins that may call `/mcp` from a browser (comma-separated); `none` = no browser access. Never `*` |
 | `PSARELAY_LICENSE_PUBLIC_KEY` | — | Hosted only: the control plane's Ed25519 public key (PEM; `\n` escapes allowed) |
