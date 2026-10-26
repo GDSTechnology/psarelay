@@ -28,7 +28,7 @@ import { isPgEnabled, loadPgFlags } from '../db/config.js';
 import { getShadowRuntime } from '../db/shadow-runtime.js';
 import { lastSetupReport, mcpUrl, runSetupCheck } from '../setup/run.js';
 import { MODULES } from '../setup/check.js';
-import { entitlementView, lockedReason, MODULE_INFO } from '../entitlements/index.js';
+import { entitlements, entitlementView, lockedReason, MODULE_INFO, planWriteLock } from '../entitlements/index.js';
 import { usageSnapshot } from '../services/http-cache.js';
 import { TOOL_DEFINITIONS } from '../handlers/tool.definitions.js';
 import type { AutotaskService } from '../services/autotask.service.js';
@@ -380,6 +380,8 @@ export function adminHandler(deps: AdminDeps) {
       ...(d.min != null ? { min: d.min } : {}), ...(d.max != null ? { max: d.max } : {}), ...(d.choices ? { choices: d.choices } : {}),
       value: settingValue(d.key, env), default: d.envDefault(env), overridden: isOverridden(d.key),
       available: d.requires === 'shadow' ? shadowOn : true,
+      // A read-only plan or trial overrides "Allow write tools"; the console shows why the switch has no effect.
+      ...(d.key === 'tools.writesEnabled' && planWriteLock() ? { lockedByPlan: planWriteLock() } : {}),
     }));
   };
 
@@ -431,7 +433,7 @@ export function adminHandler(deps: AdminDeps) {
       tools: {
         total: TOOL_DEFINITIONS.length, enabled: enabledTools.length,
         writeTools: TOOL_DEFINITIONS.filter((t) => isWriteTool(t.name)).length,
-        writesEnabled: settingValue<boolean>('tools.writesEnabled', env), disabledCategories: settingValue<string[]>('tools.disabledCategories', env),
+        writesEnabled: settingValue<boolean>('tools.writesEnabled', env) && !entitlements().readOnly, planReadOnly: entitlements().readOnly, disabledCategories: settingValue<string[]>('tools.disabledCategories', env),
       },
       secrets: {
         autotaskCredentials: !!(env.AUTOTASK_USERNAME && env.AUTOTASK_SECRET && env.AUTOTASK_INTEGRATION_CODE),
@@ -577,6 +579,8 @@ export function adminHandler(deps: AdminDeps) {
       } else {
         let v: unknown;
         try { v = coerceSetting(key, b.value); } catch (e) { throw new HttpError(400, (e as Error).message, 'invalid'); }
+        const planLock = key === 'tools.writesEnabled' && v === true ? planWriteLock() : null;
+        if (planLock) throw new HttpError(409, planLock, 'plan_read_only');
         await store.saveSetting(key, v, ctx.user!.username);
         setOverride(key, v);
       }
@@ -815,6 +819,15 @@ export function adminHandler(deps: AdminDeps) {
     if (path === '/api/plan/request' && method === 'POST') {
       const u = requireUser(ctx);
       const b = await readJson(req, 4 * 1024);
+      // "Choose a plan" (trial or read-only plan) — billed by the provider, so this only tells them.
+      if (typeof b.plan === 'string' && b.plan.trim()) {
+        const plan = b.plan.trim().slice(0, 40);
+        const v = entitlementView();
+        const note = String(b.note ?? '').slice(0, 500);
+        notify({ type: 'platform.plan_requested', severity: 'info', title: `Plan requested: ${plan}`, detail: `${u.username} asked for the ${plan} plan${v.customer ? ` (${v.customer}, now ${v.trial ? 'on a free trial' : `plan ${v.planName}`})` : ''}.${note ? ` Note: ${note}` : ''}`, fields: { plan, customer: v.customer ?? '', current: v.plan ?? '', trial: String(v.trial), by: u.username }, dedupeKey: `plan:${plan}:${u.username}:${new Date().toISOString().slice(0, 10)}` });
+        void log(ctx, 'plan.plan_requested', { plan, note: note ? 'yes' : 'no' });
+        return send(res, 200, { ok: true, message: v.upgradeUrl ? `Request sent. We'll be in touch to set up billing; you can also see plans at ${v.upgradeUrl}.` : "Request sent. We'll be in touch to set up billing." });
+      }
       const module = String(b.module ?? '');
       if (!MODULE_INFO[module]) throw new HttpError(400, 'Unknown module.', 'invalid');
       const v = entitlementView();

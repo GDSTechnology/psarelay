@@ -5,7 +5,7 @@
 import { TOOL_CATEGORIES, TOOL_DEFINITIONS } from '../handlers/tool.definitions.js';
 import { isMutatingTool } from '../utils/idempotency.js';
 import { settingValue } from './settings.js';
-import { lockedReason, moduleOf } from '../entitlements/index.js';
+import { lockedReason, moduleOf, planWriteLock } from '../entitlements/index.js';
 
 /** Discovery / routing meta-tools are never switched off — agents need them to see what is available. */
 const ALWAYS_ON = new Set(['autotask_list_categories', 'autotask_list_category_tools', 'autotask_execute_tool', 'autotask_router', 'autotask_test_connection', 'autotask_whoami', 'autotask_report_gap']); // a missing capability can always be reported
@@ -54,7 +54,11 @@ export const toolAllowed = (name: string): boolean => toolBlockReason(name) === 
 /** The module a tool belongs to. */
 export const toolModule = (name: string): string => moduleOf(name, categoriesOf.get(name) ?? []);
 /** Why the account's plan doesn't include this tool, or null. */
-export function toolLockedReason(name: string): string | null { return ALWAYS_ON.has(name) ? null : lockedReason(toolModule(name)); }
+export function toolLockedReason(name: string): string | null {
+  if (ALWAYS_ON.has(name)) return null;
+  // A read-only plan or trial locks writes like a missing module, so clients are told how to unlock them.
+  return lockedReason(toolModule(name)) ?? (isWriteTool(name) ? planWriteLock(name) : null);
+}
 /** Listed to clients: allowed tools, plus plan-locked ones (marked) unless the console hides them — they show what an upgrade adds. */
 export function toolListed(name: string): boolean {
   if (toolAllowed(name)) return true;

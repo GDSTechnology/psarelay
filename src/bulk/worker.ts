@@ -11,6 +11,7 @@ import type { Logger } from '../utils/logger.js';
 import { BulkStore, type BulkItem, type BulkJob } from './store.js';
 import { DEFAULT_SCHEDULE, currentRate, quietWindowAt, quietOf, type BusinessSchedule } from './schedule.js';
 import { settingValue } from '../admin/settings.js';
+import { entitlements } from '../entitlements/index.js';
 import { runJob } from '../services/call-log.js';
 
 export const MAX_ATTEMPTS = 3;
@@ -163,8 +164,8 @@ export function startBulkWorker(s: AutotaskService, getPool: () => Pool | null, 
       inactivateContact: (id, companyId) => runJob('bulk worker', () => s.updateContact(id, { companyID: companyId, isActive: 0 } as never)),
       inactivateCompany: (id) => runJob('bulk worker', () => s.updateCompany(id, { isActive: false } as never)),
     },
-    // The console's read-only switch stops the worker too (it writes in the background, not through a tool call).
-    level: () => (settingValue<boolean>('tools.writesEnabled') === false ? 'stop' : backpressure(tenant, { ...BULK_THRESHOLDS, slowPct: intEnv(process.env.MCP_BULK_SLOW_AT_PCT, BULK_THRESHOLDS.slowPct), stopPct: intEnv(process.env.MCP_BULK_STOP_AT_PCT, BULK_THRESHOLDS.stopPct) }).level),
+    // The console's read-only switch, or a read-only plan or trial, stops the worker too (it writes in the background, not through a tool call).
+    level: () => (settingValue<boolean>('tools.writesEnabled') === false || entitlements().readOnly ? 'stop' : backpressure(tenant, { ...BULK_THRESHOLDS, slowPct: intEnv(process.env.MCP_BULK_SLOW_AT_PCT, BULK_THRESHOLDS.slowPct), stopPct: intEnv(process.env.MCP_BULK_STOP_AT_PCT, BULK_THRESHOLDS.stopPct) }).level),
     now: () => Date.now(), notify, logger,
     refreshUsage: () => runJob('bulk worker', () => s.getApiUsage()),
   });
