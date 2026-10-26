@@ -100,7 +100,21 @@ function shell(active, content) {
         h('span', { class: 'name muted' }, me.username),
         h('span', { class: `badge ${me.role === 'admin' ? 'accent' : ''}` }, me.role === 'admin' ? 'Admin' : 'Read-only'),
         h('button', { class: 'small', onclick: logout }, 'Sign out')))),
+    planStrip(),
     h('main', null, content));
+}
+
+// Free trial / read-only plan: a strip on every page with what's left and the way to a plan.
+let planInfo = null;
+function planStrip() {
+  const p = planInfo;
+  if (!p || (!p.trial && !p.readOnly)) return null;
+  const ended = p.mode === 'expired';
+  const msg = ended ? (p.trial ? 'Your free trial has ended. PSArelay is locked until you choose a plan; your setup is kept.' : p.detail)
+    : p.trial ? `${p.detail} Tools that change Autotask are locked until you choose a plan.` : p.detail;
+  return h('div', { class: `plan-strip ${ended ? 'bad' : 'warn'}` }, h('div', { class: 'top-inner' },
+    h('span', null, msg),
+    location.hash === '#/plan' ? null : h('button', { class: 'small primary', onclick: () => { location.hash = '#/plan'; } }, 'Choose a plan')));
 }
 
 async function render() {
@@ -110,6 +124,7 @@ async function render() {
   const route = ROUTES.find((r) => r.hash === (location.hash || '#/')) || ROUTES[0];
   if (route.admin && me.role !== 'admin') { location.hash = '#/'; return; }
   const body = h('div', null, h('p', { class: 'muted' }, 'Loading…'));
+  try { planInfo = await api('GET', '/api/plan'); } catch { planInfo = null; }
   app.replaceChildren(shell(route.hash, body));
   try { await route.view(body); } catch (e) { body.replaceChildren(h('div', { class: 'banner bad' }, e.message)); }
 }
@@ -221,7 +236,7 @@ async function dashboard(body) {
     const srv = s.api && s.api.server;
     const noApi = 'No Autotask API user is configured.';
     const banners = [];
-    if (!s.tools.writesEnabled) banners.push(h('div', { class: 'banner warn' }, 'Read-only mode: write tools are switched off for every agent.'));
+    if (!s.tools.writesEnabled && !s.tools.planReadOnly) banners.push(h('div', { class: 'banner warn' }, 'Read-only mode: write tools are switched off for every agent.'));
     if (s.tools.disabledCategories.length) banners.push(h('div', { class: 'banner warn' }, `Disabled tool groups: ${s.tools.disabledCategories.join(', ')}.`));
     if (s.autotaskAuth) {
       const a = s.autotaskAuth;
@@ -604,7 +619,7 @@ async function actors(body) {
 }
 
 // ── plan: what's on the account, and the upgrade path (locked modules stay visible) ──
-const PLAN_MODE = { 'self-hosted': ['Self-hosted', 'ok'], licensed: ['Active', 'ok'], grace: ['Renewal due', 'warn'], expired: ['Expired', 'bad'], invalid: ['Licence problem', 'bad'] };
+const PLAN_MODE = { 'self-hosted': ['Self-hosted', 'ok'], licensed: ['Active', 'ok'], trial: ['Free trial', 'warn'], grace: ['Renewal due', 'warn'], expired: ['Expired', 'bad'], invalid: ['Licence problem', 'bad'] };
 /** The upgrade card for one locked module (also used where a locked page would be). */
 function upgradeCard(m, plan, onDone) {
   const where = [m.offer?.includedIn?.length ? `Included in ${m.offer.includedIn.join(' / ')}` : null, m.offer?.addon ? `Add-on: ${m.offer.addon}` : null].filter(Boolean);
@@ -619,12 +634,27 @@ function upgradeCard(m, plan, onDone) {
     where.length ? h('p', { class: 'muted', style: 'font-size:13px' }, where.join(' · ')) : null,
     note, h('div', { class: 'row', style: 'margin-top:8px;gap:8px' }, btn, plan.upgradeUrl ? h('a', { href: plan.upgradeUrl, target: '_blank', rel: 'noopener noreferrer' }, 'See plans ↗') : null));
 }
+const PLAN_CHOICES = ['Starter', 'Pro', 'Enterprise'];
+function choosePlanPanel(p, onDone) {
+  const note = h('textarea', { rows: 2, placeholder: 'Anything we should know? Team size, billing contact… (optional)' });
+  const pick = h('select', { 'aria-label': 'Plan', style: 'width:auto;min-width:160px' }, PLAN_CHOICES.map((n) => h('option', { value: n, selected: n === (p.planName || 'Pro') ? true : null }, n)));
+  const btn = h('button', { class: 'primary', onclick: async () => {
+    btn.disabled = true;
+    try { const r = await api('POST', '/api/plan/request', { plan: pick.value, note: note.value.trim() }); toast(r.message); onDone?.(); } catch (x) { toast(x.message); btn.disabled = false; }
+  } }, 'Request this plan');
+  return h('section', { class: 'panel', style: 'border-color:var(--accent)' },
+    h('h2', { style: 'margin-top:0' }, p.trial ? 'Keep PSArelay after your trial' : 'Turn on changes'),
+    h('p', null, p.trial ? 'Choose a plan and we\'ll set up billing. Your setup, users and settings carry over, and tools that change Autotask unlock within a minute.' : 'Your plan is read-only. Choose a plan with changes and we\'ll update your account.'),
+    h('div', { class: 'row', style: 'gap:8px;align-items:center;flex-wrap:wrap' }, pick, btn, p.upgradeUrl ? h('a', { href: p.upgradeUrl, target: '_blank', rel: 'noopener noreferrer' }, 'Compare plans ↗') : null),
+    h('div', { style: 'margin-top:8px' }, note));
+}
 async function planView(body) {
   const p = await api('GET', '/api/plan');
-  const [label, cls] = PLAN_MODE[p.mode] || [p.mode, ''];
+  const [label, cls] = PLAN_MODE[p.trial && p.mode === 'licensed' ? 'trial' : p.mode] || [p.mode, ''];
   const on = p.modules.filter((m) => m.included), off = p.modules.filter((m) => !m.included);
   fill(body, 
     h('h1', null, 'Plan'),
+    p.trial || p.readOnly ? choosePlanPanel(p, () => planView(body)) : null,
     h('section', { class: 'panel' },
       h('div', { class: 'row', style: 'justify-content:space-between;align-items:center' },
         h('div', null, h('h2', { style: 'margin:0' }, p.mode === 'self-hosted' ? 'Self-hosted' : (p.planName || 'Your plan')), p.customer ? h('div', { class: 'muted' }, p.customer) : null),
@@ -1158,7 +1188,7 @@ async function settings(body) {
       catch (x) { toast(x.message); draw((await api('GET', '/api/settings')).settings); }
     };
     const control = (s) => {
-      const off = !isAdmin || !s.available;
+      const off = !isAdmin || !s.available || !!s.lockedByPlan;
       if (s.type === 'boolean') {
         return h('label', { class: 'switch', title: s.value ? 'On' : 'Off' },
           h('input', { type: 'checkbox', checked: !!s.value, disabled: off, 'aria-label': s.label, onchange: (e) => {
@@ -1194,6 +1224,7 @@ async function settings(body) {
           h('div', null,
             h('div', null, h('strong', null, s.label), ' ', !s.available ? h('span', { class: 'badge' }, 'Not running') : s.overridden ? h('span', { class: 'badge accent' }, 'Changed') : null),
             h('div', { class: 'desc' }, s.description),
+            s.lockedByPlan ? h('div', { class: 'desc', style: 'color:var(--warn)' }, s.lockedByPlan, ' ', h('a', { href: '#/plan' }, 'Choose a plan')) : null,
             h('div', { class: 'meta' }, `Default: ${Array.isArray(s.default) ? (s.default.join(', ') || 'none') : String(s.default)}`,
               s.overridden && isAdmin ? [' · ', h('a', { href: '#', onclick: (e) => { e.preventDefault(); save(s.key, { reset: true }); } }, 'reset to default')] : null)),
           h('div', { class: 'control' }, control(s)),
