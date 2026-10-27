@@ -149,4 +149,25 @@ describe('search_tickets — title keyword search (filter payload sent upstream)
     expect(text).toContain('"queueLabel":"Service Desk"');
     expect(text).toContain('TicketID=501');
   });
+
+  test('my day: tickets carry labels, company name and link; a missing-time item names its ticket (no "Company ID 29683560")', async () => {
+    const { AutotaskToolHandler } = require('../src/handlers/tool.handler');
+    const s = new AutotaskService(config, logger);
+    const day = { date: '2026-10-27', assignedTickets: [{ id: 501, ticketNumber: 'T20261026.0099', title: 'No Internet and Phones', status: 18, priority: 2, companyID: 77 }],
+      missingTime: [{ ticketID: 501, serviceCallIDs: [9], scheduledHours: 4, reason: 'service_call_without_time' }], openTasks: [], serviceCalls: [], openTodos: [], timeEntries: [],
+      totals: { assignedTickets: 1, serviceCalls: 1, openTodos: 0, missingTime: 1, timeEntries: 0, hoursLogged: 0 } };
+    jest.spyOn(s, 'getMyDay').mockResolvedValue(day as never);
+    const pick = (name: string, values: Array<[number, string]>) => ({ name, dataType: 'integer', isPickList: true, picklistValues: values.map(([value, label]) => ({ value: String(value), label, isActive: true })) });
+    jest.spyOn(s, 'getFieldInfo').mockResolvedValue([pick('status', [[18, 'Waiting Customer']]), pick('priority', [[2, 'High']])] as never);
+    jest.spyOn(s, 'getTicketWebUrl').mockImplementation((id: number) => `https://ww3.example/x?TicketID=${id}`);
+    const h = new AutotaskToolHandler(s, logger);
+    jest.spyOn(h as any, 'enhanceItems').mockImplementation(async (rows: any) => rows.map((r: any) => ({ ...r, company: 'Acme Properties' })));
+    const out = await h.callTool('autotask_get_my_day', { resourceID: 42 });
+    const text = out.content[0].text as string;
+    expect(text).toContain('"statusLabel":"Waiting Customer"');
+    expect(text).toContain('"priorityLabel":"High"');
+    expect(text).toContain('"company":"Acme Properties"');
+    // The missing-time item names its ticket.
+    expect(text).toMatch(/"ticketID":501[^}]*"ticketNumber":"T20261026\.0099"[^}]*"company":"Acme Properties"[^}]*"ticketUrl":"https:\/\/ww3\.example\/x\?TicketID=501"/);
+  });
 });
