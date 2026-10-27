@@ -791,7 +791,7 @@ export const TOOL_DEFINITIONS: McpTool[] = [
   // Ticket tools
   {
     name: 'autotask_search_tickets',
-    description: 'Search tickets by title keyword, ticket number, company, contact, queue, status, priority, assignee, dates. To find an EXISTING ticket about something (e.g. before creating one, or when reconciling a meeting), search by `title` keyword + `companyID` — Autotask filters server-side, so it is ONE call returning only the matches. Do NOT list a whole company\'s open tickets and scan titles: every page re-fetches the pages before it and burns the shared Autotask API budget. Open tickets only unless `status` is given. Use autotask_get_ticket_details for full data. Max 500/page.',
+    description: 'Search tickets by title keyword, ticket number, company, contact, queue, status, priority, assignee, dates. To find an EXISTING ticket about something (e.g. before creating one, or when reconciling a meeting), search by `title` keyword + `companyID` — Autotask filters server-side. "My tickets": `assignedToMe: true`, so it is ONE call returning only the matches. Do NOT list a whole company\'s open tickets and scan titles: every page re-fetches the pages before it and burns the shared Autotask API budget. Open tickets only unless `status` is given. Use autotask_get_ticket_details for full data. Max 500/page.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -838,6 +838,10 @@ export const TOOL_DEFINITIONS: McpTool[] = [
         assignedResourceID: {
           type: 'number',
           description: 'Filter by assigned resource ID'
+        },
+        assignedToMe: {
+          type: 'boolean',
+          description: 'true = tickets assigned to the signed-in person ("my tickets"). PSArelay fills in their resource ID from the sign-in — no need to look it up.'
         },
         unassigned: {
           type: 'boolean',

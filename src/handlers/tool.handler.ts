@@ -272,6 +272,25 @@ export class AutotaskToolHandler {
   }
 
   /**
+   * Ticket rows as people read them: statusLabel / priorityLabel / queueLabel and the ticket's Autotask link (ticketUrl).
+   * Best-effort — a missing field list or web URL leaves the row as it was. Mutates the rows.
+   */
+  private async labelTickets(rows: Array<Record<string, unknown>>): Promise<void> {
+    if (!rows.length) return;
+    const fields = await this.autotaskService.getFieldInfo('Tickets').catch(() => null);
+    const pick = fields?.filter((f) => f.name === 'status' || f.name === 'priority' || f.name === 'queueID') ?? [];
+    for (const t of rows) {
+      if (pick.length) {
+        const l = picklistLabels(t, pick);
+        if (l.status) t.statusLabel = l.status;
+        if (l.priority) t.priorityLabel = l.priority;
+        if (l.queueID) t.queueLabel = l.queueID;
+      }
+      try { if (t.id != null) t.ticketUrl = this.autotaskService.getTicketWebUrl(Number(t.id)); } catch { /* no web UI base known */ }
+    }
+  }
+
+  /**
    * Enhance items by inlining company/resource names from IDs
    */
   private async enhanceItems(items: any[]): Promise<any[]> {
@@ -1550,7 +1569,14 @@ export class AutotaskToolHandler {
       }],
 
       // Tickets
-      ['autotask_search_tickets', async (a) => {
+      ['autotask_search_tickets', async (a, ctx) => {
+        // "My tickets": the signed-in person, from the verified token (never asks "who are you?" of a signed-in caller).
+        if (a.assignedToMe === true && a.assignedResourceID == null) {
+          const me = await this.resolveCaller(ctx);
+          if (me.status !== 'resolved') return { result: me, message: me.message };
+          a = { ...a, assignedResourceID: me.resource.id };
+        }
+        delete a.assignedToMe;
         // Elicitation for zero-filter ticket searches
         const hasFilters = a.searchTerm || a.title || a.companyID != null || a.contactID || a.status !== undefined ||
           a.priority !== undefined || a.queueID !== undefined ||
@@ -1563,17 +1589,7 @@ export class AutotaskToolHandler {
         const { companyID, ...rest } = a;
         const opts = { ...rest, ...(companyID !== undefined && { companyId: companyID }) };
         const p = await s.searchTickets(opts);
-        // Labels and a link on every row, so no client shows "Status 18" or has to look picklists up (best-effort).
-        const fields = await s.getFieldInfo('Tickets').catch(() => null);
-        for (const t of p.items as Array<Record<string, unknown>>) {
-          if (fields) {
-            const l = picklistLabels(t, fields.filter((f) => f.name === 'status' || f.name === 'priority' || f.name === 'queueID'));
-            if (l.status) t.statusLabel = l.status;
-            if (l.priority) t.priorityLabel = l.priority;
-            if (l.queueID) t.queueLabel = l.queueID;
-          }
-          try { if (t.id != null) t.ticketUrl = s.getTicketWebUrl(Number(t.id)); } catch { /* no web UI base known */ }
-        }
+        await this.labelTickets(p.items as Array<Record<string, unknown>>);
         return paged(p, 'tickets');
       }],
       ['autotask_get_ticket_details', async (a) => {
@@ -2096,6 +2112,16 @@ export class AutotaskToolHandler {
           return { result: null, message: 'Could not determine the acting user. Provide resourceID, or call as an identified user (currentUser).' };
         }
         const r = await s.getMyDay(a.resourceID, a.date, a.timeZone);
+        // Readable rows: labels, company names and links — no "Company ID 29683560" / guessed "priority code 2".
+        const tickets = r.assignedTickets as Array<Record<string, unknown>>;
+        await this.labelTickets(tickets);
+        r.assignedTickets = await this.enhanceItems(tickets);
+        const byId = new Map((r.assignedTickets as Array<Record<string, unknown>>).map((t) => [Number(t.id), t]));
+        for (const g of r.missingTime as Array<TimeGap & Record<string, unknown>>) {
+          const t = byId.get(Number(g.ticketID));
+          if (t) Object.assign(g, { ticketNumber: t.ticketNumber, title: t.title, company: t.company, ticketUrl: t.ticketUrl });
+          else { try { g.ticketUrl = s.getTicketWebUrl(Number(g.ticketID)); } catch { /* no web UI base known */ } }
+        }
         const gaps = r.totals.missingTime ? ` — ${r.totals.missingTime} service-call ticket(s) with NO time logged: ${(r.missingTime as TimeGap[]).map((g) => g.ticketID).join(', ')}` : '';
         return { result: r, message: `${r.date}: ${r.totals.assignedTickets} assigned ticket(s), ${r.totals.serviceCalls} service call(s), ${r.totals.openTodos} open To-Do(s), ${r.totals.timeEntries} time entr(ies) (${r.totals.hoursLogged}h logged), ${r.openTasks.length} open task(s)${gaps}` };
       }],
