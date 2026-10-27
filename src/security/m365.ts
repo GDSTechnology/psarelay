@@ -115,7 +115,7 @@ export type M365Resolution =
   | { status: 'unlinked'; reason: 'no-match' | 'several' | 'lookup-failed'; message: string };
 
 export interface ResolveDeps {
-  store: Pick<M365Store, 'findLink' | 'saveLink' | 'noteWaiting' | 'touchLink'>;
+  store: Pick<M365Store, 'findLink' | 'saveLink' | 'noteWaiting'>;
   /** Active resources whose email / email2 / email3 / userName is one of these names. */
   findResources: (names: string[]) => Promise<Array<Record<string, any>>>;
   /** Told once per person per day when someone is waiting to be linked. */
@@ -127,7 +127,6 @@ export interface ResolveDeps {
 export async function resolveM365(id: EntraIdentity, d: ResolveDeps): Promise<M365Resolution> {
   const existing = await d.store.findLink(id);
   if (existing) {
-    void d.store.touchLink(existing.id).catch(() => undefined);
     return { status: 'linked', resourceId: existing.resourceId, resourceName: existing.resourceName, linkId: existing.id, matchedBy: existing.matchedBy, autoLinked: false };
   }
   let rows: Array<Record<string, any>>;

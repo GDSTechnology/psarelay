@@ -20,13 +20,14 @@ export type M365AuthResult = { ok: true; auth: TokenAuth } | { ok: false; reason
 const TRUST_MS = 30_000, LINKED_MS = 5 * 60_000, UNLINKED_MS = 60_000;
 let trustCache: { at: number; trusts: EntraTrust[] } | null = null;
 const resolved = new Map<string, { at: number; r: M365Resolution }>();
+const touched = new Map<number, number>();
 let defaultKeys: KeyFetcher | null = null;
 
 /** What the console shows: the last accepted and the last refused Copilot sign-in. */
 export const m365Status: { lastOk: { at: string; upn: string } | null; lastRefusal: { at: string; reason: string } | null } = { lastOk: null, lastRefusal: null };
 
 /** Forget cached tenants and links (the console changed one). */
-export function clearM365Cache(): void { trustCache = null; resolved.clear(); }
+export function clearM365Cache(): void { trustCache = null; resolved.clear(); touched.clear(); }
 
 async function trusts(store: M365Store): Promise<EntraTrust[]> {
   if (trustCache && Date.now() - trustCache.at < TRUST_MS) return trustCache.trusts;
@@ -64,8 +65,10 @@ export async function authenticateM365(token: string, d: M365AuthDeps): Promise<
   }
   const m365 = { tenantId: id.tenantId, oid: id.oid, upn: id.upn };
   if (r.status === 'linked') {
+    // "Last used" on the console: at most one write per person per 5 minutes, cached calls included.
+    if (Date.now() - (touched.get(r.linkId) ?? 0) > LINKED_MS) { touched.set(r.linkId, Date.now()); void store.touchLink(r.linkId).catch(() => undefined); }
     m365Status.lastOk = { at: new Date().toISOString(), upn: id.upn };
-    return { ok: true, auth: { tokenId: -1, tokenName: `Microsoft 365: ${id.upn}`, resourceId: r.resourceId, delegate: false, m365 } };
+    return { ok: true, auth: { tokenId: -1, tokenName: `Microsoft 365: ${id.upn}`, resourceId: r.resourceId, resourceName: r.resourceName, delegate: false, m365 } };
   }
   // Signed in, but not linked: the request goes through (Copilot can list tools) and every call answers the message.
   m365Status.lastRefusal = { at: new Date().toISOString(), reason: `${id.upn}: not linked (${r.reason})` };

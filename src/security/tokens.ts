@@ -19,6 +19,8 @@ export interface TokenAuth {
   tokenId: number; tokenName: string; resourceId: number | null; delegate: boolean;
   /** Sign-in (OAuth) tokens: the MCP URL they were issued for — accepted only there. */
   audience?: string | null;
+  /** The person's Autotask resource name, when known (shown by whoami / "act as me" tools). */
+  resourceName?: string;
   /** Microsoft 365 Copilot single sign-on: the verified person (migration 0023). */
   m365?: { tenantId: string; oid: string; upn: string };
   /** Set when that person is not linked to an Autotask resource: every tool call answers this and runs nothing. */
