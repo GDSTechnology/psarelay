@@ -22,7 +22,7 @@ export interface CompactResponse {
  * These are the minimum fields needed for identification and triage.
  */
 const SUMMARY_FIELDS: Record<EntityType, string[]> = {
-  tickets: ['id', 'ticketNumber', 'title', 'status', 'priority', 'companyID', 'assignedResourceID', 'createDate', 'dueDateTime'],
+  tickets: ['id', 'ticketNumber', 'title', 'status', 'statusLabel', 'priority', 'priorityLabel', 'queueLabel', 'companyID', 'assignedResourceID', 'createDate', 'dueDateTime', 'ticketUrl'],
   companies: ['id', 'companyName', 'isActive', 'phone', 'city', 'state', 'classification'],
   contacts: ['id', 'firstName', 'lastName', 'emailAddress', 'companyID'],
   projects: ['id', 'projectName', 'status', 'companyID', 'projectLeadResourceID', 'startDate', 'endDate'],

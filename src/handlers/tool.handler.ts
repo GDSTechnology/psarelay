@@ -21,6 +21,7 @@ import { BACKFILL_SOURCES, BackfillJobs, MAX_RANGE_DAYS, runBackfillStep, type B
 import { backpressure } from '../services/backpressure.js';
 import { FEED_SOURCES, SOURCE_ENTITY, decodeCursor, encodeCursor, eventType, feedActor, ingestActivity, type FeedSource } from '../db/activity-feed.js';
 import { buildDailyAudit } from '../utils/daily-audit.js';
+import { picklistLabels } from '../utils/ticket-audit.js';
 import { SHADOW_ENTITIES, shadowEntity } from '../db/shadow-entities.js';
 
 const SHADOW_OFF = 'The Postgres shadow is not enabled on this server (MCP_PG_ENABLED + MCP_PG_SHADOW_ENABLED). Live Autotask tools still work.';
@@ -1561,7 +1562,19 @@ export class AutotaskToolHandler {
         }
         const { companyID, ...rest } = a;
         const opts = { ...rest, ...(companyID !== undefined && { companyId: companyID }) };
-        return paged(await s.searchTickets(opts), 'tickets');
+        const p = await s.searchTickets(opts);
+        // Labels and a link on every row, so no client shows "Status 18" or has to look picklists up (best-effort).
+        const fields = await s.getFieldInfo('Tickets').catch(() => null);
+        for (const t of p.items as Array<Record<string, unknown>>) {
+          if (fields) {
+            const l = picklistLabels(t, fields.filter((f) => f.name === 'status' || f.name === 'priority' || f.name === 'queueID'));
+            if (l.status) t.statusLabel = l.status;
+            if (l.priority) t.priorityLabel = l.priority;
+            if (l.queueID) t.queueLabel = l.queueID;
+          }
+          try { if (t.id != null) t.ticketUrl = s.getTicketWebUrl(Number(t.id)); } catch { /* no web UI base known */ }
+        }
+        return paged(p, 'tickets');
       }],
       ['autotask_get_ticket_details', async (a) => {
         const r = await s.getTicket(a.ticketID, a.fullDetails);
@@ -3669,7 +3682,12 @@ export class AutotaskToolHandler {
       cacheAll(res);
       return { status: 'resolved', via: 'explicit-name', resource: res };
     }
-    // 4. Static override map (Telegram handles / non-email identities).
+    // 4. A verified token already says who the caller is (a person token, a Microsoft 365 sign-in, or a delegate vouching
+    //    for the declared resource): use it — never ask "who are you?" of someone already signed in.
+    if (ctx.identityVerified && ctx.autotaskResourceId != null) {
+      return { status: 'resolved', via: 'token', resource: { id: ctx.autotaskResourceId, name: ctx.autotaskResourceName ?? `Resource ${ctx.autotaskResourceId}` } };
+    }
+    // 5. Static override map (Telegram handles / non-email identities).
     for (const k of keys) {
       const id = this.userMap.get(k);
       if (id != null) {
@@ -3678,18 +3696,18 @@ export class AutotaskToolHandler {
         return { status: 'resolved', via: 'static-map', resource: res };
       }
     }
-    // 5. In-memory cache (already resolved this session).
+    // 6. In-memory cache (already resolved this session).
     for (const k of keys) {
       const cached = this.resourceCache.get(k);
       if (cached) return { status: 'resolved', via: 'cache', resource: cached };
     }
-    // 6. Live email match against Autotask Resources.
+    // 7. Live email match against Autotask Resources.
     if (ctx.requestingUserEmail) {
       const r = classifyEmailMatch(ctx.requestingUserEmail, toCandidates(await this.autotaskService.searchResourcesByEmail(ctx.requestingUserEmail)));
       if (r.status === 'resolved') cacheAll(r.resource);
       return r;
     }
-    // 7. Nothing to go on.
+    // 8. Nothing to go on.
     return identificationRequired('no-identity');
   }
 
@@ -3816,6 +3834,7 @@ export class AutotaskToolHandler {
       if (auth.resourceId != null) {
         delete ctx.requestingUserEmail; delete ctx.teamsObjectId;
         ctx.autotaskResourceId = auth.resourceId;
+        if (auth.resourceName) ctx.autotaskResourceName = auth.resourceName;
         ctx.identityVerified = true;
       } else if (auth.delegate) {
         ctx.identityVerified = ctx.requestingUserEmail != null || ctx.autotaskResourceId != null || ctx.teamsObjectId != null;

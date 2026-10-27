@@ -133,4 +133,20 @@ describe('search_tickets — title keyword search (filter payload sent upstream)
     expect(elicit).not.toHaveBeenCalled();
     expect(search).toHaveBeenCalledWith(expect.objectContaining({ title: 'ThreatLocker', companyId: 29684117 }));
   });
+
+  test('each ticket row carries status / priority / queue LABELS and its Autotask link (no "Status 18")', async () => {
+    const { AutotaskToolHandler } = require('../src/handlers/tool.handler');
+    const s = new AutotaskService(config, logger);
+    jest.spyOn(s, 'searchTickets').mockResolvedValue({ items: [{ id: 501, ticketNumber: 'T20260101.0001', title: 'No internet', status: 18, priority: 2, queueID: 7, companyID: 1 }], page: 1, pageSize: 25, hasMore: false } as never);
+    const pick = (name: string, values: Array<[number, string]>) => ({ name, dataType: 'integer', isPickList: true, picklistValues: values.map(([value, label]) => ({ value: String(value), label, isActive: true })) });
+    jest.spyOn(s, 'getFieldInfo').mockResolvedValue([pick('status', [[1, 'New'], [18, 'Waiting Customer']]), pick('priority', [[2, 'High']]), pick('queueID', [[7, 'Service Desk']])] as never);
+    jest.spyOn(s, 'getTicketWebUrl').mockReturnValue('https://ww3.example/Autotask/AutotaskExtend/ExecuteCommand.aspx?Code=OpenTicketDetail&TicketID=501');
+    const h = new AutotaskToolHandler(s, logger);
+    const out = await h.callTool('autotask_search_tickets', { assignedResourceID: 42 });
+    const text = out.content[0].text as string;
+    expect(text).toContain('"statusLabel":"Waiting Customer"');
+    expect(text).toContain('"priorityLabel":"High"');
+    expect(text).toContain('"queueLabel":"Service Desk"');
+    expect(text).toContain('TicketID=501');
+  });
 });

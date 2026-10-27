@@ -36,6 +36,8 @@ export interface CallerContext {
    */
   tokenName?: string;
   identityVerified?: boolean;
+  /** The verified person's Autotask resource name, when the token carries it (server-side only). */
+  autotaskResourceName?: string;
   /**
    * Transport-derived origin of the request (peer address / X-Forwarded-For /
    * User-Agent), captured server-side at the HTTP entry — NEVER from client

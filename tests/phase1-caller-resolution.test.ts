@@ -97,6 +97,17 @@ describe('AutotaskToolHandler.resolveCaller', () => {
     expect(r).toMatchObject({ status: 'user_identification_required', reason: 'not-found' });
   });
 
+  test('a verified token (person sign-in / Microsoft 365) says who the caller is — no "who are you?", no lookup', async () => {
+    const service = new AutotaskService(config, logger);
+    const spy = jest.spyOn(service, 'searchResourcesByEmail').mockResolvedValue([]);
+    const handler = new AutotaskToolHandler(service, logger);
+    const r = await handler.resolveCaller(ctxOf({ source: 'unknown', autotaskResourceId: 4242, autotaskResourceName: 'Jane Doe', identityVerified: true }));
+    expect(r).toEqual({ status: 'resolved', via: 'token', resource: { id: 4242, name: 'Jane Doe' } });
+    expect(spy).not.toHaveBeenCalled();
+    // A declared (unverified) resource id is not trusted this way.
+    expect(await handler.resolveCaller(ctxOf({ source: 'unknown', autotaskResourceId: 4242 }))).toMatchObject({ status: 'user_identification_required' });
+  });
+
   test('no identity at all → identification required (no-identity)', async () => {
     const handler = new AutotaskToolHandler(new AutotaskService(config, logger), logger);
     expect(await handler.resolveCaller(ctxOf({ source: 'unknown' }))).toMatchObject({ status: 'user_identification_required', reason: 'no-identity' });

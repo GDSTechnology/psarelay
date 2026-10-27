@@ -19,7 +19,7 @@ export interface ResourceCandidate {
   email?: string;
 }
 
-export type ResolveVia = 'explicit-id' | 'explicit-email' | 'explicit-name' | 'static-map' | 'email-match' | 'cache';
+export type ResolveVia = 'explicit-id' | 'explicit-email' | 'explicit-name' | 'token' | 'static-map' | 'email-match' | 'cache';
 
 export type CallerResolution =
   | { status: 'resolved'; via: ResolveVia; resource: ResolvedResource }
