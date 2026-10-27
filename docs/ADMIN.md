@@ -339,6 +339,26 @@ sign in, and its existing connections end at their next refresh (within an hour;
 allowed). A client is recognised by the address its sign-in returns to, which it can't fake. Access tokens for n8n
 and scripts are not affected.
 
+### Microsoft 365 (Copilot single sign-on)
+
+Administrators: staff use PSArelay from Microsoft 365 Copilot with their Microsoft sign-in. Copilot's "Microsoft
+Entra SSO" scheme sends the person's Entra access token on every call; PSArelay verifies it itself (RS256 against
+Microsoft's published keys for the tenant, fetched and cached, refetched when Microsoft rotates them; issuer = a
+trusted tenant; audience = that tenant's Application ID URI; client = Microsoft's Enterprise token store
+`ab3be6b7-f5df-413d-ac2d-abf1e3fd9c0b`; not expired; the configured scope; no guests). No secret is stored, so
+nothing expires.
+
+- **Trusted tenants** is a list (hosted customers' tenants are added the same way). Disabled or removed tenants are
+  refused within 30 seconds. Unticking Microsoft 365 Copilot under **AI clients allowed to connect** refuses all.
+- **Linking**: a stored link (by Entra object id, or a preload by sign-in name) → else automatic when **exactly one**
+  active Autotask resource matches (email / email2 / email3 first, then userName = the sign-in name or its part
+  before @) → else the person gets *"Your Microsoft 365 account isn't linked to an Autotask user in PSArelay yet …
+  Ask your system administrator to link it"* on every call, nothing runs (never as the API user), and they appear
+  under **Waiting to be linked** (with the candidates when several matched). The notification event
+  *Someone signed in from Microsoft 365 Copilot and needs to be linked* fires once per person per day.
+- Automatic links, admin links, unlinks and tenant changes are in **Activity**. Links are cached 5 minutes (people
+  not linked: 1 minute); any change on the page applies at once.
+
 ### Access (tokens for the MCP endpoint)
 
 Admins only. **Zero trust: a call is only as trusted as the token it carries.** Create one token per client (n8n, a

@@ -12,6 +12,15 @@ Workflow defaults (commits, changelog, memory) come from the global `~/.claude/C
   the token endpoint) and for an unspecified method (`auto`: checked only when sent, so no existing client breaks).
   The auth config lives in each tenant's token store (Agents Toolkit creates it), so no prebuilt agent zip can
   work across MSPs — each admin runs the toolkit once against their own address.
+- **Copilot Entra SSO** (src/security/entra.ts, m365*.ts, migration 0023): Copilot sends the person's Entra access
+  token; it is accepted only from client `ab3be6b7-f5df-413d-ac2d-abf1e3fd9c0b` (Microsoft Enterprise token store)
+  for a trusted tenant + configured audience. An unlinked person gets `TokenAuth.unlinkedMessage` and every tool
+  call answers it — a token with `resourceId: null` would otherwise run as the API USER (service-token path), so
+  any new code reading `getRequestAuth()` must check `unlinkedMessage` first. Verified live (read-only, dev API
+  user): Resources has `email`/`email2`/`email3`/`userName` (all queryable); NO Exchange/calendar-sync field in the
+  API. **29 of 45 active resources are API users (`licenseType` 7)** with random userNames and shared emails
+  (catch-all, zapier@, api-*@, one with a person-like address) — they and resource 4 are excluded from any link
+  (`notAPerson`). No human userName equals their email. Still unverified: v1 vs v2 Copilot tokens (both accepted).
 
 ## Learnings - 2026-10-22
 

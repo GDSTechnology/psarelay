@@ -86,6 +86,7 @@ const ROUTES = [
   { hash: '#/settings', label: 'Settings', view: settings },
   { hash: '#/access', label: 'Access', view: access, admin: true },
   { hash: '#/users', label: 'Users', view: users, admin: true },
+  { hash: '#/m365', label: 'Microsoft 365', view: m365, admin: true },
   { hash: '#/activity', label: 'Activity', view: activity, admin: true },
   { hash: '#/account', label: 'Account', view: account },
 ];
@@ -802,6 +803,7 @@ async function connect(body) {
         'Team / Enterprise: an owner adds it for the organisation; each person connects and signs in as themselves.',
       ]),
       on('copilot') && card('Microsoft 365 Copilot', [
+        h('span', null, h('strong', null, 'For staff, use single sign-on'), ' (no PSArelay login): administrators set it up on the ', h('a', { href: '#/m365' }, 'Microsoft 365'), ' page. Quick trial with your console login instead:'),
         h('span', null, 'An administrator builds the agent once: VS Code with the ', link('https://aka.ms/M365AgentsToolkit', 'Microsoft 365 Agents Toolkit'), ' → ', h('strong', null, 'Create a New Agent/App → Declarative Agent → Add an Action → Start with an MCP Server'), '.'),
         h('span', null, 'Paste the address above. Authentication: ', h('strong', null, 'OAuth (with dynamic registration)'), '. Name it ', h('strong', null, 'PSArelay'), '.'),
         h('span', null, h('strong', null, 'Provision'), ', then open ', link('https://m365.cloud.microsoft/chat', 'Copilot'), ' → Agents → PSArelay → ', h('strong', null, 'Sign in'), ' with this console login.'),
@@ -1390,8 +1392,103 @@ async function users(body) {
   await draw();
 }
 
+// ── Microsoft 365: Copilot single sign-on — trusted tenants, links to Autotask, people waiting to be linked ──
+async function m365(body) {
+  const copy = (text) => h('button', { class: 'small secondary', onclick: async () => { try { await navigator.clipboard.writeText(text); toast('Copied.'); } catch { toast('Copy failed — select it instead.'); } } }, 'Copy');
+  const val = (label, text) => h('div', { class: 'row', style: 'gap:8px;align-items:center;margin:4px 0' }, h('span', { style: 'min-width:190px;font-size:13px' }, label),
+    h('code', { class: 'mono', style: 'flex:1;word-break:break-all;padding:4px 8px;border-radius:6px;background:var(--bg-soft, rgba(127,127,127,.12))' }, text), copy(text));
+  const link = (href, text) => h('a', { href, target: '_blank', rel: 'noopener noreferrer' }, text);
+  const draw = async () => {
+    const r = await api('GET', '/api/m365');
+    const act = async (fn, ok) => { try { await fn(); if (ok) toast(ok); await draw(); } catch (x) { toast(x.message); } };
+    const linkTo = (who) => {
+      const v = prompt(`Link ${who.upn} to their Autotask user.\n\nTheir Autotask email, or the resource id (a number).`, '');
+      if (!v || !v.trim()) return;
+      const t = v.trim();
+      act(() => api('POST', '/api/m365/links', { tenantId: who.tenantId, upn: who.upn, oid: who.oid || null, ...(/^\d+$/.test(t) ? { resourceId: Number(t) } : { email: t }) }), 'Linked. Their next Copilot request runs as that Autotask user.');
+    };
+    const tenantName = (tid) => (r.tenants.find((t) => t.tenantId === tid) || {}).label || tid;
+
+    // Setup: trusted tenants (a list — hosted customers' tenants are added the same way).
+    const f = { tenantId: h('input', { placeholder: '00000000-0000-0000-0000-000000000000' }), label: h('input', { placeholder: 'e.g. Our company' }), clientId: h('input', { placeholder: 'Entra application (client) id' }),
+      audiences: h('input', { placeholder: 'api://auth-… (Application ID URI from the SSO registration)' }), scope: h('input', { placeholder: 'e.g. access_as_user' }) };
+    const err = h('p', { class: 'error', role: 'alert' });
+    const edit = (t) => { f.tenantId.value = t.tenantId; f.label.value = t.label; f.clientId.value = t.clientId; f.audiences.value = t.audiences.join(' '); f.scope.value = t.scope; f.tenantId.focus(); };
+    const tenantForm = h('form', { onsubmit: async (e) => {
+      e.preventDefault(); err.textContent = '';
+      try { await api('PUT', '/api/m365/tenants', { tenantId: f.tenantId.value, label: f.label.value, clientId: f.clientId.value, audiences: f.audiences.value, scope: f.scope.value, enabled: true }); toast('Saved. Copilot sign-ins from this tenant are accepted.'); await draw(); }
+      catch (x) { err.textContent = x.message; }
+    } },
+      h('div', { class: 'row', style: 'flex-wrap:wrap;gap:8px;align-items:flex-end' },
+        ...[['Tenant id', f.tenantId], ['Name', f.label], ['App (client) id', f.clientId], ['Audience(s)', f.audiences], ['Scope', f.scope]].map(([l, i]) => h('div', { style: 'flex:1 1 200px' }, h('label', null, l), i)),
+        h('button', { class: 'primary', type: 'submit' }, 'Save tenant')), err);
+
+    const preUpn = h('input', { placeholder: 'name@company.com' }), preAt = h('input', { placeholder: 'Autotask email or resource id' });
+    const preTenant = h('select', null, r.tenants.map((t) => h('option', { value: t.tenantId }, t.label || t.tenantId)));
+    const preload = h('form', { onsubmit: (e) => {
+      e.preventDefault();
+      const t = preAt.value.trim();
+      act(() => api('POST', '/api/m365/links', { tenantId: preTenant.value, upn: preUpn.value.trim(), ...(/^\d+$/.test(t) ? { resourceId: Number(t) } : { email: t }) }), 'Linked ahead of time.');
+    } }, h('div', { class: 'row', style: 'flex-wrap:wrap;gap:8px;align-items:flex-end' },
+      h('div', { style: 'flex:0 1 200px' }, h('label', null, 'Tenant'), preTenant),
+      h('div', { style: 'flex:1 1 220px' }, h('label', null, 'Microsoft 365 sign-in name'), preUpn),
+      h('div', { style: 'flex:1 1 220px' }, h('label', null, 'Autotask user'), preAt),
+      h('button', { class: 'primary', type: 'submit', disabled: !r.tenants.length }, 'Link')));
+
+    const s = r.status || {};
+    fill(body,
+      h('h1', null, 'Microsoft 365'),
+      h('p', { class: 'muted' }, 'Staff use PSArelay from Microsoft 365 Copilot with their Microsoft sign-in — no separate login. Each person is linked to their Autotask user automatically when exactly one active Autotask user has their email (email, email 2, email 3) or username; anyone else sees "ask your system administrator to link it" and appears under Waiting to be linked. No secret is stored: Copilot\'s tokens are checked against Microsoft\'s published keys.'),
+      !r.copilotAllowed ? h('div', { class: 'banner warn' }, 'Microsoft 365 Copilot is switched off under Settings → Security → AI clients allowed to connect — its sign-ins are refused.') : null,
+      h('section', { class: 'panel' }, h('h2', { style: 'margin-top:0' }, 'Status'),
+        h('p', null, 'Last Copilot sign-in: ', s.lastOk ? `${s.lastOk.upn}, ${ago(s.lastOk.at)}` : 'none since the server started'),
+        h('p', null, 'Last refusal: ', s.lastRefusal ? `${s.lastRefusal.reason}, ${ago(s.lastRefusal.at)}` : 'none')),
+      h('section', { class: 'panel' }, h('h2', { style: 'margin-top:0' }, 'Set up (once per Microsoft 365 tenant)'),
+        h('ol', { style: 'padding-left:18px' },
+          h('li', null, link('https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade', 'Entra admin center → App registrations'), ' → New registration "PSArelay", single tenant. No client secret is needed. Note the Application (client) id and Directory (tenant) id.'),
+          h('li', null, 'Expose an API → add a scope (e.g. ', h('span', { class: 'mono' }, 'access_as_user'), ', admins and users) → Add a client application:', val('Copilot token store client id', r.tokenStoreClientId)),
+          h('li', null, 'Authentication → Add a platform → Web → redirect URI:', val('Consent redirect', r.consentRedirect)),
+          h('li', null, link('https://dev.teams.microsoft.com/tools', 'Teams Developer Portal → Tools'), ' → Microsoft Entra SSO client ID registration → New: base URL', val('PSArelay MCP address', r.mcpUrl), 'your organisation, the client id above, the scope. It gives a registration ID and an Application ID URI.'),
+          h('li', null, 'Back in Entra → the app → Manifest → add that Application ID URI to ', h('span', { class: 'mono' }, 'identifierUris'), '. Then API permissions → Grant admin consent, so staff are never asked.'),
+          h('li', null, 'Save the tenant below with that Application ID URI as the audience and the scope.'),
+          h('li', null, 'Create the Copilot agent: Microsoft 365 Agents Toolkit → Declarative Agent → Add an Action → Start with an MCP Server → the address above → ', h('strong', null, 'Microsoft Entra SSO'), ' → the client id. Provision, test, then Publish and assign it to staff in the Teams admin center.'))),
+      h('section', { class: 'panel' }, h('h2', { style: 'margin-top:0' }, 'Trusted tenants'),
+        r.tenants.length ? h('div', { class: 'table-wrap' }, h('table', null,
+          h('thead', null, h('tr', null, ['Tenant', 'Audience(s)', 'Scope', 'App id', ''].map((x) => h('th', null, x)))),
+          h('tbody', null, r.tenants.map((t) => h('tr', null,
+            h('td', null, h('strong', null, t.label || '—'), h('div', { class: 'muted mono', style: 'font-size:12px' }, t.tenantId)),
+            h('td', { class: 'mono', style: 'font-size:12px' }, t.audiences.join(', ')), h('td', null, t.scope || 'any'), h('td', { class: 'mono', style: 'font-size:12px' }, t.clientId || '—'),
+            h('td', null, h('div', { class: 'row' }, h('button', { class: 'small secondary', onclick: () => edit(t) }, 'Edit'),
+              h('button', { class: 'small danger', onclick: () => confirm(`Stop accepting Copilot sign-ins from ${t.label || t.tenantId}?`) && act(() => api('DELETE', `/api/m365/tenants/${t.tenantId}`), 'Removed.') }, 'Remove')))))))) : h('p', { class: 'muted' }, 'None yet — Copilot sign-ins are refused until a tenant is saved.'),
+        tenantForm),
+      h('section', { class: 'panel' }, h('h2', { style: 'margin-top:0' }, `Waiting to be linked (${r.waiting.length})`),
+        r.waiting.length ? h('div', { class: 'table-wrap' }, h('table', null,
+          h('thead', null, h('tr', null, ['Person', 'Why', 'Tries', 'Last try', ''].map((x) => h('th', null, x)))),
+          h('tbody', null, r.waiting.map((w) => h('tr', null,
+            h('td', null, h('strong', null, w.name || w.upn), h('div', { class: 'muted', style: 'font-size:12px' }, w.upn, r.tenants.length > 1 ? ` · ${tenantName(w.tenantId)}` : '')),
+            h('td', { style: 'font-size:13px' }, w.reason === 'several' ? ['Several Autotask users match: ', ...w.candidates.map((c) => h('button', { class: 'small secondary', style: 'margin:2px', onclick: () => act(() => api('POST', '/api/m365/links', { tenantId: w.tenantId, upn: w.upn, oid: w.oid, resourceId: c.id }), `Linked to ${c.name}.`) }, `${c.name} #${c.id}`))] : 'No Autotask user has this email or username'),
+            h('td', null, fmt(w.attempts)), h('td', null, ago(w.lastAt)),
+            h('td', null, h('div', { class: 'row' }, h('button', { class: 'small', onclick: () => linkTo(w) }, 'Link…'),
+              h('button', { class: 'small secondary', onclick: () => act(() => api('DELETE', `/api/m365/waiting/${w.tenantId}/${w.oid}`), 'Dismissed.') }, 'Dismiss')))))))) : h('p', { class: 'muted' }, 'Nobody is waiting.')),
+      h('section', { class: 'panel' }, h('h2', { style: 'margin-top:0' }, `Linked (${r.links.length})`),
+        h('p', { class: 'muted', style: 'font-size:13px' }, 'Link people ahead of time (before they ever use Copilot) when their Microsoft 365 sign-in name doesn\'t match their Autotask user:'), preload,
+        r.links.length ? h('div', { class: 'table-wrap', style: 'margin-top:10px' }, h('table', null,
+          h('thead', null, h('tr', null, ['Microsoft 365', 'Autotask user', 'How', 'Last used', ''].map((x) => h('th', null, x)))),
+          h('tbody', null, r.links.map((l) => h('tr', null,
+            h('td', null, l.upn, l.oid ? null : h('span', { class: 'badge', style: 'margin-left:6px' }, 'not signed in yet')),
+            h('td', null, l.resourceName, h('span', { class: 'muted' }, ` #${l.resourceId}`)),
+            h('td', { style: 'font-size:13px' }, l.matchedBy === 'admin' ? `By ${l.linkedBy || 'an admin'}` : l.matchedBy === 'auto:username' ? 'Automatic (username)' : 'Automatic (email)', h('div', { class: 'muted', style: 'font-size:12px' }, when(l.linkedAt))),
+            h('td', null, ago(l.lastUsedAt)),
+            h('td', null, h('div', { class: 'row' }, h('button', { class: 'small secondary', onclick: () => linkTo(l) }, 'Change'),
+              h('button', { class: 'small danger', onclick: () => confirm(`Unlink ${l.upn}? Their Copilot requests stop until they are linked again (an automatic match may link them again).`) && act(() => api('DELETE', `/api/m365/links/${l.id}`), 'Unlinked.') }, 'Unlink')))))))) : null));
+  };
+  await draw();
+}
+
 // ── activity ──────────────────────────────────────────────────────────────
 const ACTIONS = {
+  'm365.tenant_saved': 'Saved Microsoft 365 tenant', 'm365.tenant_removed': 'Removed Microsoft 365 tenant', 'm365.linked': 'Linked Microsoft 365 person', 'm365.unlinked': 'Unlinked Microsoft 365 person',
+  'm365.auto_linked': 'Linked Microsoft 365 person automatically', 'm365.waiting_dismissed': 'Dismissed Microsoft 365 person waiting',
   'login': 'Signed in', 'login.failed': 'Failed sign-in', 'password.changed': 'Changed own password',
   'setting.changed': 'Changed setting', 'setting.reset': 'Reset setting', 'action.shadow_sync': 'Started shadow sync',
   'user.created': 'Created user', 'user.updated': 'Updated user', 'user.deleted': 'Deleted user',
