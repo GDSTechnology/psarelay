@@ -3049,7 +3049,7 @@ export class AutotaskService {
     return http.query('Resources', [
       { op: 'eq', field: 'isActive', value: true },
       { op: 'or', items: fields.flatMap((field) => values.map((value) => ({ op: 'eq', field, value }))) },
-    ], { maxRecords: 20, includeFields: ['id', 'firstName', 'lastName', ...fields] });
+    ], { maxRecords: 50, includeFields: ['id', 'firstName', 'lastName', ...fields, ...(!have.size || have.has('licenseType') ? ['licenseType'] : [])] });
   }
 
   // Regular Time categories are BillingCodes with useType = 3 (Internal Allocation

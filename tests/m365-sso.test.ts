@@ -106,6 +106,20 @@ describe('Copilot SSO: who the person is in Autotask', () => {
     expect(matchResources({ upn: 'jane@example.com', email: 'j.doe@example.com' }, [r(1, { email: 'j.doe@example.com' })]).matches).toHaveLength(1);
   });
 
+  test('shapes seen in a live tenant: API users (licenseType 7) and the system account never match; the old domain in email2 does', () => {
+    // An API user whose email looks like a person's, a shared catch-all on many API users, the built-in administrator.
+    const rows = [
+      r(10, { email: 'jdoe@old.example', userName: 'x7f3k2', licenseType: 7 }),
+      r(11, { email: 'catchall@example.com', licenseType: 7 }), r(12, { email: 'catchall@example.com', licenseType: 7 }),
+      r(4, { userName: 'administrator', licenseType: 1 }),
+      r(20, { email: 'jane.doe@example.com', email2: 'jane.doe@old.example', userName: 'jdoe', licenseType: 1 }),
+    ];
+    expect(matchResources({ upn: 'jdoe@old.example', email: null }, rows)).toMatchObject({ by: 'username', matches: [{ id: 20 }] });
+    expect(matchResources({ upn: 'jane.doe@old.example', email: null }, rows)).toMatchObject({ by: 'email', matches: [{ id: 20 }] });
+    expect(matchResources({ upn: 'catchall@example.com', email: null }, rows).matches).toEqual([]);
+    expect(matchResources({ upn: 'administrator@example.com', email: null }, rows).matches).toEqual([]);
+  });
+
   const id = { tenantId: TID, oid: OID, upn: 'jane@example.com', name: 'Jane', email: null };
   const fakeStore = (link: Partial<M365Link> | null = null) => {
     const saved: unknown[] = [], waiting: unknown[] = [];

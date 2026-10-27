@@ -54,7 +54,7 @@ import { CredentialStore, credentialSource, credentialTester, lookupZone, setCre
 import { secretKeyStatus } from '../security/secrets.js';
 import { oauthBase } from '../oauth/server.js';
 import { OAuthStore } from '../oauth/store.js';
-import { M365Store, resourceName, validTenantId } from '../security/m365.js';
+import { M365Store, notAPerson, resourceName, validTenantId } from '../security/m365.js';
 import { clearM365Cache, m365Status } from '../security/m365-auth.js';
 import { COPILOT_TOKEN_STORE_CLIENT_ID } from '../security/entra.js';
 import { CHANNEL_KINDS, ChannelInputError, NOTIFY_SETTING_KEY, channelFromInput, channelLogDetails, channelView, parseStoredChannels } from './notifications.js';
@@ -1009,9 +1009,10 @@ export function adminHandler(deps: AdminDeps) {
           if (!Number.isInteger(rid) || rid <= 0) throw new HttpError(400, 'The Autotask resource id must be a whole number.', 'invalid');
           const r = await runJob('admin console', () => opts.service.getResource(rid));
           if (!r || (r as { isActive?: boolean }).isActive === false) throw new HttpError(404, `No active Autotask resource #${rid}.`, 'not_found');
+          if (notAPerson(r as Record<string, any>)) throw new HttpError(400, `Resource #${rid} is an API user or the system account — link people to their own Autotask user.`, 'invalid');
           link = { id: rid, name: resourceName(r as Record<string, any>) };
         } else if (email) {
-          const found = await runJob('admin console', () => opts.service.searchResourcesByEmail(email));
+          const found = (await runJob('admin console', () => opts.service.searchResourcesByEmail(email))).filter((x) => !notAPerson(x as Record<string, any>));
           if (found.length !== 1) throw new HttpError(found.length ? 409 : 404, found.length ? `${found.length} active Autotask resources have that email — link by resource id.` : 'No active Autotask resource has that email.', found.length ? 'ambiguous' : 'not_found');
           link = { id: found[0]!.id, name: resourceName(found[0]!) };
         } else throw new HttpError(400, 'Give the Autotask user\'s email or resource id.', 'invalid');

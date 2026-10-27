@@ -21,8 +21,16 @@ export const validTenantId = (t: unknown): t is string => typeof t === 'string' 
 
 export const resourceName = (r: Record<string, any>) => [r.firstName, r.lastName].map((x) => String(x ?? '').trim()).filter(Boolean).join(' ') || String(r.email ?? '') || `Resource ${r.id}`;
 
-/** Which resources match a person, and how (pure — the rules above, step 2). */
-export function matchResources(identity: Pick<EntraIdentity, 'upn' | 'email'>, rows: Array<Record<string, any>>): { by: 'email' | 'username' | null; matches: Array<Record<string, any>> } {
+/** Resources.licenseType 7 = "API User" (verified live 2026-10-26: 29 of 45 active resources, random usernames, shared emails). */
+export const API_USER_LICENSE = 7;
+/** Resource 4 = "Autotask Administrator", the built-in system account. */
+export const SYSTEM_RESOURCE_ID = 4;
+/** A resource a person may never be linked to: an API user or the built-in administrator. */
+export const notAPerson = (r: Record<string, any>) => Number(r.id) === SYSTEM_RESOURCE_ID || Number(r.licenseType) === API_USER_LICENSE;
+
+/** Which resources match a person, and how (pure — the rules above, step 2). API users and the system account never match. */
+export function matchResources(identity: Pick<EntraIdentity, 'upn' | 'email'>, all: Array<Record<string, any>>): { by: 'email' | 'username' | null; matches: Array<Record<string, any>> } {
+  const rows = all.filter((r) => !notAPerson(r));
   const lc = (v: unknown) => String(v ?? '').trim().toLowerCase();
   const names = new Set([identity.upn, identity.email].map(lc).filter(Boolean));
   const local = lc(identity.upn).split('@')[0] ?? '';
