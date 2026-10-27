@@ -3806,6 +3806,11 @@ export class AutotaskToolHandler {
     // client declared; a service token (no person, not a delegate) drops declared identities, so the call runs as the
     // API user; a delegate token (e.g. n8n acting for Teams users) keeps the declared person and vouches for it.
     const auth = getRequestAuth();
+    // A Microsoft 365 person who isn't linked to an Autotask resource: say so plainly and run nothing (never as the API user).
+    if (auth?.unlinkedMessage) {
+      this.recordAudit({ ...ctx, tokenName: auth.tokenName }, { tool: name, outcome: 'permission-denied', durationMs: 0 });
+      return { content: [{ type: 'text', text: auth.unlinkedMessage }] };
+    }
     if (auth) {
       ctx.tokenName = auth.tokenName;
       if (auth.resourceId != null) {

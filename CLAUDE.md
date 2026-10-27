@@ -12,6 +12,13 @@ Workflow defaults (commits, changelog, memory) come from the global `~/.claude/C
   the token endpoint) and for an unspecified method (`auto`: checked only when sent, so no existing client breaks).
   The auth config lives in each tenant's token store (Agents Toolkit creates it), so no prebuilt agent zip can
   work across MSPs — each admin runs the toolkit once against their own address.
+- **Copilot Entra SSO** (src/security/entra.ts, m365*.ts, migration 0023): Copilot sends the person's Entra access
+  token; it is accepted only from client `ab3be6b7-f5df-413d-ac2d-abf1e3fd9c0b` (Microsoft Enterprise token store)
+  for a trusted tenant + configured audience. An unlinked person gets `TokenAuth.unlinkedMessage` and every tool
+  call answers it — a token with `resourceId: null` would otherwise run as the API USER (service-token path), so
+  any new code reading `getRequestAuth()` must check `unlinkedMessage` first. NOT yet verified live: the
+  Resources fields `email2` / `email3` / `userName` (the lookup asks only for fields in the live field list) and
+  whether Copilot sends v1 or v2 tokens (both accepted).
 
 ## Learnings - 2026-10-22
 

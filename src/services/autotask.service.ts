@@ -3036,6 +3036,22 @@ export class AutotaskService {
     }
   }
 
+  /**
+   * Active resources whose email, email2, email3 or userName equals one of `names` (Microsoft 365 sign-in linking).
+   * Only the fields this tenant has are asked for (a missing field would fail the whole query).
+   */
+  async findResourcesForSignIn(names: string[]): Promise<Array<Record<string, any>>> {
+    const values = [...new Set(names.map((n) => n.trim()).filter(Boolean))];
+    if (!values.length) return [];
+    const have = new Set((await this.getFieldInfo('Resources').catch(() => [])).map((f) => f.name));
+    const fields = ['email', 'email2', 'email3', 'userName'].filter((f) => !have.size || have.has(f));
+    const http = await this.ensureClient();
+    return http.query('Resources', [
+      { op: 'eq', field: 'isActive', value: true },
+      { op: 'or', items: fields.flatMap((field) => values.map((value) => ({ op: 'eq', field, value }))) },
+    ], { maxRecords: 20, includeFields: ['id', 'firstName', 'lastName', ...fields] });
+  }
+
   // Regular Time categories are BillingCodes with useType = 3 (Internal Allocation
   // Code) — verified live 2026-09-23: Internal Meeting, Office Management,
   // HR/Recruiting, Quote building, Research, Travel Time, Sick Time, etc. This is a

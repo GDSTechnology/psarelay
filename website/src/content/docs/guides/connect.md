@@ -32,6 +32,21 @@ Business and Enterprise workspaces: an admin adds it once and shares it; each pe
 ## Microsoft 365 Copilot
 
 An administrator builds a small Copilot agent once and shares it with staff. Nothing is installed on the server.
+There are two ways to sign in:
+
+### Single sign-on (recommended for staff)
+
+Staff use their Microsoft sign-in — no PSArelay login at all. Each person is linked to their Autotask user
+automatically when exactly one active Autotask user has their email (email, email 2, email 3) or username; anyone
+else is told to ask their system administrator, and shows up in the console under **Microsoft 365 → Waiting to be
+linked**. Copilot sends the person's Microsoft token; PSArelay checks it against Microsoft's published keys, so no
+secret is stored and nothing expires.
+
+Follow console → **Microsoft 365 → Set up** (once per Microsoft 365 tenant): an Entra app registration (no secret),
+a Teams Developer Portal SSO registration, then save the tenant in PSArelay. Create the agent with the Agents Toolkit
+choosing **Microsoft Entra SSO**. Administrators can link people ahead of time on the same page.
+
+### Sign in with a PSArelay login (quick trial)
 
 1. In VS Code, install the [Microsoft 365 Agents Toolkit](https://aka.ms/M365AgentsToolkit) (6.12 or later).
 2. **Create a New Agent/App → Declarative Agent → Add an Action → Start with an MCP Server**, paste the address

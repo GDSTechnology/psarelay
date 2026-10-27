@@ -38,7 +38,7 @@ import { AutotaskResourceHandler } from '../handlers/resource.handler.js';
 import { AutotaskToolHandler } from '../handlers/tool.handler.js';
 import { registerPromptHandlers } from './prompts.js';
 import { extractRequestOrigin } from '../utils/origin.js';
-import { runWithRequestContext } from '../utils/request-context.js';
+import { getRequestAuth, runWithRequestContext } from '../utils/request-context.js';
 import { usageSnapshot } from '../services/http-cache.js';
 import { authBlockStatus } from '../services/autotask-http.js';
 import { backpressure } from '../services/backpressure.js';
@@ -47,6 +47,10 @@ import { allowedOrigin, isExternalRequest } from '../security/http.js';
 import { bearerToken, tokenStore, type TokenAuth } from '../security/tokens.js';
 import { CredentialStore, setCredentialSource } from '../setup/credentials.js';
 import { handleOAuth, oauthBase, resourceMetadataUrl } from '../oauth/server.js';
+import { looksLikeJwt } from '../security/entra.js';
+import { authenticateM365 } from '../security/m365-auth.js';
+import { runJob } from '../services/call-log.js';
+import { AdminStore } from '../admin/store.js';
 import type { Pool } from 'pg';
 
 export class PsarelayServer {
@@ -156,6 +160,8 @@ export class PsarelayServer {
     server.setRequestHandler('resources/read', async (request) => {
       try {
         this.logger.debug(`Handling read resource request for: ${request.params.uri}`);
+        const unlinked = getRequestAuth()?.unlinkedMessage;
+        if (unlinked) throw new ProtocolError(ProtocolErrorCode.InvalidRequest, unlinked);
         const content = await resourceHandler.readResource(request.params.uri);
         return { contents: [content] };
       } catch (error) {
@@ -303,6 +309,16 @@ export class PsarelayServer {
     const store = tokenStore(isPgEnabled() ? getPool(this.logger) : null);
     if (!store) { refuseMcp(res, 503, 'Access tokens need the Postgres layer (MCP_PG_ENABLED).'); return 'refused'; }
     if (!presented) { refuseMcp(res, 401, 'Unauthorized: this MCP requires an access token (Authorization: Bearer psr_…).'); return 'refused'; }
+    // Microsoft 365 Copilot single sign-on: a Microsoft Entra token for the person, checked against Microsoft's keys.
+    if (looksLikeJwt(presented)) {
+      const pool = getPool(this.logger)!;
+      const r = await authenticateM365(presented, {
+        pool, findResources: (names) => runJob('Microsoft 365 sign-in', () => this.autotaskService.findResourcesForSignIn(names)),
+        log: (actor, action, details) => { void new AdminStore(pool).logEvent(actor, action, details).catch(() => undefined); },
+      });
+      if (!r.ok) { this.logger.info(`Microsoft 365 sign-in refused: ${r.reason}`); refuseMcp(res, 401, `Unauthorized: ${r.reason}.`); return 'refused'; }
+      return r.auth;
+    }
     const auth = await store.verify(presented);
     if (!auth) { refuseMcp(res, 401, 'Unauthorized: the access token is not valid (unknown, revoked or expired).'); return 'refused'; }
     // A sign-in token is accepted only by the MCP it was issued for (audience, RFC 8707).

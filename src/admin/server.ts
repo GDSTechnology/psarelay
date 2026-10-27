@@ -54,6 +54,9 @@ import { CredentialStore, credentialSource, credentialTester, lookupZone, setCre
 import { secretKeyStatus } from '../security/secrets.js';
 import { oauthBase } from '../oauth/server.js';
 import { OAuthStore } from '../oauth/store.js';
+import { M365Store, resourceName, validTenantId } from '../security/m365.js';
+import { clearM365Cache, m365Status } from '../security/m365-auth.js';
+import { COPILOT_TOKEN_STORE_CLIENT_ID } from '../security/entra.js';
 import { CHANNEL_KINDS, ChannelInputError, NOTIFY_SETTING_KEY, channelFromInput, channelLogDetails, channelView, parseStoredChannels } from './notifications.js';
 
 export interface AdminConsoleOptions {
@@ -959,6 +962,77 @@ export function adminHandler(deps: AdminDeps) {
       if (!g) throw new HttpError(404, 'No such request.');
       void log(ctx, 'gap.updated', { id: g.id, status: g.status, priority: g.priority });
       return send(res, 200, { ok: true, gap: g });
+    }
+
+    // ── Microsoft 365 Copilot single sign-on: trusted tenants, person → Autotask links, people waiting to be linked ──
+    if (path.startsWith('/api/m365')) {
+      requireUser(ctx, 'admin');
+      if (!deps.pool) throw new HttpError(503, 'Microsoft 365 sign-in needs the Postgres layer.');
+      const m = new M365Store(deps.pool);
+      const changed = () => { clearM365Cache(); };
+      if (path === '/api/m365' && method === 'GET') {
+        const [tenants, links, waiting] = await Promise.all([m.listTenants(), m.listLinks(), m.listWaiting()]);
+        return send(res, 200, { tenants, links, waiting, status: m365Status, mcpUrl: oauthBase()?.resource ?? mcpUrl(), tokenStoreClientId: COPILOT_TOKEN_STORE_CLIENT_ID,
+          consentRedirect: 'https://teams.microsoft.com/api/platform/v1.0/oAuthConsentRedirect', copilotAllowed: settingValue<string[]>('security.aiClients', env).includes('copilot') });
+      }
+      if (path === '/api/m365/tenants' && method === 'PUT') {
+        const b = await readJson(req, 8 * 1024);
+        const tenantId = String(b.tenantId ?? '').trim().toLowerCase();
+        if (!validTenantId(tenantId)) throw new HttpError(400, 'The tenant id is a GUID (Entra admin center → Overview → Tenant ID).', 'invalid');
+        const list = (v: unknown) => (Array.isArray(v) ? v : String(v ?? '').split(/[\s,]+/)).map((x) => String(x).trim()).filter(Boolean);
+        const audiences = list(b.audiences).slice(0, 10);
+        if (!audiences.length) throw new HttpError(400, 'Give at least one audience: the Application ID URI from the Teams Developer Portal SSO registration (api://…).', 'invalid');
+        const clientId = String(b.clientId ?? '').trim();
+        if (clientId && !validTenantId(clientId)) throw new HttpError(400, 'The application (client) id is a GUID.', 'invalid');
+        const scope = String(b.scope ?? '').trim();
+        if (scope && !/^[\w.-]{1,100}$/.test(scope)) throw new HttpError(400, 'The scope is a single name, e.g. access_as_user.', 'invalid');
+        const t = await m.upsertTenant({ tenantId, label: String(b.label ?? '').trim().slice(0, 80), clientId, audiences, scope, enabled: b.enabled !== false }, ctx.user!.username);
+        changed(); void log(ctx, 'm365.tenant_saved', { tenantId, audiences, scope, enabled: t.enabled });
+        return send(res, 200, { tenant: t });
+      }
+      const tenantMatch = /^\/api\/m365\/tenants\/([0-9a-fA-F-]{36})$/.exec(path);
+      if (tenantMatch && method === 'DELETE') {
+        if (!(await m.deleteTenant(tenantMatch[1]!))) throw new HttpError(404, 'No such tenant.');
+        changed(); void log(ctx, 'm365.tenant_removed', { tenantId: tenantMatch[1] });
+        return send(res, 200, { ok: true });
+      }
+      if (path === '/api/m365/links' && method === 'POST') {
+        // Link a person (from "Waiting to be linked", or a preload by sign-in name before they ever sign in).
+        const b = await readJson(req, 4 * 1024);
+        const tenantId = String(b.tenantId ?? '').trim().toLowerCase(), upn = String(b.upn ?? '').trim(), oid = b.oid ? String(b.oid).trim().toLowerCase() : null;
+        if (!validTenantId(tenantId)) throw new HttpError(400, 'Choose the Microsoft 365 tenant.', 'invalid');
+        if (!/^[^\s@]+@[^\s@]+$/.test(upn)) throw new HttpError(400, 'The Microsoft 365 sign-in name looks like name@company.com.', 'invalid');
+        if (oid && !validTenantId(oid)) throw new HttpError(400, 'Bad object id.', 'invalid');
+        const email = String(b.email ?? '').trim(), rid = b.resourceId == null || b.resourceId === '' ? null : Number(b.resourceId);
+        let link: { id: number; name: string };
+        if (rid != null) {
+          if (!Number.isInteger(rid) || rid <= 0) throw new HttpError(400, 'The Autotask resource id must be a whole number.', 'invalid');
+          const r = await runJob('admin console', () => opts.service.getResource(rid));
+          if (!r || (r as { isActive?: boolean }).isActive === false) throw new HttpError(404, `No active Autotask resource #${rid}.`, 'not_found');
+          link = { id: rid, name: resourceName(r as Record<string, any>) };
+        } else if (email) {
+          const found = await runJob('admin console', () => opts.service.searchResourcesByEmail(email));
+          if (found.length !== 1) throw new HttpError(found.length ? 409 : 404, found.length ? `${found.length} active Autotask resources have that email — link by resource id.` : 'No active Autotask resource has that email.', found.length ? 'ambiguous' : 'not_found');
+          link = { id: found[0]!.id, name: resourceName(found[0]!) };
+        } else throw new HttpError(400, 'Give the Autotask user\'s email or resource id.', 'invalid');
+        const l = await m.saveLink({ tenantId, oid, upn, resourceId: link.id, resourceName: link.name, matchedBy: 'admin', linkedBy: ctx.user!.username });
+        changed(); void log(ctx, 'm365.linked', { upn, resourceId: link.id });
+        return send(res, 200, { link: l });
+      }
+      const linkMatch = /^\/api\/m365\/links\/(\d+)$/.exec(path);
+      if (linkMatch && method === 'DELETE') {
+        const l = await m.deleteLink(Number(linkMatch[1]));
+        if (!l) throw new HttpError(404, 'No such link.');
+        changed(); void log(ctx, 'm365.unlinked', { upn: l.upn, resourceId: l.resourceId });
+        return send(res, 200, { ok: true });
+      }
+      const waitMatch = /^\/api\/m365\/waiting\/([0-9a-fA-F-]{36})\/([0-9a-fA-F-]{36})$/.exec(path);
+      if (waitMatch && method === 'DELETE') {
+        if (!(await m.deleteWaiting(waitMatch[1]!.toLowerCase(), waitMatch[2]!.toLowerCase()))) throw new HttpError(404, 'Not waiting.');
+        changed(); void log(ctx, 'm365.waiting_dismissed', { tenantId: waitMatch[1], oid: waitMatch[2] });
+        return send(res, 200, { ok: true });
+      }
+      throw new HttpError(404, 'Not found.');
     }
 
     if (path === '/api/users' && method === 'GET') { requireUser(ctx, 'admin'); return send(res, 200, { users: (await store.listUsers()).map(publicUser) }); }
