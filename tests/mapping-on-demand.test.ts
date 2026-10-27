@@ -150,6 +150,18 @@ describe('search_tickets — title keyword search (filter payload sent upstream)
     expect(text).toContain('TicketID=501');
   });
 
+  test('"my tickets": assignedToMe filters on the signed-in person (no resource-id lookup by the client)', async () => {
+    const { AutotaskToolHandler } = require('../src/handlers/tool.handler');
+    const s = new AutotaskService(config, logger);
+    const search = jest.spyOn(s, 'searchTickets').mockResolvedValue({ items: [], page: 1, pageSize: 25, hasMore: false } as never);
+    jest.spyOn(s, 'getFieldInfo').mockResolvedValue([] as never);
+    const h = new AutotaskToolHandler(s, logger);
+    jest.spyOn(h, 'resolveCaller').mockResolvedValue({ status: 'resolved', via: 'token', resource: { id: 4242, name: 'Jane Doe' } } as never);
+    await h.callTool('autotask_search_tickets', { assignedToMe: true, priority: 1 });
+    expect(search).toHaveBeenCalledWith(expect.objectContaining({ assignedResourceID: 4242, priority: 1 }));
+    expect(search.mock.calls[0]![0]).not.toHaveProperty('assignedToMe');
+  });
+
   test('my day: tickets carry labels, company name and link; a missing-time item names its ticket (no "Company ID 29683560")', async () => {
     const { AutotaskToolHandler } = require('../src/handlers/tool.handler');
     const s = new AutotaskService(config, logger);

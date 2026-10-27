@@ -1569,7 +1569,14 @@ export class AutotaskToolHandler {
       }],
 
       // Tickets
-      ['autotask_search_tickets', async (a) => {
+      ['autotask_search_tickets', async (a, ctx) => {
+        // "My tickets": the signed-in person, from the verified token (never asks "who are you?" of a signed-in caller).
+        if (a.assignedToMe === true && a.assignedResourceID == null) {
+          const me = await this.resolveCaller(ctx);
+          if (me.status !== 'resolved') return { result: me, message: me.message };
+          a = { ...a, assignedResourceID: me.resource.id };
+        }
+        delete a.assignedToMe;
         // Elicitation for zero-filter ticket searches
         const hasFilters = a.searchTerm || a.title || a.companyID != null || a.contactID || a.status !== undefined ||
           a.priority !== undefined || a.queueID !== undefined ||
