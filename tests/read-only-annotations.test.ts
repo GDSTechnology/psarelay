@@ -1,6 +1,9 @@
 // Read tools carry readOnlyHint, so clients (Microsoft 365 Copilot above all) don't ask "Confirm" before a lookup.
 
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { TOOL_DEFINITIONS, WRITES_DESPITE_READ_NAME } from '../src/handlers/tool.definitions';
+import { PsarelayServer } from '../src/mcp/server';
+import { Logger } from '../src/utils/logger';
 
 const ro = (name: string) => (TOOL_DEFINITIONS.find((t) => t.name === name)?.annotations as { readOnlyHint?: boolean } | undefined)?.readOnlyHint;
 
@@ -19,6 +22,26 @@ describe('read-only markers', () => {
       .filter((t) => { const a = t.annotations as { readOnlyHint?: boolean; destructiveHint?: boolean } | undefined; return a?.readOnlyHint !== true && a?.readOnlyHint !== false && !a?.destructiveHint; })
       .map((t) => t.name);
     expect(offenders).toEqual([]);
+  });
+
+  // Copilot (dynamic tool discovery) reads readOnlyHint from the server's live tools/list — the marker only helps
+  // if it survives the handler and the SDK's result schema, so ask over a real MCP client ↔ server connection.
+  test('readOnlyHint reaches clients in tools/list', async () => {
+    const server = new PsarelayServer({ name: 'psarelay-test', version: '0', autotask: { username: 'u@example.com', secret: 's', integrationCode: 'ic' } }, new Logger('error'));
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    await server['createFreshServer']().connect(serverSide); // the server every transport serves
+    const client = new Client({ name: 'test', version: '0' });
+    await client.connect(clientSide);
+    try {
+      const listed = new Map((await client.listTools()).tools.map((t) => [t.name, t.annotations?.readOnlyHint]));
+      expect(listed.get('autotask_search_tickets')).toBe(true);
+      expect(listed.get('autotask_get_ticket_details')).toBe(true);
+      expect(listed.get('autotask_get_my_day')).toBe(true);
+      expect(listed.get('autotask_add_ticket_update')).not.toBe(true);
+      expect(listed.get('autotask_log_my_time')).not.toBe(true);
+    } finally {
+      await client.close();
+    }
   });
 
   test('writers are never marked read-only', () => {
