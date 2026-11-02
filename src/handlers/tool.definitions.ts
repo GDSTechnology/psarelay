@@ -6451,6 +6451,19 @@ export const TOOL_DEFINITIONS: McpTool[] = [
   }
 ];
 
+// Every tool that only READS gets readOnlyHint, so clients don't ask "Confirm" before a lookup (Microsoft 365
+// Copilot confirms every tool that isn't marked read-only). Autotask's own security levels still decide what each
+// person may see. A tool whose annotations already say read-only / not / destructive keeps them.
+const READ_PREFIXES = ['autotask_get_', 'autotask_search_', 'autotask_list_', 'autotask_find_', 'autotask_query_', 'autotask_count_', 'autotask_report_'];
+const READ_BY_NAME = new Set(['autotask_test_connection', 'autotask_router']);
+/** Named like a read but writes. */
+export const WRITES_DESPITE_READ_NAME = new Set(['autotask_find_or_create_contact']);
+for (const t of TOOL_DEFINITIONS) {
+  const a = t.annotations as { readOnlyHint?: boolean; destructiveHint?: boolean } | undefined;
+  if (a?.readOnlyHint !== undefined || a?.destructiveHint || WRITES_DESPITE_READ_NAME.has(t.name)) continue;
+  if (READ_PREFIXES.some((x) => t.name.startsWith(x)) || READ_BY_NAME.has(t.name)) t.annotations = { ...(t.annotations ?? {}), readOnlyHint: true };
+}
+
 export const TOOL_CATEGORIES: Record<string, { description: string; tools: string[] }> = {
   vendor_billing: {
     description: 'Vendor purchasing & billing reconciliation (Pax8 first): import every invoice line, map vendor customers and SKUs to Autotask companies and manufacturer offerings',
