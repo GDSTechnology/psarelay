@@ -1280,8 +1280,43 @@ export const TOOL_DEFINITIONS: McpTool[] = [
     }
   },
   {
+    name: 'autotask_add_ticket_materials',
+    description: 'FINANCIAL — add materials / parts / products used on a ticket as ticket charges, priced from the Autotask product catalog. The way to "add charges to ticket T… : 200 ft cable, 3 patch cables, 2 keystones". Give the ticket number and one line per item: query (part number, SKU or name words) or productId, and quantity. Each line is matched against the whole catalog; it resolves only when unambiguous (one match, or an exact part number), otherwise the line comes back as needs_product with ranked candidates (id, name, sku, price, cost) — show them to the user and call again with the chosen productId. Price and cost come from the catalog (unitPrice / unitCost override per line). Checks the ticket\'s EXISTING charges: a product already charged is flagged duplicate and not added again (allowDuplicates to override), so a re-run never double-bills. DRY RUN by default — returns every line with product, quantity, unit price, extended price and the total, and writes nothing. Show that to the user; only after they approve, call again with the same lines, dryRun:false and confirm:true. Writes only when EVERY line is settled. Returns the created charge ids, each read back.',
+    annotations: { title: 'Add materials to a ticket (priced from the catalog)' },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ticketNumber: { type: 'string', description: 'Ticket number, e.g. T20261005.0123' },
+        ticketID: { type: 'number', description: 'Numeric ticket ID (alternative to ticketNumber)' },
+        items: {
+          type: 'array',
+          description: 'One entry per material',
+          items: {
+            type: 'object',
+            properties: {
+              query: { type: 'string', description: 'Part number, SKU or name words, e.g. "plenum cat6 cable" or "CAT6-KJ-BL"' },
+              productId: { type: 'number', description: 'Exact product id (from a previous call\'s candidates). Wins over query.' },
+              quantity: { type: 'number', description: 'Units used, in the product\'s unit (e.g. 200 for 200 ft of cable sold per foot)' },
+              unitPrice: { type: 'number', description: 'Override the catalog price for this charge' },
+              unitCost: { type: 'number', description: 'Override the catalog cost for this charge' },
+              description: { type: 'string', description: 'Charge description (default: the product\'s)' }
+            },
+            required: ['quantity']
+          }
+        },
+        datePurchased: { type: 'string', description: 'Date used (YYYY-MM-DD). Default today.' },
+        billable: { type: 'boolean', description: 'Bill to the customer (default true)' },
+        status: { type: 'string', description: 'Charge status label or id (default: the picklist default)' },
+        chargeType: { type: 'string', description: 'Charge type label or id (default: the picklist default, usually Operational)' },
+        allowDuplicates: { type: 'boolean', description: 'Add a product even though the ticket already has a charge for it. Default false.' },
+        dryRun: { type: 'boolean', description: 'Default true — plan only. false (with confirm:true) to write.' }
+      },
+      required: ['items']
+    }
+  },
+  {
     name: 'autotask_create_ticket_charge',
-    description: 'Create charge on ticket for materials, costs, or expenses.',
+    description: 'Create ONE raw charge on a ticket (materials, costs, expenses) with the values given — no catalog pricing and no duplicate check. For products / parts used on a ticket prefer autotask_add_ticket_materials.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -3579,7 +3614,7 @@ export const TOOL_DEFINITIONS: McpTool[] = [
   // Product tools
   {
     name: 'autotask_get_product',
-    description: 'Get a specific product by ID',
+    description: 'Get one product from the Autotask product catalog by ID: name, description, SKU, manufacturer part number, unit price, unit cost, MSRP, billing code.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -3593,7 +3628,7 @@ export const TOOL_DEFINITIONS: McpTool[] = [
   },
   {
     name: 'autotask_search_products',
-    description: 'Search for products with optional filters',
+    description: 'Search the Autotask product catalog (parts, materials, hardware) by name; returns id, SKU, part numbers, unit price and cost. Name "contains" only — for part numbers or loose words use autotask_find_product; to put products on a ticket use autotask_add_ticket_materials.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -3617,7 +3652,7 @@ export const TOOL_DEFINITIONS: McpTool[] = [
   },
   {
     name: 'autotask_find_product',
-    description: "Clean, normalized product search across ALL identifiers — the usable layer over Autotask's weak native search. Matches the query against sku, internalProductID, externalProductID, manufacturerProductName, vendorProductNumber (+ name/description tokens), scores each product, and returns ranked matches with which fields matched. An exact identifier hit ranks highest; token overlap catches e.g. \"cat6 keystone\" → \"Blue Cat6 Keystone\". Use this instead of autotask_search_products when a plain name search misses. Read-only.",
+    description: "Clean, normalized product search across ALL identifiers — the usable layer over Autotask's weak native search. Matches the query against sku, internalProductID, externalProductID, manufacturerProductName, vendorProductNumber (+ name/description tokens), scores each product, and returns ranked matches (id, name, sku, part numbers, unit price, unit cost, MSRP) with which fields matched. An exact identifier hit ranks highest; token overlap catches e.g. \"cat6 keystone\" → \"Blue Cat6 Keystone\". Use this instead of autotask_search_products when a plain name search misses. Read-only.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -6483,7 +6518,7 @@ export const TOOL_CATEGORIES: Record<string, { description: string; tools: strin
   },
   tickets: {
     description: 'Search, create, update tickets and manage ticket notes, attachments, charges, audit history, and the notification e-mails Autotask sent',
-    tools: ['autotask_search_tickets', 'autotask_get_ticket_details', 'autotask_set_ticket_contract', 'autotask_get_ticket_by_number', 'autotask_get_ticket_change_history', 'autotask_get_ticket_email_context', 'autotask_create_ticket', 'autotask_update_ticket', 'autotask_start_work_on_ticket', 'autotask_add_ticket_update', 'autotask_move_ticket_to_company', 'autotask_find_ticket_by_external_id', 'autotask_search_ticket_configuration_items', 'autotask_add_ticket_configuration_item', 'autotask_remove_ticket_configuration_item', 'autotask_get_ticket_note', 'autotask_search_ticket_notes', 'autotask_create_ticket_note', 'autotask_get_ticket_attachment', 'autotask_search_ticket_attachments', 'autotask_create_ticket_attachment', 'autotask_get_ticket_charge', 'autotask_search_ticket_charges', 'autotask_create_ticket_charge', 'autotask_update_ticket_charge', 'autotask_delete_ticket_charge', 'autotask_get_ticket_history', 'autotask_search_ticket_history', 'autotask_search_notification_history', 'autotask_report_ticket_throughput', 'autotask_report_request_segmentation', 'autotask_search_checklist_libraries', 'autotask_get_checklist_library', 'autotask_apply_checklist_library_to_ticket', 'autotask_create_maintenance_ticket', 'autotask_search_ticket_checklist_items', 'autotask_create_ticket_checklist_item', 'autotask_update_ticket_checklist_item', 'autotask_delete_ticket_checklist_item']
+    tools: ['autotask_search_tickets', 'autotask_get_ticket_details', 'autotask_set_ticket_contract', 'autotask_get_ticket_by_number', 'autotask_get_ticket_change_history', 'autotask_get_ticket_email_context', 'autotask_create_ticket', 'autotask_update_ticket', 'autotask_start_work_on_ticket', 'autotask_add_ticket_update', 'autotask_move_ticket_to_company', 'autotask_find_ticket_by_external_id', 'autotask_search_ticket_configuration_items', 'autotask_add_ticket_configuration_item', 'autotask_remove_ticket_configuration_item', 'autotask_get_ticket_note', 'autotask_search_ticket_notes', 'autotask_create_ticket_note', 'autotask_get_ticket_attachment', 'autotask_search_ticket_attachments', 'autotask_create_ticket_attachment', 'autotask_get_ticket_charge', 'autotask_search_ticket_charges', 'autotask_add_ticket_materials', 'autotask_create_ticket_charge', 'autotask_update_ticket_charge', 'autotask_delete_ticket_charge', 'autotask_get_ticket_history', 'autotask_search_ticket_history', 'autotask_search_notification_history', 'autotask_report_ticket_throughput', 'autotask_report_request_segmentation', 'autotask_search_checklist_libraries', 'autotask_get_checklist_library', 'autotask_apply_checklist_library_to_ticket', 'autotask_create_maintenance_ticket', 'autotask_search_ticket_checklist_items', 'autotask_create_ticket_checklist_item', 'autotask_update_ticket_checklist_item', 'autotask_delete_ticket_checklist_item']
   },
   projects: {
     description: 'Search and create projects, tasks, phases, and project notes',
