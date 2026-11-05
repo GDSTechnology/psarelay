@@ -30,6 +30,8 @@ export const FINANCIAL_TOOLS = new Set<string>([
   'autotask_create_ticket_charge',
   'autotask_add_ticket_materials', // dry-run first; the write needs confirm:true
   'autotask_update_ticket_charge',
+  'autotask_create_service', // catalog prices; dry-run first, the write needs confirm:true
+  'autotask_update_service',
   'autotask_set_ticket_contract',
   'autotask_create_expense_report',
   'autotask_create_expense_item',

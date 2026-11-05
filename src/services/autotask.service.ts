@@ -42,6 +42,7 @@ import {
   planBulkProductUpdate, planProductMerge,
   CatalogGapsResult, ProductLite, ProductMatch, SearchableProduct,
 } from '../utils/catalog-hygiene';
+import { checkServiceInput, describeServiceError, diffService, findServiceDuplicates, fullWritableRecord, pickServiceFields, type CatalogService, type ServiceChange, type ServiceDuplicate, type ServiceIssue, type ServicePlan, type ServiceWriteResult } from '../utils/service-catalog';
 import { planMaterialLines, resolveProductQuery, summarizeMaterialLines, type CatalogProduct, type ExistingCharge, type MaterialRequest } from '../utils/ticket-materials';
 /** A number, or undefined for empty / non-numeric input (never 0 from null). */
 const num0 = (v: unknown): number | undefined => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? undefined : Number(v));
@@ -131,10 +132,11 @@ import {
 import { McpServerConfig } from '../types/mcp';
 import { Logger } from '../utils/logger';
 import { getShadowRuntime } from '../db/shadow-runtime.js';
+import { randomUUID } from 'node:crypto';
 import { historyEvent } from '../utils/audit-events.js';
 import { FieldInfo, PicklistValue } from './picklist.cache';
 import {
-  findDuplicateNote, formatChoices, hoursBetween, HUMAN_NOTE_TYPE_LABEL, matchPicklist, MyServiceCall,
+  findDuplicateNote, formatChoices, hoursBetween, HUMAN_NOTE_TYPE_LABEL, matchPicklist, matchPicklistExact, MyServiceCall,
   NoteVisibility, PicklistChoice, PUBLISH_LABELS, ServiceCallRow, serviceCallTimeGaps, StartWorkResult,
   TODO_WINDOW_DAYS, addDays, dayIn, localDayWindow,
 } from '../utils/staff-tools';
@@ -7272,6 +7274,203 @@ export class AutotaskService {
       this.logger.error('Failed to search services:', error);
       throw error;
     }
+  }
+
+  // =====================================================
+  // Services catalog writes (create / update / validate)
+  // =====================================================
+
+  /** Every Service in the catalog, read live (duplicate checks must not see a stale mirror). */
+  private async fetchServiceCatalog(): Promise<CatalogService[]> {
+    const http = await this.ensureClient();
+    return http.query<CatalogService>('Services', [{ op: 'gte', field: 'id', value: 0 }], { maxRecords: 5000, noCache: true });
+  }
+
+  /** Billing codes in use on existing Services (with names): the suggestions for a new one. */
+  private async serviceBillingCodes(catalog: CatalogService[]): Promise<Array<{ id: number; name: string | null; useType: number | null; isActive: boolean | null; usedBy: number }>> {
+    const used = new Map<number, number>();
+    for (const s of catalog) {
+      const id = Number(s.billingCodeID);
+      if (s.billingCodeID != null && Number.isFinite(id)) used.set(id, (used.get(id) ?? 0) + 1);
+    }
+    if (!used.size) return [];
+    const http = await this.ensureClient();
+    const codes = await http.query<any>('BillingCodes', [{ op: 'in', field: 'id', value: [...used.keys()] }], { maxRecords: 500, includeFields: ['id', 'name', 'useType', 'isActive'] });
+    return codes
+      .map((c) => ({ id: Number(c.id), name: c.name ?? null, useType: c.useType == null ? null : Number(c.useType), isActive: c.isActive == null ? null : c.isActive === true, usedBy: used.get(Number(c.id)) ?? 0 }))
+      .sort((a, b) => b.usedBy - a.usedBy);
+  }
+
+  /**
+   * Services field metadata for a write: required / read-only / length, the
+   * periodType picklist, and the billing codes existing Services use.
+   */
+  async getServiceFieldInfo(): Promise<Record<string, unknown>> {
+    const fields = await this.getFieldInfo('Services');
+    const catalog = await this.fetchServiceCatalog();
+    const periodType = fields.find((f) => f.name === 'periodType');
+    const periodUse = new Map<number, number>();
+    for (const s of catalog) if (s.periodType != null && s.isActive !== false) periodUse.set(Number(s.periodType), (periodUse.get(Number(s.periodType)) ?? 0) + 1);
+    return {
+      entity: 'Services',
+      fields: fields.map((f) => ({
+        name: f.name, dataType: f.dataType, isRequired: f.isRequired, isReadOnly: f.isReadOnly, isQueryable: f.isQueryable,
+        ...(f.length ? { maxLength: f.length } : {}), ...(f.isReference ? { referenceEntityType: f.referenceEntityType } : {}),
+        ...(f.isPickList ? { picklist: (f.picklistValues ?? []).filter((v) => v.isActive !== false).map((v) => ({ value: Number(v.value), label: v.label, ...(v.isDefaultValue ? { isDefault: true } : {}) })) } : {}),
+      })),
+      required: fields.filter((f) => f.isRequired && !f.isReadOnly && f.name !== 'id').map((f) => f.name),
+      writable: fields.filter((f) => !f.isReadOnly && f.name !== 'id').map((f) => f.name),
+      periodTypes: (periodType?.picklistValues ?? []).filter((v) => v.isActive !== false).map((v) => ({ value: Number(v.value), label: v.label, activeServicesUsingIt: periodUse.get(Number(v.value)) ?? 0 })),
+      billingCodesInUse: await this.serviceBillingCodes(catalog),
+      servicesInCatalog: catalog.length,
+    };
+  }
+
+  /** Services matching a SKU / catalog number exactly, and / or a name exactly (case-insensitive). Inactive ones included. */
+  async findServicesByIdentifier(probe: { sku?: string; name?: string }): Promise<{ matches: ServiceDuplicate[]; searched: number }> {
+    const catalog = await this.fetchServiceCatalog();
+    return { matches: findServiceDuplicates(catalog, probe), searched: catalog.length };
+  }
+
+  /**
+   * Validate a create (no serviceId) or an update (serviceId) without writing.
+   * Resolves periodType labels ("Monthly") against the live picklist, checks the
+   * billing code exists and is active, and looks for duplicates by SKU / name.
+   */
+  async planService(raw: Record<string, unknown>, opts: { serviceId?: number; allowInternalText?: boolean; allowDuplicateName?: boolean } = {}): Promise<ServicePlan> {
+    const mode: 'create' | 'update' = opts.serviceId !== undefined ? 'update' : 'create';
+    const input = pickServiceFields(raw);
+    if (mode === 'create' && input.isActive === undefined) input.isActive = true;
+    const [fields, catalog] = await Promise.all([this.getFieldInfo('Services'), this.fetchServiceCatalog()]);
+    const errors: ServiceIssue[] = [];
+    const warnings: string[] = [];
+    let before: Record<string, unknown> | null = null;
+    if (mode === 'update') {
+      before = catalog.find((s) => Number(s.id) === opts.serviceId) ?? null;
+      if (!before) {
+        const http = await this.ensureClient();
+        before = (await http.query<Record<string, unknown>>('Services', [{ op: 'eq', field: 'id', value: opts.serviceId }], { maxRecords: 1, noCache: true }))[0] ?? null;
+      }
+      if (!before) return { mode, valid: false, status: 'not_found', serviceId: opts.serviceId!, errors: [{ kind: 'not_found', message: `Service ${opts.serviceId} not found` }], warnings, duplicates: [], body: {}, changes: [], resolved: {} };
+    }
+
+    // periodType: an id or a label, checked against the live picklist.
+    const resolved: ServicePlan['resolved'] = {};
+    const periodField = fields.find((f) => f.name === 'periodType');
+    if (input.periodType !== undefined && input.periodType !== null && periodField?.picklistValues?.length) {
+      const m = matchPicklistExact(periodField.picklistValues, input.periodType as string | number);
+      if (m.ok && m.isActive) { input.periodType = m.value; resolved.periodType = { value: m.value, label: m.label }; }
+      else errors.push({ kind: 'validation', field: 'periodType', message: `periodType "${String(input.periodType)}" is not ${m.ok ? 'active' : 'a valid billing period'} — choose one of: ${(periodField.picklistValues ?? []).filter((v) => v.isActive !== false).map((v) => `${v.value} = ${v.label}`).join(', ')}` });
+    }
+
+    const checked = checkServiceInput(fields, input, mode, { allowInternalText: opts.allowInternalText === true });
+    errors.push(...checked.errors);
+    warnings.push(...checked.warnings);
+
+    // Billing code: must exist and be active; one no existing Service uses is flagged.
+    const codesInUse = await this.serviceBillingCodes(catalog);
+    if (input.billingCodeID !== undefined && input.billingCodeID !== null && Number.isInteger(Number(input.billingCodeID))) {
+      const http = await this.ensureClient();
+      const code = (await http.query<any>('BillingCodes', [{ op: 'eq', field: 'id', value: Number(input.billingCodeID) }], { maxRecords: 1, includeFields: ['id', 'name', 'useType', 'isActive'] }))[0];
+      if (!code) errors.push({ kind: 'validation', field: 'billingCodeID', message: `billing code ${String(input.billingCodeID)} does not exist` });
+      else {
+        resolved.billingCode = { id: Number(code.id), name: code.name ?? null, useType: code.useType == null ? null : Number(code.useType) };
+        if (code.isActive === false) errors.push({ kind: 'validation', field: 'billingCodeID', message: `billing code ${code.id} (${code.name}) is inactive` });
+        const serviceUseTypes = new Set(codesInUse.map((c) => c.useType).filter((u) => u != null));
+        if (serviceUseTypes.size && code.useType != null && !serviceUseTypes.has(Number(code.useType))) {
+          warnings.push(`billing code ${code.id} (${code.name}) is a different kind (useType ${code.useType}) from the codes existing Services use (${[...serviceUseTypes].join(', ')}) — check it is a recurring-service code`);
+        }
+      }
+    }
+
+    // Duplicates: a SKU match blocks; a name match blocks unless allowDuplicateName.
+    const probeName = input.name;
+    const duplicates = findServiceDuplicates(catalog, {
+      ...(probeName !== undefined ? { name: probeName } : {}),
+      ...(input.sku !== undefined ? { sku: input.sku } : {}),
+      ...(input.catalogNumberPartNumber !== undefined ? { catalogNumberPartNumber: input.catalogNumberPartNumber } : {}),
+      ...(opts.serviceId !== undefined ? { excludeId: opts.serviceId } : {}),
+    });
+    for (const d of duplicates) {
+      const what = `Service ${d.id} "${d.name ?? ''}"${d.sku ? ` (SKU ${d.sku})` : ''}${d.isActive === false ? ', inactive' : ''}`;
+      if (d.matchedOn.includes('sku')) errors.push({ kind: 'duplicate', field: 'sku', message: `${what} already has this SKU${mode === 'create' ? ' — update it (autotask_update_service) instead of creating another' : ''}` });
+      else if (!opts.allowDuplicateName) errors.push({ kind: 'duplicate', field: 'name', message: `${what} already has this name — use a different name, update that one, or pass allowDuplicateName` });
+      else warnings.push(`${what} has the same name`);
+    }
+
+    let changes: ServiceChange[] = [];
+    let body: Record<string, unknown> = { ...input };
+    if (mode === 'update' && before) {
+      changes = diffService(before, input);
+      body = Object.fromEntries(changes.map((c) => [c.field, c.to]));
+      if (changes.some((c) => c.pricing)) warnings.push('pricing changes apply to the catalog only: contracts and quotes that already carry this service keep their own prices');
+      if (changes.some((c) => c.field === 'isActive' && c.to === false)) warnings.push('deactivating hides the service from new quotes and contracts; existing contract lines keep billing');
+    }
+    const valid = errors.length === 0;
+    const status: ServicePlan['status'] = !valid ? (errors.some((e) => e.kind === 'duplicate') && errors.every((e) => e.kind === 'duplicate') ? 'duplicate' : 'validation_failed')
+      : mode === 'update' && !changes.length ? 'unchanged' : 'ready';
+    return {
+      mode, valid, status, ...(opts.serviceId !== undefined ? { serviceId: opts.serviceId } : {}), errors, warnings, duplicates, body, changes, resolved,
+      ...(before ? { before } : {}),
+      ...(mode === 'create' && (input.billingCodeID === undefined || input.billingCodeID === null) ? { billingCodeSuggestions: codesInUse.slice(0, 10) } : {}),
+    };
+  }
+
+  /**
+   * Create a Service catalog record. Dry run unless dryRun === false. Re-checks
+   * duplicates right before the POST; if the POST fails (timeout, dropped
+   * connection) the catalog is read again and a record that did get created is
+   * reported, never posted twice. Creating a Service starts no billing: it is a
+   * catalog entry until a contract or quote uses it.
+   */
+  async createService(raw: Record<string, unknown>, opts: { dryRun: boolean; allowInternalText?: boolean; allowDuplicateName?: boolean }): Promise<ServiceWriteResult> {
+    const correlationId = randomUUID();
+    const plan = await this.planService(raw, { allowInternalText: opts.allowInternalText === true, allowDuplicateName: opts.allowDuplicateName === true });
+    if (!plan.valid) return { operation: 'rejected', correlationId, plan };
+    if (opts.dryRun) return { operation: 'dry_run', correlationId, plan };
+    const http = await this.ensureClient();
+    let id: number;
+    try {
+      id = await http.create('Services', plan.body);
+    } catch (error) {
+      // Did it land anyway? (A timeout after Autotask committed must not become a second POST.)
+      const after = await this.findServicesByIdentifier({ ...(plan.body.sku ? { sku: String(plan.body.sku) } : {}), name: String(plan.body.name ?? '') }).catch(() => null);
+      const landed = after?.matches.find((m) => !plan.duplicates.some((d) => d.id === m.id));
+      if (landed) {
+        this.logger.warn(`createService ${correlationId}: POST failed but Service ${landed.id} exists — reporting it, not retrying`);
+        const record = await this.getService(landed.id).catch(() => null);
+        return { operation: 'created', correlationId, plan, serviceId: landed.id, record, verified: !!record, note: 'the create call reported an error, but the service exists — not created again' };
+      }
+      return { operation: 'failed', correlationId, plan, error: describeServiceError(error) };
+    }
+    const record = await http.getWithRetry<Record<string, unknown>>('Services', id).catch(() => null);
+    const mismatches = record ? diffService(record, plan.body).map((c) => c.field) : [];
+    return { operation: 'created', correlationId, plan, serviceId: id, record, verified: !!record && !mismatches.length, ...(mismatches.length ? { notApplied: mismatches } : {}) };
+  }
+
+  /**
+   * Partial update of a Service: only the fields that differ are sent (PATCH
+   * /Services). Dry run unless dryRun === false; the plan carries every
+   * before → after. Where a zone only takes PUT, the full record is re-sent
+   * (PUT blanks fields left out). Read back and compared afterwards.
+   */
+  async updateService(serviceId: number, raw: Record<string, unknown>, opts: { dryRun: boolean; allowInternalText?: boolean; allowDuplicateName?: boolean }): Promise<ServiceWriteResult> {
+    const correlationId = randomUUID();
+    const plan = await this.planService(raw, { serviceId, allowInternalText: opts.allowInternalText === true, allowDuplicateName: opts.allowDuplicateName === true });
+    if (plan.status === 'not_found') return { operation: 'rejected', correlationId, plan };
+    if (!plan.valid) return { operation: 'rejected', correlationId, plan };
+    if (plan.status === 'unchanged') return { operation: 'unchanged', correlationId, plan, serviceId };
+    if (opts.dryRun) return { operation: 'dry_run', correlationId, plan, serviceId };
+    const http = await this.ensureClient();
+    try {
+      const fields = await this.getFieldInfo('Services');
+      await http.update('Services', serviceId, plan.body, { putBody: { id: serviceId, ...fullWritableRecord(fields, plan.before ?? {}, plan.body) } });
+    } catch (error) {
+      return { operation: 'failed', correlationId, plan, serviceId, error: describeServiceError(error) };
+    }
+    const record = (await http.query<Record<string, unknown>>('Services', [{ op: 'eq', field: 'id', value: serviceId }], { maxRecords: 1, noCache: true }).catch(() => []))[0] ?? null;
+    const notApplied = record ? diffService(record, plan.body).map((c) => c.field) : [];
+    return { operation: 'updated', correlationId, plan, serviceId, record, verified: !!record && !notApplied.length, ...(notApplied.length ? { notApplied } : {}) };
   }
 
   async getServiceBundle(id: number): Promise<AutotaskServiceBundle | null> {
