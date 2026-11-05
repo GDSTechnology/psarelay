@@ -1905,16 +1905,39 @@ export class AutotaskService {
     }
   }
 
-  async updateTicketCharge(id: number, updates: Partial<AutotaskTicketCharge>): Promise<void> {
+  /**
+   * Update a ticket charge: PATCH /Tickets/{ticketID}/Charges with `{id, ...fields}`.
+   * TicketCharges has NO top-level update route: PATCH /TicketCharges 404s and the
+   * generic client then fell back to PUT /TicketCharges/{id} → HTTP 405 (seen live
+   * 2026-11-05). A PUT would also replace the whole record. Only the fields given
+   * are sent; the charge is read back live and each field compared.
+   */
+  async updateTicketCharge(id: number, updates: Partial<AutotaskTicketCharge>): Promise<{
+    chargeID: number; ticketID: number; before: Record<string, unknown>; after: Record<string, unknown> | null;
+    changes: Record<string, { from: unknown; to: unknown }>; notApplied: string[];
+  }> {
     const http = await this.ensureClient();
-    try {
-      this.logger.debug(`Updating ticket charge ${id}:`, updates);
-      await http.update('TicketCharges', id, updates as Record<string, any>);
-      this.logger.info(`Ticket charge ${id} updated successfully`);
-    } catch (error) {
-      this.logger.error(`Failed to update ticket charge ${id}:`, error);
-      throw error;
+    const readLive = async (): Promise<AutotaskTicketCharge | null> =>
+      (await http.query<AutotaskTicketCharge>('TicketCharges', [{ op: 'eq', field: 'id', value: id }], { maxRecords: 1, noCache: true }))[0] ?? null;
+    const before = await readLive();
+    if (!before) throw new Error(`Ticket charge ${id} not found — nothing written.`);
+    const ticketID = Number(before.ticketID);
+    if (!Number.isInteger(ticketID) || ticketID <= 0) throw new Error(`Ticket charge ${id} has no ticketID — cannot update it through its ticket. Nothing written.`);
+    const body: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(updates)) if (v !== undefined && k !== 'id' && k !== 'ticketID') body[k] = v;
+    if (!Object.keys(body).length) throw new Error('No fields to update were given — nothing written.');
+    this.logger.debug(`Updating ticket charge ${id} on ticket ${ticketID}:`, body);
+    await http.childUpdate('Tickets', ticketID, 'Charges', id, body);
+    const after = await readLive().catch(() => null);
+    const same = (a: unknown, b: unknown) => (typeof a === 'number' || typeof b === 'number' ? Number(a) === Number(b) : String(a ?? '') === String(b ?? ''));
+    const changes: Record<string, { from: unknown; to: unknown }> = {};
+    const notApplied: string[] = [];
+    for (const [k, v] of Object.entries(body)) {
+      if (after && !same(after[k], v)) notApplied.push(k);
+      else if (!same(before[k], v)) changes[k] = { from: before[k] ?? null, to: after ? after[k] : v };
     }
+    this.logger.info(`Ticket charge ${id} updated (${Object.keys(changes).join(', ') || 'no change'})`);
+    return { chargeID: id, ticketID, before: before as Record<string, unknown>, after: after as Record<string, unknown> | null, changes, notApplied };
   }
 
   async deleteTicketCharge(ticketId: number, chargeId: number): Promise<void> {
@@ -7018,7 +7041,7 @@ export class AutotaskService {
    * Re-run safe: a product already charged on the ticket is skipped as a duplicate.
    */
   async addTicketMaterials(opts: {
-    ticketID: number; items: MaterialRequest[]; dryRun: boolean; allowDuplicates?: boolean;
+    ticketID: number; items: MaterialRequest[]; dryRun: boolean; allowDuplicates?: boolean; allowInternalText?: boolean;
     datePurchased?: string; billable?: boolean; status?: string | number; chargeType?: string | number;
   }): Promise<Record<string, unknown>> {
     const http = await this.ensureClient();
@@ -7044,7 +7067,7 @@ export class AutotaskService {
     }
     // Existing charges, read LIVE (not the mirror): a charge made a minute ago must count as a duplicate.
     const existing = await http.query<ExistingCharge>('TicketCharges', [{ op: 'eq', field: 'ticketID', value: opts.ticketID }], { includeFields: ['id', 'productID', 'name', 'unitQuantity', 'unitPrice', 'datePurchased', 'isBilled'], maxRecords: 500, noCache: true });
-    const lines = planMaterialLines({ items: opts.items, resolved, products, existing, ...(opts.allowDuplicates ? { allowDuplicates: true } : {}) });
+    const lines = planMaterialLines({ items: opts.items, resolved, products, existing, ...(opts.allowDuplicates ? { allowDuplicates: true } : {}), ...(opts.allowInternalText ? { allowInternalText: true } : {}) });
     const summary = summarizeMaterialLines(lines);
 
     // Charge type / status: a label or id, else the tenant's picklist default (else 1).

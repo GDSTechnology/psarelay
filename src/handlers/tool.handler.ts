@@ -15,6 +15,7 @@ import { classifyLockError, lockReason } from '../utils/timesheet-lock.js';
 import { RoleSource, needsRoleSelectionMessage, invalidRoleMessage } from '../utils/time-entry-role.js';
 import { partitionTicketNotes } from '../utils/ticket-note-kind.js';
 import type { MaterialLine } from '../utils/ticket-materials.js';
+import { internalTextProblem } from '../utils/invoice-text.js';
 import { defaultWorkDate, formatChoices, localDayWindow, matchPicklist, matchPicklistExact, TimeGap } from '../utils/staff-tools.js';
 import { getShadowRuntime } from '../db/shadow-runtime.js';
 import { collectAuditEvents, type CollectOptions } from '../db/audit-collector.js';
@@ -1741,7 +1742,7 @@ export class AutotaskToolHandler {
         if (!items.length) return { result: null, message: 'items is required: one { query or productId, quantity } per material. Nothing written.' };
         if (items.length > 50) return { result: null, message: `At most 50 materials per call (got ${items.length}). Nothing written.` };
         const r = await s.addTicketMaterials({
-          ticketID: ref.id, items, dryRun: a.dryRun !== false, allowDuplicates: a.allowDuplicates === true,
+          ticketID: ref.id, items, dryRun: a.dryRun !== false, allowDuplicates: a.allowDuplicates === true, allowInternalText: a.allowInternalText === true,
           ...(a.datePurchased ? { datePurchased: String(a.datePurchased) } : {}),
           ...(typeof a.billable === 'boolean' ? { billable: a.billable } : {}),
           ...(a.status != null && a.status !== '' ? { status: a.status } : {}),
@@ -1751,7 +1752,7 @@ export class AutotaskToolHandler {
         const tn = t?.ticketNumber ?? ref.ticketNumber ?? `ticket ${ref.id}`;
         const lines = (r.lines ?? []) as MaterialLine[];
         const money = (n: number | undefined) => (n === undefined ? '?' : `$${n.toFixed(2)}`);
-        const row = (l: MaterialLine) => `${l.line}. ${l.action === 'create' ? '' : `[${l.action.toUpperCase()}] `}${l.name ?? l.request.query ?? `product ${l.request.productId}`}${l.sku ? ` (${l.sku})` : ''} — ${l.quantity} × ${money(l.unitPrice)} = ${money(l.extendedPrice)}${l.problem ? ` — ${l.problem}` : ''}`;
+        const row = (l: MaterialLine) => `${l.line}. ${l.action === 'create' ? '' : `[${l.action.toUpperCase()}] `}${l.name ?? l.request.query ?? `product ${l.request.productId}`}${l.sku ? ` (${l.sku})` : ''} — ${l.quantity} × ${money(l.unitPrice)} = ${money(l.extendedPrice)}${l.problem ? ` — ${l.problem}` : ''}${l.note ? ` (${l.note})` : ''}`;
         const list = lines.map(row).join('\n');
         const total = `Total to add: ${money(r.total as number)}.`;
         const message = r.status === 'not_found' ? `Ticket ${ref.id} not found. Nothing written.`
@@ -1764,17 +1765,28 @@ export class AutotaskToolHandler {
         return { result: r, message };
       }],
       ['autotask_create_ticket_charge', async (a) => {
-        const { billableToAccount, ...charge } = a;
+        const { billableToAccount, allowInternalText, ...charge } = a;
         // Autotask's field is isBillableToCompany; the old param name was silently ignored.
         if (typeof billableToAccount === 'boolean' && charge.isBillableToCompany === undefined) charge.isBillableToCompany = billableToAccount;
+        const internal = allowInternalText === true ? null : internalTextProblem(charge);
+        if (internal) return { result: { status: 'internal_text' }, message: `NOTHING WRITTEN — ${internal}` };
         const id = await s.createTicketCharge(charge);
         return { result: id, message: `Successfully created ticket charge with ID: ${id}` };
       }],
       ['autotask_update_ticket_charge', async (a) => {
-        const { chargeId, billableToAccount, ...updates } = a;
+        const { chargeId, billableToAccount, allowInternalText, ...updates } = a;
+        const id = Number(chargeId);
+        if (!Number.isInteger(id) || id <= 0) return { result: null, message: 'chargeId (a positive integer) is required. Nothing written.' };
         if (typeof billableToAccount === 'boolean' && updates.isBillableToCompany === undefined) updates.isBillableToCompany = billableToAccount;
-        await s.updateTicketCharge(chargeId, updates);
-        return { result: chargeId, message: `Successfully updated ticket charge ${chargeId}` };
+        const internal = allowInternalText === true ? null : internalTextProblem(updates);
+        if (internal) return { result: { status: 'internal_text', chargeID: id }, message: `NOTHING WRITTEN — ${internal}` };
+        const r = await s.updateTicketCharge(id, updates);
+        const fmt = (v: unknown) => (v === null || v === undefined || v === '' ? '(empty)' : typeof v === 'string' ? `"${v}"` : String(v));
+        const changed = Object.entries(r.changes).map(([k, c]) => `${k}: ${fmt(c.from)} → ${fmt(c.to)}`);
+        const keep = (['unitQuantity', 'unitCost', 'unitPrice'] as const).filter((k) => !(k in r.changes)).map((k) => `${k} ${fmt((r.after ?? r.before)[k])}`);
+        const warn = r.notApplied.length ? ` WARNING: Autotask did not apply ${r.notApplied.join(', ')} (read back unchanged).` : '';
+        const verified = r.after ? 'verified by reading it back' : 'could not be read back yet';
+        return { result: r, message: `Updated ticket charge ${id} on ticket ${r.ticketID} (${verified}). ${changed.length ? changed.join('; ') : 'No field changed — it already had these values.'}${keep.length ? ` Unchanged: ${keep.join(', ')}.` : ''}${warn}` };
       }],
       ['autotask_delete_ticket_charge', async (a) => {
         await s.deleteTicketCharge(a.ticketId, a.chargeId);
