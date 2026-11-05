@@ -1299,7 +1299,7 @@ export const TOOL_DEFINITIONS: McpTool[] = [
               quantity: { type: 'number', description: 'Units used, in the product\'s unit (e.g. 200 for 200 ft of cable sold per foot)' },
               unitPrice: { type: 'number', description: 'Override the catalog price for this charge' },
               unitCost: { type: 'number', description: 'Override the catalog cost for this charge' },
-              description: { type: 'string', description: 'Charge description (default: the product\'s)' }
+              description: { type: 'string', description: 'Invoice description (default: the product\'s). Product information only — never cost, markup, supplier / pickup or serial notes.' }
             },
             required: ['quantity']
           }
@@ -1309,6 +1309,7 @@ export const TOOL_DEFINITIONS: McpTool[] = [
         status: { type: 'string', description: 'Charge status label or id (default: the picklist default)' },
         chargeType: { type: 'string', description: 'Charge type label or id (default: the picklist default, usually Operational)' },
         allowDuplicates: { type: 'boolean', description: 'Add a product even though the ticket already has a charge for it. Default false.' },
+        allowInternalText: { type: 'boolean', description: 'Allow a line description that looks like internal notes (cost, markup, supplier, pickup, serial). Only for a false alarm.' },
         dryRun: { type: 'boolean', description: 'Default true — plan only. false (with confirm:true) to write.' }
       },
       required: ['items']
@@ -1326,11 +1327,11 @@ export const TOOL_DEFINITIONS: McpTool[] = [
         },
         name: {
           type: 'string',
-          description: 'Charge name/title'
+          description: 'Charge name — prints on the invoice'
         },
         description: {
           type: 'string',
-          description: 'Charge description'
+          description: 'Invoice description — product information only, no cost / markup / supplier / pickup / serial notes (those go in an internal ticket note)'
         },
         chargeType: {
           type: 'number',
@@ -1367,14 +1368,16 @@ export const TOOL_DEFINITIONS: McpTool[] = [
         status: {
           type: 'number',
           description: 'Charge status picklist ID'
-        }
+        },
+        allowInternalText: { type: 'boolean', description: 'Write name / description even though they look like internal notes (cost, markup, supplier, pickup, serial). Only for a false alarm.' },
+        confirm: { type: 'boolean', description: 'Must be true to write (financial change) — after the user approved the values.' }
       },
       required: ['ticketID', 'name', 'chargeType']
     }
   },
   {
     name: 'autotask_update_ticket_charge',
-    description: 'Update an existing ticket charge. Only fields provided will be changed.',
+    description: "FINANCIAL — correct an existing ticket charge in place (name / invoice description, quantity, price, cost, billable, status). Only the fields given change; everything else (quantity, cost, price, billing code, status) is kept. Sent through the charge's ticket (PATCH /Tickets/{id}/Charges — the only route Autotask accepts), then read back: the reply lists each field old → new and the unchanged quantity / cost / price. Name and description PRINT ON THE CUSTOMER'S INVOICE: product only (manufacturer, model / part number, what it is) — text with cost, markup, supplier / pickup or serial notes is refused. Never delete and recreate a charge to change it. Needs confirm:true.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -1384,11 +1387,11 @@ export const TOOL_DEFINITIONS: McpTool[] = [
         },
         name: {
           type: 'string',
-          description: 'Updated charge name'
+          description: 'Charge name — prints on the invoice (e.g. "<Manufacturer> <model> 8-Port Gigabit Desktop Switch")'
         },
         description: {
           type: 'string',
-          description: 'Updated description'
+          description: 'Invoice description — product information only, no cost / markup / supplier / pickup / serial notes'
         },
         unitQuantity: {
           type: 'number',
@@ -1409,7 +1412,9 @@ export const TOOL_DEFINITIONS: McpTool[] = [
         status: {
           type: 'number',
           description: 'Updated status'
-        }
+        },
+        allowInternalText: { type: 'boolean', description: 'Write name / description even though they look like internal notes (cost, markup, supplier, pickup, serial). Only for a false alarm.' },
+        confirm: { type: 'boolean', description: 'Must be true to write (financial change) — after the user approved the values.' }
       },
       required: ['chargeId']
     }

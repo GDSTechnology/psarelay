@@ -9,6 +9,7 @@
 // and whether the ticket already carries it. Nothing here calls Autotask.
 
 import { matchProducts, type ProductMatch, type SearchableProduct } from './catalog-hygiene.js';
+import { findInternalText } from './invoice-text.js';
 
 export interface MaterialRequest {
   /** Exact product id (from a previous plan's candidates). Wins over query. */
@@ -61,6 +62,8 @@ export interface MaterialLine {
   /** Ranked catalog matches when the line did not resolve to one product. */
   candidates?: Array<Pick<ProductMatch, 'id' | 'name' | 'sku' | 'manufacturerProductName' | 'unitPrice' | 'unitCost' | 'score' | 'matchedOn'>>;
   problem?: string;
+  /** Something the reviewer should know that does not block the line. */
+  note?: string;
 }
 
 const round2 = (n: number): number => Math.round(n * 100) / 100;
@@ -104,6 +107,7 @@ export function planMaterialLines(input: {
   products: Map<number, CatalogProduct>;
   existing: ExistingCharge[];
   allowDuplicates?: boolean;
+  allowInternalText?: boolean;
 }): MaterialLine[] {
   const seen = new Set<number>();
   return input.items.map((request, i) => {
@@ -126,18 +130,24 @@ export function planMaterialLines(input: {
     const overridePrice = num(request.unitPrice);
     const unitPrice = overridePrice ?? num(p.unitPrice);
     const unitCost = num(request.unitCost) ?? num(p.unitCost) ?? 0;
+    // The description prints on the invoice. A catalog description with purchasing notes / cost
+    // in it is left off (the charge keeps the product name); a supplied one is refused below.
+    const catalogInternal = request.description === undefined ? findInternalText(p.description) : [];
+    const requestInternal = input.allowInternalText ? [] : findInternalText(`${request.description ?? ''}`);
     const described: MaterialLine = {
       ...base,
       productID: p.id,
       ...(p.name !== undefined ? { name: p.name } : {}),
       sku: p.sku ?? null,
       manufacturerProductName: p.manufacturerProductName ?? null,
-      description: request.description ?? p.description ?? null,
+      description: request.description ?? (catalogInternal.length ? null : p.description ?? null),
+      ...(catalogInternal.length ? { note: `catalog description left off the invoice — it contains ${catalogInternal.join(', ')}` } : {}),
       unitCost,
       billingCodeID: num(p.productBillingCodeID) ?? null,
       ...(unitPrice !== undefined ? { unitPrice, extendedPrice: round2(unitPrice * quantity), priceSource: overridePrice !== undefined ? 'override' as const : 'catalog' as const } : {}),
     };
     if (p.isActive === false) return { ...described, problem: `product ${p.id} is inactive` };
+    if (requestInternal.length) return { ...described, problem: `the description contains ${requestInternal.join(', ')} — it prints on the customer's invoice; describe the product only (cost and price have their own fields), or pass allowInternalText` };
     if (unitPrice === undefined) return { ...described, problem: `product ${p.id} has no unit price in the catalog — pass unitPrice` };
     if (seen.has(p.id) && !input.allowDuplicates) return { ...described, action: 'duplicate', problem: 'the same product is listed twice in this request — combine the quantities, or pass allowDuplicates' };
     seen.add(p.id);

@@ -128,3 +128,16 @@ describe('add_ticket_materials tool', () => {
     expect(JSON.stringify(r)).toMatch(/T20261005\.0123/);
   });
 });
+
+describe('invoice text on material lines', () => {
+  test('a catalog description with purchasing notes is left off; a supplied one blocks the line', () => {
+    const p = { id: 20, name: 'Desktop Switch 8-port', unitPrice: 39.3, unitCost: 30.23, isActive: true, description: 'Supply house pickup; cost $30.23, 30% markup' };
+    const products = new Map([[20, p]]);
+    const [fromCatalog] = planMaterialLines({ items: [{ productId: 20, quantity: 1 }], resolved: [{ productId: 20 }], products, existing: [] });
+    expect(fromCatalog).toMatchObject({ action: 'create', description: null });
+    expect(fromCatalog!.note).toMatch(/left off the invoice/);
+    const [supplied] = planMaterialLines({ items: [{ productId: 20, quantity: 1, description: 'Picked up at the supplier, 30% markup' }], resolved: [{ productId: 20 }], products, existing: [] });
+    expect(supplied!.action).toBe('invalid');
+    expect(supplied!.problem).toMatch(/prints on the customer's invoice/);
+  });
+});
