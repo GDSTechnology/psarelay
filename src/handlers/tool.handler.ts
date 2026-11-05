@@ -71,6 +71,7 @@ import { rawCompanyWriteProblem } from '../utils/company-guard.js';
 import { processToolHandlers } from '../vendors/process-tools.js';
 import { mergeToolHandlers } from '../merge/tools.js';
 import { bulkToolHandlers } from '../bulk/tools.js';
+import { reportToolHandlers } from '../reports/tools.js';
 import { commerceToolHandlers } from '../commerce/tools.js';
 import { setupToolHandlers } from '../setup/tools.js';
 import { captureGap, gapToolHandlers } from '../gaps/tools.js';
@@ -1175,6 +1176,8 @@ export class AutotaskToolHandler {
       ...mergeToolHandlers(s, () => getPool(this.logger)),
       // Bulk placeholder cleanup (staged in Postgres, pushed by the background worker at a set pace).
       ...bulkToolHandlers(s, () => getPool(this.logger)),
+      // Customer re-engagement (last customer touchpoint per company, from the mirror; read-only).
+      ...reportToolHandlers(s, () => getPool(this.logger)),
       ...commerceToolHandlers(s, () => getPool(this.logger)),
       ...setupToolHandlers(s),
       // Capability gaps → console Requests page.

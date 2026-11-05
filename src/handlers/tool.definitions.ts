@@ -4654,6 +4654,26 @@ export const TOOL_DEFINITIONS: McpTool[] = [
     annotations: { title: 'Tickets needing scheduling', readOnlyHint: true }
   },
   {
+    name: 'autotask_report_customer_reengagement',
+    description: 'READ-ONLY, 0 Autotask API calls (Postgres mirror). Customer re-engagement for Sales / Account Management: "which customer companies haven\'t we contacted recently?" — ONE call for the whole tenant (never loop companies). For each active customer company: Company Name, primary contact (name, email, phone) and other contacts, Last Contact Date, its type (ticket note | time entry | CRM to-do | opportunity | service call), who, the ticket / task / record, days since, touchpoints in the window. Two lists, oldest contact first: contacted (a touchpoint inside from–to, both inclusive) and notContacted (none in the window: the older last contact if one is known, else "unknown"). Only CUSTOMER-FACING work by a PERSON counts: ticket notes with publish = 1 (All Autotask Users); never resource 4 (system), API users or this MCP. To-Dos completed at :17 (hourly automation) are a weaker signal, shown but not counted. Company 0 (our own) and placeholder companies ("Gmail", "Unknown…") are left out. Rows are flat (columns[] gives the header order) — ready for a spreadsheet; format "xlsx" returns the workbook itself (contentBase64: Summary, Contacted, Not contacted). Read warnings: the mirror may hold notes / time entries only from a cutoff date.',
+    annotations: { title: 'Customer re-engagement (last contact per company)', readOnlyHint: true },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', description: 'Window start, YYYY-MM-DD, inclusive (default: one year before "to")' },
+        to: { type: 'string', description: 'Window end, YYYY-MM-DD, inclusive (default today)' },
+        companyTypes: { type: 'array', items: { type: 'number' }, description: 'Companies.companyType values (default [1] = Customer; 2 Lead, 3 Prospect, 4 Dead, 6 Cancellation, 7 Vendor, 8 Partner)' },
+        companyIds: { type: 'array', items: { type: 'number' }, description: 'Only these companies (optional)' },
+        touchpointTypes: { type: 'array', items: { type: 'string', enum: ['ticket note', 'time entry', 'CRM to-do', 'opportunity', 'service call'] }, description: 'Which kinds count (default all)' },
+        contactsPerCompany: { type: 'number', description: 'Active contacts listed per company, primary first (default 3, max 10)' },
+        includePlaceholders: { type: 'boolean', description: 'Include placeholder companies (default false)' },
+        format: { type: 'string', enum: ['rows', 'xlsx'], description: 'rows (default): JSON rows; xlsx: the Excel workbook as contentBase64' },
+        maxRows: { type: 'number', description: 'For rows: cap per list (default 1000, max 5000); xlsx always has everything' }
+      },
+      required: []
+    }
+  },
+  {
     name: 'autotask_report_ticket_throughput',
     description: "Ticket throughput / work-queue KPIs (read-only, #100). Two views: FLOW over a window — created vs completed vs completion ratio + net backlog change (is the team keeping up with intake?); and the current BACKLOG snapshot — open tickets by age bucket (default 0-7 / 8-30 / 31-90 / 90+ days), by status (raw value + resolved label; open/waiting/on-hold splits stay tenant-specific), and oldest-open. Optional grouping by queue/resource/company gives per-team throughput (open + created + completed + ratio). Scope by createDate/completedDate window (default last 30 days) + optional company/queue. For n8n/chat dashboards.",
     inputSchema: {
@@ -6475,7 +6495,7 @@ export const TOOL_CATEGORIES: Record<string, { description: string; tools: strin
   },
   companies: {
     description: 'Search, create, and update companies',
-    tools: ['autotask_search_companies', 'autotask_get_company', 'autotask_find_company_contact_candidates', 'autotask_find_duplicate_companies', 'autotask_merge_discover', 'autotask_merge_dependency_inventory', 'autotask_merge_build_plan', 'autotask_merge_verify', 'autotask_bulk_inactivate', 'autotask_create_company', 'autotask_update_company', 'autotask_get_company_site_configuration', 'autotask_update_company_site_configuration']
+    tools: ['autotask_search_companies', 'autotask_get_company', 'autotask_find_company_contact_candidates', 'autotask_find_duplicate_companies', 'autotask_report_customer_reengagement', 'autotask_merge_discover', 'autotask_merge_dependency_inventory', 'autotask_merge_build_plan', 'autotask_merge_verify', 'autotask_bulk_inactivate', 'autotask_create_company', 'autotask_update_company', 'autotask_get_company_site_configuration', 'autotask_update_company_site_configuration']
   },
   contacts: {
     description: 'Search and create contacts',
