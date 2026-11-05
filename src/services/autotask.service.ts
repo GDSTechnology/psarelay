@@ -40,8 +40,11 @@ import { analyzeTicketBillingGaps as analyzeTicketBillingGapsPure, TBGResult, TB
 import {
   buildCategoryTree, findCatalogGaps, findDuplicateProducts, matchProducts,
   planBulkProductUpdate, planProductMerge,
-  CatalogGapsResult, ProductLite, SearchableProduct,
+  CatalogGapsResult, ProductLite, ProductMatch, SearchableProduct,
 } from '../utils/catalog-hygiene';
+import { planMaterialLines, resolveProductQuery, summarizeMaterialLines, type CatalogProduct, type ExistingCharge, type MaterialRequest } from '../utils/ticket-materials';
+/** A number, or undefined for empty / non-numeric input (never 0 from null). */
+const num0 = (v: unknown): number | undefined => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? undefined : Number(v));
 import { computeProjectPL, ProjectPLResult } from '../utils/project-pl';
 import { computeSlaCompliance, SlaComplianceResult } from '../utils/sla-compliance';
 import {
@@ -6936,7 +6939,7 @@ export class AutotaskService {
   // =====================================================
 
   private readonly CATALOG_FIELDS = [
-    'id', 'name', 'description', 'productCategory', 'msrp', 'unitPrice', 'isActive',
+    'id', 'name', 'description', 'productCategory', 'msrp', 'unitPrice', 'unitCost', 'isActive',
     'sku', 'internalProductID', 'externalProductID', 'manufacturerName', 'manufacturerProductName', 'vendorProductNumber',
   ];
 
@@ -7005,6 +7008,87 @@ export class AutotaskService {
     const products = await this.fetchCatalogProducts({ activeOnly: false, maxProducts: opts.maxProducts });
     const matches = matchProducts(products as SearchableProduct[], query, { ...(opts.limit !== undefined ? { limit: opts.limit } : {}), ...(opts.activeOnly !== undefined ? { activeOnly: opts.activeOnly } : {}) });
     return { query, scanned: products.length, matchCount: matches.length, matches, truncated: products.length >= Math.min(opts.maxProducts ?? 5000, 20000) };
+  }
+
+  /**
+   * Materials onto a ticket (autotask_add_ticket_materials): resolve each line to
+   * one catalog product, price it from the catalog, check the ticket's existing
+   * charges for the same product, and — only when every line is settled and the
+   * caller confirmed — create the TicketCharges and read each one back.
+   * Re-run safe: a product already charged on the ticket is skipped as a duplicate.
+   */
+  async addTicketMaterials(opts: {
+    ticketID: number; items: MaterialRequest[]; dryRun: boolean; allowDuplicates?: boolean;
+    datePurchased?: string; billable?: boolean; status?: string | number; chargeType?: string | number;
+  }): Promise<Record<string, unknown>> {
+    const http = await this.ensureClient();
+    const ticket = await http.get<AutotaskTicket>('Tickets', opts.ticketID);
+    if (!ticket) return { status: 'not_found', ticketID: opts.ticketID };
+    const ticketRef = { id: opts.ticketID, ticketNumber: (ticket as any).ticketNumber ?? null, title: (ticket as any).title ?? null, companyID: (ticket as any).companyID ?? null };
+
+    // Catalog scan only when a line is free text (one bounded walk, shared by every line).
+    const needsCatalog = opts.items.some((it) => num0(it.productId) === undefined && typeof it.query === 'string' && it.query.trim());
+    const catalog = needsCatalog ? await this.fetchCatalogProducts({ activeOnly: true }) : [];
+    const resolved = opts.items.map((it): { productId: number } | { candidates: ProductMatch[] } | { error: string } => {
+      const pid = num0(it.productId);
+      if (pid !== undefined) return Number.isInteger(pid) && pid > 0 ? { productId: pid } : { error: `productId must be a positive integer, got "${String(it.productId)}"` };
+      if (typeof it.query === 'string' && it.query.trim()) return resolveProductQuery(catalog, it.query);
+      return { error: 'give productId or query' };
+    });
+    // Full records for the chosen products: live price / cost and the product's material billing code.
+    const ids = [...new Set(resolved.flatMap((r) => ('productId' in r ? [r.productId] : [])))];
+    const products = new Map<number, CatalogProduct>();
+    for (let i = 0; i < ids.length; i += 200) {
+      const rows = await http.query<CatalogProduct>('Products', [{ op: 'in', field: 'id', value: ids.slice(i, i + 200) }], { maxRecords: 500 });
+      for (const p of rows) products.set(Number(p.id), p);
+    }
+    // Existing charges, read LIVE (not the mirror): a charge made a minute ago must count as a duplicate.
+    const existing = await http.query<ExistingCharge>('TicketCharges', [{ op: 'eq', field: 'ticketID', value: opts.ticketID }], { includeFields: ['id', 'productID', 'name', 'unitQuantity', 'unitPrice', 'datePurchased', 'isBilled'], maxRecords: 500, noCache: true });
+    const lines = planMaterialLines({ items: opts.items, resolved, products, existing, ...(opts.allowDuplicates ? { allowDuplicates: true } : {}) });
+    const summary = summarizeMaterialLines(lines);
+
+    // Charge type / status: a label or id, else the tenant's picklist default (else 1).
+    const pick = async (field: string, requested: string | number | undefined): Promise<{ value: number; label: string } | { error: string }> => {
+      const values = await this.getPicklistValues('TicketCharges', field).catch(() => [] as PicklistValue[]);
+      if (requested === undefined || requested === null || requested === '') {
+        const d = values.find((v) => v.isDefaultValue && v.isActive !== false) ?? values.find((v) => String(v.value) === '1');
+        return d ? { value: Number(d.value), label: d.label } : { value: 1, label: '1' };
+      }
+      const m = matchPicklist(values, requested);
+      return m.ok ? { value: m.value, label: m.label } : { error: `${field} "${String(requested)}" is not one of: ${m.choices.map((c) => `${c.value} ${c.label}`).join(', ')}` };
+    };
+    const chargeType = await pick('chargeType', opts.chargeType);
+    const status = await pick('status', opts.status);
+    const datePurchased = (opts.datePurchased ?? new Date().toISOString()).slice(0, 10);
+    const settings = { chargeType, status, datePurchased, billable: opts.billable !== false };
+    const errors = [chargeType, status].flatMap((p) => ('error' in p ? [p.error] : []));
+
+    const base = { ticket: ticketRef, lines, ...summary, settings, existingCharges: existing.length };
+    if (errors.length) return { status: 'validation_failed', errors, ...base };
+    if (!summary.readyToWrite) return { status: summary.counts.create === 0 && summary.counts.needs_product === 0 && summary.counts.invalid === 0 ? 'nothing_to_add' : 'needs_input', ...base };
+    if (opts.dryRun) return { status: 'dry_run', ...base };
+
+    const created: Array<{ line: number; chargeID: number; verified: boolean }> = [];
+    for (const l of lines) {
+      if (l.action !== 'create') continue;
+      const charge: Record<string, unknown> = {
+        ticketID: opts.ticketID, productID: l.productID, name: (l.name ?? `Product ${l.productID}`).slice(0, 100),
+        unitQuantity: l.quantity, unitPrice: l.unitPrice, unitCost: l.unitCost ?? 0,
+        chargeType: (chargeType as { value: number }).value, status: (status as { value: number }).value,
+        datePurchased, isBillableToCompany: settings.billable,
+        ...(l.description ? { description: String(l.description).slice(0, 2000) } : {}),
+        ...(l.billingCodeID != null ? { billingCodeID: l.billingCodeID } : {}),
+      };
+      try {
+        const id = await http.childCreate('Tickets', opts.ticketID, 'Charges', charge);
+        const back = await http.get<AutotaskTicketCharge>('TicketCharges', id).catch(() => null);
+        created.push({ line: l.line, chargeID: id, verified: !!back && Number(back.ticketID) === opts.ticketID });
+      } catch (error) {
+        // Stop at the first failure: what was written is reported; a re-run skips it as a duplicate.
+        return { status: created.length ? 'partial' : 'failed', error: error instanceof Error ? error.message : String(error), failedLine: l.line, created, ...base };
+      }
+    }
+    return { status: 'created', created, ...base };
   }
 
   // =====================================================

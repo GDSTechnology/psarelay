@@ -14,6 +14,7 @@ import { normalizeCreateToolResult, CREATE_TOOL_META, NormalizedCreateResult } f
 import { classifyLockError, lockReason } from '../utils/timesheet-lock.js';
 import { RoleSource, needsRoleSelectionMessage, invalidRoleMessage } from '../utils/time-entry-role.js';
 import { partitionTicketNotes } from '../utils/ticket-note-kind.js';
+import type { MaterialLine } from '../utils/ticket-materials.js';
 import { defaultWorkDate, formatChoices, localDayWindow, matchPicklist, matchPicklistExact, TimeGap } from '../utils/staff-tools.js';
 import { getShadowRuntime } from '../db/shadow-runtime.js';
 import { collectAuditEvents, type CollectOptions } from '../db/audit-collector.js';
@@ -38,6 +39,7 @@ const DRY_RUN_FIRST_TOOLS = new Set<string>([
   'autotask_delete_task',
   'autotask_delete_task_with_time',
   'autotask_set_ticket_contract',
+  'autotask_add_ticket_materials',
 ]);
 import { applyBillingTreatment } from '../utils/billing-treatment.js';
 import { defaultTimeZone, durationHours, normalizeTimestamp, validTimeZone } from '../utils/timezone.js';
@@ -674,6 +676,18 @@ export class AutotaskToolHandler {
         suggestedParams: params,
         description: 'Log a time entry',
         requiredParams: [...(!params.ticketID ? ['ticketID'] : []), ...(!params.hoursWorked ? ['hoursWorked'] : [])],
+      };
+    }
+
+    // Materials / parts onto a ticket (catalog-priced, duplicate-checked). Ahead of the ticket
+    // branch, which would otherwise take "add charges to ticket …".
+    if (/\b(?:add|put|charge|bill)\b/.test(intent) && /\b(?:materials?|parts?|products?|charges?|cables?|items?)\b/.test(intent) && /\bticket\b|\bt?\d{8}\.\d{4}\b/.test(intent)) {
+      const tn = intent.match(/\bt?(\d{8}\.\d{4})\b/);
+      return {
+        suggestedTool: 'autotask_add_ticket_materials',
+        suggestedParams: tn ? { ticketNumber: `T${tn[1]}` } : {},
+        description: 'Add catalog products to a ticket as priced charges (dry run first, duplicate check)',
+        requiredParams: [...(tn ? [] : ['ticketNumber']), 'items'],
       };
     }
 
@@ -1717,12 +1731,45 @@ export class AutotaskToolHandler {
         const r = await s.searchTicketCharges(a);
         return { result: r, message: `Found ${r.length} ticket charges` };
       }],
+      ['autotask_add_ticket_materials', async (a) => {
+        const ref = await s.resolveTicketRef({ ticketID: a.ticketID ?? a.ticketId, ticketNumber: a.ticketNumber });
+        if ('error' in ref) return { result: null, message: ref.error };
+        const items = Array.isArray(a.items) ? a.items.filter((x: unknown) => x && typeof x === 'object') : [];
+        if (!items.length) return { result: null, message: 'items is required: one { query or productId, quantity } per material. Nothing written.' };
+        if (items.length > 50) return { result: null, message: `At most 50 materials per call (got ${items.length}). Nothing written.` };
+        const r = await s.addTicketMaterials({
+          ticketID: ref.id, items, dryRun: a.dryRun !== false, allowDuplicates: a.allowDuplicates === true,
+          ...(a.datePurchased ? { datePurchased: String(a.datePurchased) } : {}),
+          ...(typeof a.billable === 'boolean' ? { billable: a.billable } : {}),
+          ...(a.status != null && a.status !== '' ? { status: a.status } : {}),
+          ...(a.chargeType != null && a.chargeType !== '' ? { chargeType: a.chargeType } : {}),
+        });
+        const t = r.ticket as { ticketNumber?: string | null } | undefined;
+        const tn = t?.ticketNumber ?? ref.ticketNumber ?? `ticket ${ref.id}`;
+        const lines = (r.lines ?? []) as MaterialLine[];
+        const money = (n: number | undefined) => (n === undefined ? '?' : `$${n.toFixed(2)}`);
+        const row = (l: MaterialLine) => `${l.line}. ${l.action === 'create' ? '' : `[${l.action.toUpperCase()}] `}${l.name ?? l.request.query ?? `product ${l.request.productId}`}${l.sku ? ` (${l.sku})` : ''} — ${l.quantity} × ${money(l.unitPrice)} = ${money(l.extendedPrice)}${l.problem ? ` — ${l.problem}` : ''}`;
+        const list = lines.map(row).join('\n');
+        const total = `Total to add: ${money(r.total as number)}.`;
+        const message = r.status === 'not_found' ? `Ticket ${ref.id} not found. Nothing written.`
+          : r.status === 'validation_failed' ? `NOTHING WRITTEN — ${(r.errors as string[]).join('; ')}.`
+          : r.status === 'needs_input' ? `NOTHING WRITTEN — ${tn}: some lines need a decision (pick a product from the candidates and pass its productId, or fix the line), then call again:\n${list}`
+          : r.status === 'nothing_to_add' ? `${tn}: nothing to add — every line is already charged on the ticket:\n${list}`
+          : r.status === 'dry_run' ? `DRY RUN (nothing written) — ${tn}:\n${list}\n${total} Show this to the user; after they approve, call again with the same items, dryRun:false and confirm:true.`
+          : r.status === 'created' ? `Added to ${tn}:\n${list}\n${total} Charge ids: ${(r.created as Array<{ chargeID: number; verified: boolean }>).map((c) => `${c.chargeID}${c.verified ? '' : ' (not yet readable)'}`).join(', ')}.`
+          : `${r.status === 'partial' ? 'PARTLY WRITTEN' : 'NOTHING WRITTEN'} — line ${String(r.failedLine)} failed: ${String(r.error)}. Created: ${(r.created as Array<{ chargeID: number }> | undefined)?.map((c) => c.chargeID).join(', ') || 'none'}. A re-run skips what was added (duplicate check).`;
+        return { result: r, message };
+      }],
       ['autotask_create_ticket_charge', async (a) => {
-        const id = await s.createTicketCharge(a);
+        const { billableToAccount, ...charge } = a;
+        // Autotask's field is isBillableToCompany; the old param name was silently ignored.
+        if (typeof billableToAccount === 'boolean' && charge.isBillableToCompany === undefined) charge.isBillableToCompany = billableToAccount;
+        const id = await s.createTicketCharge(charge);
         return { result: id, message: `Successfully created ticket charge with ID: ${id}` };
       }],
       ['autotask_update_ticket_charge', async (a) => {
-        const { chargeId, ...updates } = a;
+        const { chargeId, billableToAccount, ...updates } = a;
+        if (typeof billableToAccount === 'boolean' && updates.isBillableToCompany === undefined) updates.isBillableToCompany = billableToAccount;
         await s.updateTicketCharge(chargeId, updates);
         return { result: chargeId, message: `Successfully updated ticket charge ${chargeId}` };
       }],

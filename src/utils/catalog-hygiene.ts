@@ -81,6 +81,7 @@ export interface ProductLite {
   productCategory?: number | null;
   msrp?: number | null;
   unitPrice?: number | null;
+  unitCost?: number | null;
   isActive?: boolean;
   sku?: string;
   manufacturerName?: string;
@@ -148,6 +149,11 @@ export interface ProductMatch {
   vendorProductNumber?: string;
   isActive?: boolean;
   productCategory?: number | null;
+  description?: string;
+  /** Customer price, cost and list price — so a match can be priced without a second read. */
+  unitPrice?: number | null;
+  unitCost?: number | null;
+  msrp?: number | null;
   score: number;
   matchedOn: string[];
 }
@@ -202,6 +208,10 @@ export function matchProducts(
         ...(p.vendorProductNumber !== undefined ? { vendorProductNumber: p.vendorProductNumber } : {}),
         ...(p.isActive !== undefined ? { isActive: p.isActive } : {}),
         ...(p.productCategory !== undefined ? { productCategory: p.productCategory } : {}),
+        ...(p.description !== undefined ? { description: p.description } : {}),
+        ...(p.unitPrice !== undefined ? { unitPrice: p.unitPrice } : {}),
+        ...(p.unitCost !== undefined ? { unitCost: p.unitCost } : {}),
+        ...(p.msrp !== undefined ? { msrp: p.msrp } : {}),
       });
     }
   }
