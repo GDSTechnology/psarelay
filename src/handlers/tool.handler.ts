@@ -16,6 +16,7 @@ import { RoleSource, needsRoleSelectionMessage, invalidRoleMessage } from '../ut
 import { partitionTicketNotes } from '../utils/ticket-note-kind.js';
 import type { MaterialLine } from '../utils/ticket-materials.js';
 import { internalTextProblem } from '../utils/invoice-text.js';
+import type { ServiceWriteResult } from '../utils/service-catalog.js';
 import { defaultWorkDate, formatChoices, localDayWindow, matchPicklist, matchPicklistExact, TimeGap } from '../utils/staff-tools.js';
 import { getShadowRuntime } from '../db/shadow-runtime.js';
 import { collectAuditEvents, type CollectOptions } from '../db/audit-collector.js';
@@ -41,6 +42,8 @@ const DRY_RUN_FIRST_TOOLS = new Set<string>([
   'autotask_delete_task_with_time',
   'autotask_set_ticket_contract',
   'autotask_add_ticket_materials',
+  'autotask_create_service',
+  'autotask_update_service',
 ]);
 import { applyBillingTreatment } from '../utils/billing-treatment.js';
 import { defaultTimeZone, durationHours, normalizeTimestamp, validTimeZone } from '../utils/timezone.js';
@@ -3356,6 +3359,45 @@ export class AutotaskToolHandler {
         return { result: r, message: `Found ${r.length} services` };
       }],
 
+      // Services catalog writes (create / update / validate)
+      ['autotask_get_service_field_info', async () => {
+        const r = await s.getServiceFieldInfo();
+        const periods = (r.periodTypes as Array<{ value: number; label: string; activeServicesUsingIt: number }>).map((p) => `${p.value} = ${p.label}${p.activeServicesUsingIt ? ` (${p.activeServicesUsingIt} active services)` : ''}`).join(', ');
+        const codes = (r.billingCodesInUse as Array<{ id: number; name: string | null; usedBy: number }>).slice(0, 8).map((c) => `${c.id} ${c.name ?? ''} (${c.usedBy} services)`).join('; ');
+        return { result: r, message: `Services: required ${(r.required as string[]).join(', ') || 'none flagged'}. Billing periods: ${periods || 'none'}. Billing codes existing services use: ${codes || 'none'}.` };
+      }],
+      ['autotask_find_service_by_sku', async (a) => {
+        const sku = typeof a.sku === 'string' && a.sku.trim() ? a.sku.trim() : undefined;
+        const name = typeof a.name === 'string' && a.name.trim() ? a.name.trim() : undefined;
+        if (!sku && !name) return { result: null, message: 'Give sku (exact SKU / catalog number) and/or name (exact service name).' };
+        const r = await s.findServicesByIdentifier({ ...(sku ? { sku } : {}), ...(name ? { name } : {}) });
+        const list = r.matches.map((m) => `${m.id} "${m.name ?? ''}"${m.sku ? ` SKU ${m.sku}` : ''} price ${m.unitPrice ?? '?'} (period ${m.periodType ?? '?'})${m.isActive === false ? ' INACTIVE' : ''} — matched on ${m.matchedOn.join(' + ')}`).join('\n');
+        const none = `No service has ${[sku && `SKU ${sku}`, name && `the name "${name}"`].filter(Boolean).join(' or ')} (searched ${r.searched}, inactive included).`;
+        return { result: { ...r, found: r.matches.length > 0, ambiguous: r.matches.length > 1 }, message: r.matches.length ? `${r.matches.length} service(s) match (searched ${r.searched}):\n${list}${r.matches.length > 1 ? '\nMore than one: pick by id, nothing is chosen for you.' : ''}` : none };
+      }],
+      ['autotask_validate_service', async (a) => {
+        const serviceId = a.serviceId != null ? Number(a.serviceId) : undefined;
+        if (serviceId !== undefined && !(Number.isInteger(serviceId) && serviceId > 0)) return { result: null, message: 'serviceId must be a positive integer.' };
+        const plan = await s.planService(a, { ...(serviceId !== undefined ? { serviceId } : {}), allowInternalText: a.allowInternalText === true, allowDuplicateName: a.allowDuplicateName === true });
+        const result = {
+          valid: plan.valid, duplicateFound: plan.duplicates.length > 0, errors: plan.errors, warnings: plan.warnings,
+          ...(serviceId === undefined ? { readyToCreate: plan.valid } : { readyToUpdate: plan.valid && plan.status === 'ready' }),
+          plan,
+        };
+        return { result, message: serviceMessage({ operation: plan.status === 'unchanged' ? 'unchanged' : plan.valid ? 'dry_run' : 'rejected', correlationId: '', plan }, 'validate') };
+      }],
+      ['autotask_create_service', async (a) => {
+        const r = await s.createService(a, { dryRun: a.dryRun !== false, allowInternalText: a.allowInternalText === true, allowDuplicateName: a.allowDuplicateName === true });
+        return { result: r, message: serviceMessage(r, 'create') };
+      }],
+      ['autotask_update_service', async (a) => {
+        const id = Number(a.serviceId);
+        if (!Number.isInteger(id) || id <= 0) return { result: null, message: 'serviceId (a positive integer) is required. Nothing written.' };
+        const { serviceId: _sid, ...fields } = a;
+        const r = await s.updateService(id, fields, { dryRun: a.dryRun !== false, allowInternalText: a.allowInternalText === true, allowDuplicateName: a.allowDuplicateName === true });
+        return { result: r, message: serviceMessage(r, 'update') };
+      }],
+
       // Service Bundles
       ['autotask_get_service_bundle', async (a) => {
         const r = await s.getServiceBundle(a.serviceBundleId); return { result: r, message: 'Service bundle retrieved successfully' };
@@ -4251,4 +4293,30 @@ function errorToolResult(payload: Record<string, unknown>): {
     content: [{ type: 'text', text: JSON.stringify(payload) }],
     isError: true,
   };
+}
+
+/** One readable summary of a Service create / update / validate result. */
+function serviceMessage(r: ServiceWriteResult, verb: 'create' | 'update' | 'validate'): string {
+  const p = r.plan;
+  const fmt = (v: unknown) => (v === null || v === undefined || v === '' ? '(blank)' : typeof v === 'string' ? `"${v}"` : String(v));
+  const period = p.resolved.periodType ? ` Billing period: ${p.resolved.periodType.value} = ${p.resolved.periodType.label}.` : '';
+  const code = p.resolved.billingCode ? ` Billing code: ${p.resolved.billingCode.id} ${p.resolved.billingCode.name ?? ''}.` : '';
+  const fields = Object.entries(p.body).map(([k, v]) => `${k}: ${fmt(v)}`).join('; ');
+  const changes = p.changes.map((c) => `${c.pricing ? '[PRICING] ' : ''}${c.field}: ${fmt(c.from)} → ${fmt(c.to)}`).join('\n');
+  const warn = p.warnings.length ? `\nWarnings: ${p.warnings.join(' | ')}` : '';
+  const errs = p.errors.map((e) => `[${e.kind}] ${e.message}`).join('; ');
+  const sugg = p.billingCodeSuggestions?.length ? `\nBilling codes existing services use: ${p.billingCodeSuggestions.map((c) => `${c.id} ${c.name ?? ''} (${c.usedBy})`).join('; ')}.` : '';
+  const target = p.mode === 'update' ? `Service ${p.serviceId}${p.before?.name ? ` "${String(p.before.name)}"` : ''}` : `new Service${p.body.name ? ` "${String(p.body.name)}"` : ''}`;
+  switch (r.operation) {
+    case 'rejected': return p.status === 'not_found' ? `Service ${p.serviceId} not found. Nothing written.` : `NOTHING WRITTEN — ${target}: ${errs}.${sugg}${warn}`;
+    case 'unchanged': return `${target}: every value given is already set — nothing to change.`;
+    case 'dry_run': {
+      if (verb === 'validate') return `VALID — ${target}${p.mode === 'update' ? `, changes:\n${changes}` : ` (${fields})`}.${period}${code} No duplicate found.${warn}`;
+      const body = p.mode === 'update' ? `changes:\n${changes}` : `would be created with ${fields}.`;
+      return `DRY RUN (nothing written) — ${target} ${body}${period}${code}${warn}\nShow this to the user; after they approve, call again with the same values, dryRun:false and confirm:true.${p.mode === 'create' ? ' Creating a catalog service starts no billing: contracts and quotes add it separately.' : ''}`;
+    }
+    case 'created': return `Created Service ${r.serviceId}${p.body.name ? ` "${String(p.body.name)}"` : ''}${r.verified ? ' (read back: values match)' : r.record ? ` — WARNING: Autotask did not keep ${r.notApplied?.join(', ')}` : ' (not yet readable — check with autotask_get_service)'}.${period}${code}${r.note ? ` Note: ${r.note}.` : ''} Correlation id ${r.correlationId}.`;
+    case 'updated': return `Updated Service ${r.serviceId}${r.verified ? ' (read back: values match)' : r.record ? ` — WARNING: Autotask did not apply ${r.notApplied?.join(', ')}` : ''}:\n${changes}\nCorrelation id ${r.correlationId}.${warn}`;
+    default: return `FAILED — ${target}: [${r.error?.kind ?? 'api'}] ${r.error?.message ?? 'unknown error'}. ${verb === 'create' ? 'The catalog was re-checked: the service was NOT created, so a retry will not duplicate it.' : 'Re-read the service to see whether anything changed.'} Correlation id ${r.correlationId}.`;
+  }
 }

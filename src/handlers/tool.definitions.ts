@@ -43,6 +43,24 @@ const CONTRACT_SHELL_PROPERTIES = {
 
 const CONTRACT_SHELL_REQUIRED = ['companyID', 'contractName', 'contractType', 'contractCategory', 'startDate', 'endDate'];
 
+/** Services catalog fields shared by validate / create / update_service (Autotask names). */
+const SERVICE_FIELD_PROPS = {
+  name: { type: 'string', description: 'Catalog name, shown on quotes and invoices.' },
+  description: { type: 'string', description: 'Customer-facing description (no cost, markup or supplier notes).' },
+  invoiceDescription: { type: 'string', description: 'Text printed on the invoice line.' },
+  unitPrice: { type: 'number', description: 'Selling price per unit per billing period. 0 is a value.' },
+  unitCost: { type: 'number', description: 'Internal cost per unit per period. 0 is a value; give the real cost — do not guess.' },
+  periodType: { type: ['number', 'string'], description: 'Billing period: the picklist id or its label (e.g. "Monthly"), checked against the live picklist (autotask_get_service_field_info).' },
+  billingCodeID: { type: 'number', description: 'Billing code id (must exist and be active; autotask_get_service_field_info lists the codes existing services use).' },
+  isActive: { type: 'boolean', description: 'Active in the catalog (default true on create). false retires the service.' },
+  sku: { type: 'string', description: 'Catalog SKU (must be unique; checked against sku and catalogNumberPartNumber of every service).' },
+  catalogNumberPartNumber: { type: 'string', description: 'Secondary catalog number / part number.' },
+  manufacturerServiceProvider: { type: 'string', description: 'Provider of the service.' },
+  manufacturerServiceProviderProductNumber: { type: 'string', description: "Provider's part number." },
+  serviceLevelAgreementID: { type: 'number', description: 'SLA id (optional).' },
+  vendorCompanyID: { type: 'number', description: 'Vendor company id (optional).' },
+  markupRate: { type: 'number', description: 'Markup rate (optional; only if the tenant uses it).' },
+} as const;
 export const TOOL_DEFINITIONS: McpTool[] = [
   // Vendor purchasing & billing reconciliation (P0, read-only toward Autotask)
   {
@@ -3886,7 +3904,7 @@ export const TOOL_DEFINITIONS: McpTool[] = [
   // Service tools
   {
     name: 'autotask_get_service',
-    description: 'Get a specific service by ID',
+    description: "Get one catalog Service (recurring service definition: price, billing period, billing code, SKU) by id. Read-only.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -3921,6 +3939,75 @@ export const TOOL_DEFINITIONS: McpTool[] = [
       },
       required: []
     }
+  },
+
+  // Services catalog writes. Services are the RECURRING catalog entries (managed services,
+  // per-user / per-device monthly fees) — not Products (hardware, parts), not Contract
+  // Services (a service on one customer's contract), not Service Calls (scheduling).
+  {
+    name: 'autotask_get_service_field_info',
+    description: 'Before creating or changing a catalog Service: the Services fields this tenant has (required, read-only, max length), the billing-period picklist (periodType: e.g. which value is Monthly) with how many active services use each, and the billing codes existing services use. Read-only.',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+    annotations: { title: 'Service catalog field info', readOnlyHint: true },
+  },
+  {
+    name: 'autotask_find_service_by_sku',
+    description: 'Find catalog Services by EXACT SKU / catalog number and/or exact name (case-insensitive), inactive ones included. Use before creating a service. Several matches are returned as a list — nothing is picked for you. Read-only.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sku: { type: 'string', description: 'Exact SKU (also matched against catalogNumberPartNumber), e.g. "MIT-BASE".' },
+        name: { type: 'string', description: 'Exact service name.' },
+      },
+      required: [],
+    },
+    annotations: { title: 'Find service by SKU', readOnlyHint: true },
+  },
+  {
+    name: 'autotask_validate_service',
+    description: 'Check a proposed catalog Service (or, with serviceId, a proposed change to one) WITHOUT writing: fields against the live field list, billing period, billing code, price / cost, customer-facing text, and duplicates by SKU and name. Returns { valid, duplicateFound, errors[{kind: validation|duplicate|not_found, field, message}], warnings, readyToCreate | readyToUpdate }. Read-only.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        serviceId: { type: 'number', description: 'Validate an update of this service instead of a create.' },
+        ...SERVICE_FIELD_PROPS,
+        allowDuplicateName: { type: 'boolean', description: 'Accept another service with the same name (a SKU duplicate is always refused).' },
+        allowInternalText: { type: 'boolean', description: 'Skip the check for cost / markup / supplier text in name, description and invoiceDescription.' },
+      },
+      required: [],
+    },
+    annotations: { title: 'Validate service', readOnlyHint: true },
+  },
+  {
+    name: 'autotask_create_service',
+    description: 'Create a catalog Service (recurring service definition: name, monthly price, billing period, billing code, SKU). FINANCIAL. DRY RUN BY DEFAULT: without dryRun:false it only validates and shows what would be created. The write needs dryRun:false AND confirm:true, after the user approves the dry run. Refused (nothing written) if a service already has the SKU or the name, if a field is unknown / read-only in this tenant, if the billing code is missing / inactive, or if the customer-facing text contains cost or markup. 0 is a valid price or cost. Returns the new service id and the record read back. Creating a service starts no billing — adding it to a contract or quote is a separate step. Call autotask_get_service_field_info first for the periodType and billing-code values.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...SERVICE_FIELD_PROPS,
+        allowDuplicateName: { type: 'boolean', description: 'Create even though another service has the same name (a SKU duplicate is always refused).' },
+        allowInternalText: { type: 'boolean', description: 'Skip the check for cost / markup / supplier text in the customer-facing fields.' },
+        dryRun: { type: 'boolean', description: 'Default true: validate only. false + confirm:true creates.' },
+        confirm: { type: 'boolean', description: 'Required with dryRun:false.' },
+      },
+      required: ['name', 'unitPrice', 'periodType', 'billingCodeID'],
+    },
+  },
+  {
+    name: 'autotask_update_service',
+    description: 'Change a catalog Service. Partial: only the fields given are sent, and only those that differ; everything else is kept. FINANCIAL. DRY RUN BY DEFAULT: returns every before → after (price / period / billing-code changes marked [PRICING]); the write needs dryRun:false AND confirm:true after the user approves. Use isActive:false to retire a service (it stays on existing contracts). Catalog price changes do NOT change contracts or quotes that already carry the service. Read back afterwards; a value Autotask did not apply is reported.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        serviceId: { type: 'number', description: 'The service to change.' },
+        ...SERVICE_FIELD_PROPS,
+        allowDuplicateName: { type: 'boolean', description: 'Accept a new name another service already has.' },
+        allowInternalText: { type: 'boolean', description: 'Skip the check for cost / markup / supplier text in the customer-facing fields.' },
+        dryRun: { type: 'boolean', description: 'Default true: show the changes only. false + confirm:true writes.' },
+        confirm: { type: 'boolean', description: 'Required with dryRun:false.' },
+      },
+      required: ['serviceId'],
+    },
   },
 
   // Service Bundle tools
@@ -6559,7 +6646,7 @@ export const TOOL_CATEGORIES: Record<string, { description: string; tools: strin
   },
   products_and_services: {
     description: 'Products, services, and service bundles catalog',
-    tools: ['autotask_get_product', 'autotask_search_products', 'autotask_find_product', 'autotask_list_product_categories', 'autotask_find_catalog_gaps', 'autotask_find_duplicate_products', 'autotask_bulk_update_products', 'autotask_merge_products', 'autotask_create_product', 'autotask_update_product', 'autotask_search_inventory_products', 'autotask_get_inventory_product', 'autotask_create_inventory_product', 'autotask_update_inventory_product', 'autotask_search_inventory_locations', 'autotask_get_inventory_location', 'autotask_create_inventory_location', 'autotask_update_inventory_location', 'autotask_search_inventory_stocked_items', 'autotask_get_inventory_stocked_item', 'autotask_search_inventory_transfers', 'autotask_create_inventory_transfer', 'autotask_add_inventory_stock', 'autotask_remove_inventory_stock', 'autotask_report_inventory_reorder', 'autotask_report_inventory_closeouts', 'autotask_report_inventory_stale', 'autotask_get_service', 'autotask_search_services', 'autotask_get_service_bundle', 'autotask_search_service_bundles']
+    tools: ['autotask_get_product', 'autotask_search_products', 'autotask_find_product', 'autotask_list_product_categories', 'autotask_find_catalog_gaps', 'autotask_find_duplicate_products', 'autotask_bulk_update_products', 'autotask_merge_products', 'autotask_create_product', 'autotask_update_product', 'autotask_search_inventory_products', 'autotask_get_inventory_product', 'autotask_create_inventory_product', 'autotask_update_inventory_product', 'autotask_search_inventory_locations', 'autotask_get_inventory_location', 'autotask_create_inventory_location', 'autotask_update_inventory_location', 'autotask_search_inventory_stocked_items', 'autotask_get_inventory_stocked_item', 'autotask_search_inventory_transfers', 'autotask_create_inventory_transfer', 'autotask_add_inventory_stock', 'autotask_remove_inventory_stock', 'autotask_report_inventory_reorder', 'autotask_report_inventory_closeouts', 'autotask_report_inventory_stale', 'autotask_get_service', 'autotask_search_services', 'autotask_get_service_field_info', 'autotask_find_service_by_sku', 'autotask_validate_service', 'autotask_create_service', 'autotask_update_service', 'autotask_get_service_bundle', 'autotask_search_service_bundles']
   },
   resources: {
     description: 'Search Autotask resources (technicians/staff) and roles (for assignment / time entries)',

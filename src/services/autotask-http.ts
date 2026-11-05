@@ -1043,7 +1043,7 @@ export class AutotaskHttpClient {
    * supports universally across zones. The fallback is gated strictly on a 404
    * status so genuine validation errors (400/422) still surface to the caller.
    */
-  async update(entity: string, id: number, body: Record<string, any>): Promise<void> {
+  async update(entity: string, id: number, body: Record<string, any>, opts: { putBody?: Record<string, any> } = {}): Promise<void> {
     try {
       await this.request<void>('PATCH', `/${entity}`, { id, ...body }, false, { allowEmptyBody: true });
     } catch (err) {
@@ -1051,7 +1051,8 @@ export class AutotaskHttpClient {
         this.logger.debug(
           `Autotask PATCH /${entity} returned 404 (likely Zone DE1) — retrying as PUT /${entity}/${id}`
         );
-        await this.request<void>('PUT', `/${entity}/${id}`, body, false, { allowEmptyBody: true });
+        // PUT replaces the whole record: callers that can, pass the full merged record (putBody).
+        await this.request<void>('PUT', `/${entity}/${id}`, opts.putBody ?? body, false, { allowEmptyBody: true });
         return;
       }
       throw err;
