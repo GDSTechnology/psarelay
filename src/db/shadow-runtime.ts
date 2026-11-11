@@ -253,32 +253,15 @@ export function maxAgeFor(rt: Pick<ShadowRuntime, 'maxAgeSeconds'>, name: string
 /** After an MCP write to an entity, its searches read live this long (until the next sync re-reads the row). */
 const WRITE_BYPASS_MS = 90_000;
 
-async function freshEnough(rt: ShadowRuntime, name: string): Promise<Freshness | null> {
-  let c = freshCache.get(name);
-  if (!c || Date.now() - c.at > 15_000) { c = { at: Date.now(), f: await rt.store.freshness(name) }; freshCache.set(name, c); }
-  const f = c.f;
-  if (!f.ready || f.ageSeconds == null || f.ageSeconds + Math.round((Date.now() - c.at) / 1000) > maxAgeFor(rt, name)) return null;
-  return f;
-}
-
 /**
  * One row by id from the shadow, or undefined to go live: serving reads on,
  * mirrored, fresh, the row present (a windowed mirror may not hold old rows)
  * and not written by the MCP since the last sync.
  */
 export async function shadowGet(entity: string, id: number): Promise<unknown | undefined> {
-  const rt = runtime;
-  const def = shadowEntity(entity);
-  if (!rt?.serveReads || !def || !Number.isFinite(id)) return undefined;
-  try {
-    if (rt.sync?.isDirty(def.name, id) || !(await freshEnough(rt, def.name))) return undefined;
-    const r = await rt.store.query(def.name, [{ op: 'eq', field: 'id', value: id }], { limit: 1 });
-    if (!r.rows[0]) return undefined;
-    noteShadowRead(def.name);
-    return r.rows[0];
-  } catch {
-    return undefined;
-  }
+  if (!runtime?.serveReads) return undefined;
+  const r = await mirrorGet(entity, id);
+  return r.ok && r.row != null ? r.row : undefined;
 }
 
 /**
@@ -287,26 +270,70 @@ export async function shadowGet(entity: string, id: number): Promise<unknown | u
  * filter translates to SQL. Rows come back in ascending id order, like Autotask.
  */
 export async function shadowRead<T>(entity: string, filters: ShadowFilter[], limit: number): Promise<{ rows: T[]; ageSeconds: number } | null> {
+  if (!runtime?.serveReads) return null;
+  const r = await mirrorQuery<T>(entity, filters, limit);
+  return r.ok ? { rows: r.rows, ageSeconds: r.ageSeconds } : null;
+}
+
+/** Why the mirror could not answer a read (the integration API reports it; MCP reads just go live). */
+export type MirrorMiss = 'mirror_off' | 'not_mirrored' | 'not_ready' | 'stale' | 'recently_written' | 'outside_window' | 'unknown_field' | 'error';
+export type MirrorQueryResult<T> = { ok: true; rows: T[]; ageSeconds: number } | { ok: false; reason: MirrorMiss };
+export type MirrorGetResult = { ok: true; row: unknown | null; ageSeconds: number } | { ok: false; reason: MirrorMiss };
+
+async function freshness(rt: ShadowRuntime, name: string): Promise<{ f: Freshness; age: number } | MirrorMiss> {
+  let c = freshCache.get(name);
+  if (!c || Date.now() - c.at > 15_000) { c = { at: Date.now(), f: await rt.store.freshness(name) }; freshCache.set(name, c); }
+  const f = c.f;
+  if (!f.ready || f.ageSeconds == null) return 'not_ready';
+  const age = f.ageSeconds + Math.round((Date.now() - c.at) / 1000);
+  return age > maxAgeFor(rt, name) ? 'stale' : { f, age };
+}
+
+/**
+ * A search answered from the mirror whether or not the MCP's own reads use it (`serveReads`): the integration
+ * API (src/integrations) is a mirror client by design. Same rules otherwise — mirrored, backfilled, fresh, inside
+ * the history window, every filter field known, nothing just written by the MCP.
+ */
+export async function mirrorQuery<T>(entity: string, filters: ShadowFilter[], limit: number): Promise<MirrorQueryResult<T>> {
   const rt = runtime;
-  if (!rt?.serveReads || !shadowEntity(entity)) return null;
+  if (!rt) return { ok: false, reason: 'mirror_off' };
+  const def = shadowEntity(entity);
+  if (!def) return { ok: false, reason: 'not_mirrored' };
   try {
-    const name = shadowEntity(entity)!.name;
     // The MCP just wrote this entity: a created/edited row isn't mirrored yet — read live for a moment.
-    if (rt.sync?.writtenWithin(name, WRITE_BYPASS_MS)) return null;
-    let c = freshCache.get(name);
-    if (!c || Date.now() - c.at > 15_000) { c = { at: Date.now(), f: await rt.store.freshness(name) }; freshCache.set(name, c); }
-    const f = c.f;
-    if (!f.ready || f.ageSeconds == null || f.ageSeconds + Math.round((Date.now() - c.at) / 1000) > maxAgeFor(rt, name)) return null;
+    if (rt.sync?.writtenWithin(def.name, WRITE_BYPASS_MS)) return { ok: false, reason: 'recently_written' };
+    const fr = await freshness(rt, def.name);
+    if (typeof fr === 'string') return { ok: false, reason: fr };
     // A windowed mirror only holds recent history: serve only queries whose
     // filters stay inside it (e.g. open tickets, dateWorked ≥ window start).
-    const def = shadowEntity(entity)!;
-    if (f.windowFrom && def.windowCovers && !def.windowCovers(filters, f.windowFrom)) return null;
-    if (!(await fieldsKnown(rt, name, filters))) return null;
-    const r = await rt.store.query(name, filters, { limit, order: 'id_asc' });
-    noteShadowRead(name);
-    return { rows: r.rows as T[], ageSeconds: f.ageSeconds };
+    if (fr.f.windowFrom && def.windowCovers && !def.windowCovers(filters, fr.f.windowFrom)) return { ok: false, reason: 'outside_window' };
+    if (!(await fieldsKnown(rt, def.name, filters))) return { ok: false, reason: 'unknown_field' };
+    const r = await rt.store.query(def.name, filters, { limit, order: 'id_asc' });
+    noteShadowRead(def.name);
+    return { ok: true, rows: r.rows as T[], ageSeconds: fr.age };
   } catch {
-    return null; // unsupported filter, PG hiccup — the live API answers instead
+    return { ok: false, reason: 'error' }; // unsupported filter, PG hiccup — the live API answers instead
+  }
+}
+
+/**
+ * One row by id from the mirror (row null = not in the mirror). A row the MCP wrote since the last sync is a miss.
+ */
+export async function mirrorGet(entity: string, id: number): Promise<MirrorGetResult> {
+  const rt = runtime;
+  if (!rt) return { ok: false, reason: 'mirror_off' };
+  const def = shadowEntity(entity);
+  if (!def) return { ok: false, reason: 'not_mirrored' };
+  if (!Number.isFinite(id)) return { ok: false, reason: 'error' };
+  try {
+    if (rt.sync?.isDirty(def.name, id)) return { ok: false, reason: 'recently_written' };
+    const fr = await freshness(rt, def.name);
+    if (typeof fr === 'string') return { ok: false, reason: fr };
+    const r = await rt.store.query(def.name, [{ op: 'eq', field: 'id', value: id }], { limit: 1 });
+    if (r.rows[0]) noteShadowRead(def.name);
+    return { ok: true, row: r.rows[0] ?? null, ageSeconds: fr.age };
+  } catch {
+    return { ok: false, reason: 'error' };
   }
 }
 

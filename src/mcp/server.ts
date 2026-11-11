@@ -7,7 +7,7 @@
 // traffic natively + 2025-era traffic via the default stateless legacy
 // fallback) and serveStdio (stdio, same factory, era pinned per connection).
 
-import { getShadowRuntime, initShadow } from '../db/shadow-runtime.js';
+import { getShadowRuntime, initShadow, mirrorGet, mirrorQuery } from '../db/shadow-runtime.js';
 import { startNotifyWatch } from '../services/notify-watch.js';
 import { startVendorMonitor } from '../vendors/monitor.js';
 import { startBulkWorker } from '../bulk/worker.js';
@@ -52,6 +52,8 @@ import { authenticateM365 } from '../security/m365-auth.js';
 import { runJob } from '../services/call-log.js';
 import { AdminStore } from '../admin/store.js';
 import type { Pool } from 'pg';
+import { API_BASE, handleReadApi } from '../integrations/read-api.js';
+import { apiKeyStore } from '../integrations/api-keys.js';
 
 export class PsarelayServer {
   private config: McpServerConfig;
@@ -467,6 +469,27 @@ export class PsarelayServer {
         return;
       }
 
+      // Read API for other systems (time / CRM modules): answered from the Postgres mirror, keyed per system.
+      if (url.pathname === API_BASE || url.pathname.startsWith(`${API_BASE}/`)) {
+        const pool = isPgEnabled() ? getPool(this.logger) : null;
+        const tenant = (this.envConfig?.autotask?.username ?? '').toLowerCase();
+        handleReadApi(req, res, url, {
+          keys: apiKeyStore(pool),
+          mirror: {
+            query: (e, f, l) => mirrorQuery<Record<string, unknown>>(e, f, l),
+            get: mirrorGet,
+            freshness: async (e) => { const rt = getShadowRuntime(); return rt ? rt.store.freshness(e) : null; },
+          },
+          live: () => this.autotaskService.httpClient(),
+          pressure: () => backpressure(tenant),
+          logger: this.logger,
+        }).catch((err) => {
+          this.logger.error('Integration API failed:', err);
+          if (!res.headersSent) { res.writeHead(500, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Internal error.' })); }
+        });
+        return;
+      }
+
       // A person opening the address in a browser: say what it is (no version, no tenant details — zero trust).
       if (url.pathname === '/' && req.method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
@@ -477,7 +500,7 @@ export class PsarelayServer {
 
       // 404 for everything else
       res.writeHead(404, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Not found', endpoints: ['/mcp', '/health'] }));
+      res.end(JSON.stringify({ error: 'Not found', endpoints: ['/mcp', '/health', '/api/v1'] }));
     });
 
     await new Promise<void>((resolve) => {
