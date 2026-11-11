@@ -50,6 +50,8 @@ import { mirrorClassifier, teamActivityHour, teamActivityProfile } from '../bulk
 import { hourlyActivity } from '../services/call-log.js';
 import { clearTokenCache, tokenStore } from '../security/tokens.js';
 import { securityPosture } from '../security/posture.js';
+import { apiKeyStore, coercePolicy, mirroredEntityNames, ApiKeyInputError } from '../integrations/api-keys.js';
+import { API_BASE } from '../integrations/read-api.js';
 import { CredentialStore, credentialSource, credentialTester, lookupZone, setCredentialSource, type AutotaskCredentials } from '../setup/credentials.js';
 import { secretKeyStatus } from '../security/secrets.js';
 import { oauthBase } from '../oauth/server.js';
@@ -812,6 +814,57 @@ export function adminHandler(deps: AdminDeps) {
       const ok = await store.revoke(Number(tokMatch[1]), ctx.user!.username);
       void log(ctx, 'access.token_revoked', { id: Number(tokMatch[1]), ok });
       return send(res, 200, { ok, message: ok ? 'Revoked. Calls with this token are refused from now on.' : 'That token was already revoked.' });
+    }
+
+    // ── integrations: read API keys for other systems (time / CRM modules), served from the mirror ──
+    if (path === '/api/integrations' && method === 'GET') {
+      requireUser(ctx, 'admin');
+      const keys = apiKeyStore(deps.pool);
+      const rt = getShadowRuntime();
+      const entities = await Promise.all(mirroredEntityNames().map(async (name) => {
+        const f = rt ? await rt.store.freshness(name).catch(() => null) : null;
+        return { name, ready: !!f?.ready, ageSeconds: f?.ageSeconds ?? null, rows: f?.rows ?? null };
+      }));
+      const base = mcpUrl().replace(/\/mcp$/, API_BASE);
+      if (!keys) return send(res, 200, { available: false, mirror: !!rt, apiUrl: base, entities, keys: [] });
+      const usage = await keys.usage24h().catch(() => new Map());
+      const list = (await keys.list()).map((k) => ({ ...k, thisHour: keys.current(k.id), last24h: usage.get(k.id) ?? { mirror: 0, live: 0, refused: 0 } }));
+      return send(res, 200, { available: true, mirror: !!rt, apiUrl: base, entities, keys: list });
+    }
+    if (path === '/api/integrations/keys' && method === 'POST') {
+      requireUser(ctx, 'admin');
+      const keys = apiKeyStore(deps.pool);
+      if (!keys) throw new HttpError(409, 'API keys need the Postgres layer (MCP_PG_ENABLED).', 'unavailable');
+      const b = await readJson(req, 8 * 1024);
+      const name = String(b.name ?? '').trim().slice(0, 80);
+      if (!name) throw new HttpError(400, 'Give the key a name (the system that uses it, e.g. "Time module").', 'invalid');
+      const days = b.expiresInDays == null || b.expiresInDays === '' ? null : Number(b.expiresInDays);
+      if (days != null && (!Number.isInteger(days) || days < 1 || days > 3650)) throw new HttpError(400, 'Expiry is 1–3650 days, or empty for none.', 'invalid');
+      let policy;
+      try { policy = coercePolicy(b); } catch (e) { if (e instanceof ApiKeyInputError) throw new HttpError(400, e.message, 'invalid'); throw e; }
+      const r = await keys.create({ name, policy, expiresAt: days ? new Date(Date.now() + days * 86_400_000).toISOString() : null, by: ctx.user!.username });
+      void log(ctx, 'integrations.key_created', { id: r.item.id, name, ...policy, expiresInDays: days });
+      return send(res, 200, { key: r.key, item: r.item, apiUrl: mcpUrl().replace(/\/mcp$/, API_BASE) });
+    }
+    const keyMatch = /^\/api\/integrations\/keys\/(\d+)(\/revoke)?$/.exec(path);
+    if (keyMatch && ((method === 'PATCH' && !keyMatch[2]) || (method === 'POST' && keyMatch[2]))) {
+      requireUser(ctx, 'admin');
+      const keys = apiKeyStore(deps.pool);
+      if (!keys) throw new HttpError(409, 'API keys need the Postgres layer (MCP_PG_ENABLED).', 'unavailable');
+      const id = Number(keyMatch[1]);
+      if (keyMatch[2]) {
+        const ok = await keys.revoke(id, ctx.user!.username);
+        void log(ctx, 'integrations.key_revoked', { id, ok });
+        return send(res, 200, { ok, message: ok ? 'Revoked. Calls with this key are refused from now on.' : 'That key was already revoked.' });
+      }
+      const cur = await keys.get(id);
+      if (!cur || cur.revokedAt) throw new HttpError(404, 'No active key with that id.');
+      const b = await readJson(req, 8 * 1024);
+      let policy;
+      try { policy = coercePolicy(b, cur); } catch (e) { if (e instanceof ApiKeyInputError) throw new HttpError(400, e.message, 'invalid'); throw e; }
+      const item = await keys.update(id, policy, ctx.user!.username);
+      void log(ctx, 'integrations.key_updated', { id, before: { entities: cur.entities, allowLive: cur.allowLive, allowExternal: cur.allowExternal, hourlyLimit: cur.hourlyLimit, liveHourlyLimit: cur.liveHourlyLimit }, after: policy });
+      return send(res, 200, { ok: true, item, message: 'Saved. It applies to the next call.' });
     }
 
     // ── plan: modules on the account, and upgrade requests (to the control plane, via notifications) ──

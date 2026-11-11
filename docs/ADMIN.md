@@ -392,6 +392,20 @@ user's read access — per-person read scoping is the next step.
 used to write as that person: any client could claim to be anyone, so caller-mode impersonation only follows a token.
 **Settings → Security → Trust identities a client declares without a token** restores the old behaviour — don't.
 
+### Integrations (read API keys for other systems)
+
+Admins only. Other systems, such as a time module or a CRM module, read Autotask data from the mirror through
+`/api/v1` instead of calling Autotask. Create **one key per system**, then:
+
+- tick the entities it may read;
+- choose whether a read the mirror can't answer may go to Autotask live (off by default);
+- choose whether it may be used from outside the private network (off by default);
+- set its hourly caps.
+
+The key (`psk_…`) is shown once. It opens only the read API, never `/mcp`. Changes and revokes apply to the next
+call. The table shows each key's use this hour and over the last 24 hours, with the share the mirror answered.
+Endpoints, filters, paging and errors: [INTEGRATION_API.md](INTEGRATION_API.md).
+
 The **Security** panel on the Setup page lists what this server exposes and who it trusts — open endpoint, trusted
 declared identities, role gating, raw requests, CORS, the public health check, the webhook receiver — worst first,
 each with the fix.

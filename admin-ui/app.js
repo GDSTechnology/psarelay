@@ -85,6 +85,7 @@ const ROUTES = [
   { hash: '#/notifications', label: 'Notifications', view: notifications },
   { hash: '#/settings', label: 'Settings', view: settings },
   { hash: '#/access', label: 'Access', view: access, admin: true },
+  { hash: '#/integrations', label: 'Integrations', view: integrations, admin: true },
   { hash: '#/users', label: 'Users', view: users, admin: true },
   { hash: '#/m365', label: 'Microsoft 365', view: m365, admin: true },
   { hash: '#/activity', label: 'Activity', view: activity, admin: true },
@@ -899,6 +900,108 @@ async function access(body) {
       h('div', { class: 'row', style: 'flex-wrap:wrap;gap:8px' }, name, kind, rid, days, create)),
     h('section', { class: 'panel' }, h('h2', null, 'Tokens'), list));
   try { await draw(); } catch (x) { list.replaceChildren(h('div', { class: 'error' }, x.message)); }
+}
+
+// ── integrations: read API keys for other systems, answered from the mirror ──
+async function integrations(body) {
+  const list = h('div');
+  const shown = h('div');
+  let entities = [];
+  // Policy editor shared by "new key" and "edit": entity checkboxes, live fallback, outside use, caps.
+  const policyForm = (k) => {
+    const picked = new Set(k ? k.entities : []);
+    const boxes = entities.map((e) => {
+      const cb = h('input', { type: 'checkbox', value: e.name, checked: picked.has(e.name) });
+      return h('label', { class: 'row', style: 'gap:4px;font-size:13px;min-width:170px' }, cb, e.name,
+        h('span', { class: 'muted', style: 'font-size:11px' }, e.ready ? `· ${duration(e.ageSeconds)} old` : '· not ready'));
+    });
+    const live = h('input', { type: 'checkbox', checked: k ? k.allowLive : false });
+    const ext = h('input', { type: 'checkbox', checked: k ? k.allowExternal : false });
+    const cap = h('input', { type: 'number', min: 0, value: k ? k.hourlyLimit : 3600, style: 'width:110px' });
+    const liveCap = h('input', { type: 'number', min: 0, max: 5000, value: k ? k.liveHourlyLimit : 100, style: 'width:110px' });
+    const el = h('div', null,
+      h('div', { class: 'muted', style: 'font-size:13px;margin:4px 0' }, 'May read:'),
+      h('div', { class: 'row', style: 'flex-wrap:wrap;gap:6px 14px' }, boxes),
+      h('div', { class: 'row', style: 'flex-wrap:wrap;gap:8px 18px;margin-top:10px;font-size:13px' },
+        h('label', { class: 'row', style: 'gap:4px' }, live, 'When the mirror can\'t answer, ask Autotask live'),
+        h('label', { class: 'row', style: 'gap:4px' }, ext, 'Allow use from outside the private network'),
+        h('label', { class: 'row', style: 'gap:4px' }, 'Requests / hour', cap),
+        h('label', { class: 'row', style: 'gap:4px' }, 'Live calls / hour', liveCap)));
+    const value = () => ({ entities: boxes.map((b) => b.querySelector('input')).filter((c) => c.checked).map((c) => c.value),
+      allowLive: live.checked, allowExternal: ext.checked, hourlyLimit: cap.value, liveHourlyLimit: liveCap.value });
+    return { el, value };
+  };
+  const draw = async () => {
+    const r = await api('GET', '/api/integrations');
+    entities = r.entities;
+    if (!r.available) { list.replaceChildren(h('p', { class: 'muted' }, 'API keys need the Postgres layer (MCP_PG_ENABLED) and migration 0024.')); return r; }
+    list.replaceChildren(
+      r.mirror ? null : h('div', { class: 'banner warn' }, 'The mirror is off (MCP_PG_SHADOW_ENABLED): every read would need live access, and mirror-only keys get HTTP 503.'),
+      r.keys.length ? h('div', { class: 'table-wrap' }, h('table', null,
+        h('thead', null, h('tr', null, ['Name', 'May read', 'Live', 'This hour', 'Last 24 h', 'Last used', 'Status', ''].map((x) => h('th', null, x)))),
+        h('tbody', null, r.keys.flatMap((k) => {
+          const expired = k.expiresAt && Date.parse(k.expiresAt) < Date.now();
+          const status = k.revokedAt ? h('span', { class: 'badge' }, `Revoked ${ago(k.revokedAt)}`) : expired ? h('span', { class: 'badge warn' }, 'Expired') : h('span', { class: 'badge ok' }, k.expiresAt ? `Active · until ${k.expiresAt.slice(0, 10)}` : 'Active');
+          const u = k.last24h; const total = u.mirror + u.live;
+          const editRow = h('tr', { style: 'display:none' });
+          const edit = !k.revokedAt ? h('button', { class: 'small secondary', onclick: () => {
+            if (editRow.style.display === '') { editRow.style.display = 'none'; return; }
+            const f = policyForm(k);
+            editRow.replaceChildren(h('td', { colspan: 8 }, f.el, h('div', { class: 'row', style: 'gap:8px;margin-top:8px' },
+              h('button', { class: 'primary small', onclick: async () => { try { const x = await api('PATCH', `/api/integrations/keys/${k.id}`, f.value()); toast(x.message); draw(); } catch (x) { toast(x.message); } } }, 'Save'),
+              h('button', { class: 'small secondary', onclick: () => { editRow.style.display = 'none'; } }, 'Cancel'))));
+            editRow.style.display = '';
+          } }, 'Edit') : null;
+          const revoke = !k.revokedAt ? h('button', { class: 'small secondary', onclick: async () => {
+            if (!confirm(`Revoke "${k.name}"?\n\nEvery call with this key is refused from now on.`)) return;
+            try { const x = await api('POST', `/api/integrations/keys/${k.id}/revoke`, {}); toast(x.message); draw(); } catch (x) { toast(x.message); }
+          } }, 'Revoke') : null;
+          return [h('tr', null,
+            h('td', null, k.name, h('div', { class: 'mono muted', style: 'font-size:12px' }, `${k.prefix}…`), k.allowExternal ? h('div', { class: 'muted', style: 'font-size:12px' }, 'outside use allowed') : null),
+            h('td', { style: 'font-size:13px;max-width:280px' }, k.entities.join(', ')),
+            h('td', { style: 'font-size:13px' }, k.allowLive ? `Yes · ≤${fmt(k.liveHourlyLimit)}/h` : 'Mirror only'),
+            h('td', { style: 'font-size:13px' }, `${fmt(k.thisHour.total)} / ${fmt(k.hourlyLimit)}`, k.thisHour.live ? h('div', { class: 'muted' }, `${fmt(k.thisHour.live)} live`) : null),
+            h('td', { style: 'font-size:13px' }, total ? `${fmt(total)} · ${Math.floor((u.mirror / total) * 100)}% mirror` : '—', u.refused ? h('div', { class: 'muted' }, `${fmt(u.refused)} refused`) : null),
+            h('td', { class: 'muted' }, k.lastUsedAt ? ago(k.lastUsedAt) : 'never'),
+            h('td', null, status), h('td', null, h('div', { class: 'row', style: 'gap:6px' }, edit, revoke))), editRow];
+        })))) : h('p', { class: 'muted' }, 'No keys yet.'));
+    return r;
+  };
+  let r0;
+  try { r0 = await draw(); } catch (x) { body.replaceChildren(h('div', { class: 'error' }, x.message)); return; }
+  const name = h('input', { placeholder: 'The system that uses it, e.g. Time module', maxlength: 80, style: 'flex:1 1 260px' });
+  const days = h('input', { type: 'number', min: 1, max: 3650, placeholder: 'Expires in days (empty = never)' });
+  let form = policyForm(null);
+  const formBox = h('div', null, form.el);
+  const create = h('button', { class: 'primary', onclick: async () => {
+    create.disabled = true;
+    try {
+      const r = await api('POST', '/api/integrations/keys', { name: name.value.trim(), expiresInDays: days.value, ...form.value() });
+      name.value = ''; days.value = ''; form = policyForm(null); formBox.replaceChildren(form.el);
+      shown.replaceChildren(h('div', { class: 'panel', style: 'border-style:dashed' },
+        h('h3', { style: 'margin-top:0' }, `Key for "${r.item.name}"`),
+        h('p', null, h('strong', null, 'Copy it now — it is shown only once.'), ' Only a fingerprint is stored; if it is lost, revoke it and create a new one.'),
+        h('p', { class: 'mono', style: 'word-break:break-all' }, r.key),
+        h('div', { class: 'row', style: 'gap:8px' },
+          h('button', { class: 'primary small', onclick: async () => { try { await navigator.clipboard.writeText(r.key); toast('Copied.'); } catch { toast('Copy failed — select the text instead.'); } } }, 'Copy'),
+          h('button', { class: 'small secondary', onclick: () => shown.replaceChildren() }, 'Done')),
+        h('p', { class: 'muted', style: 'font-size:13px' }, 'The system sends it on every call as ', h('span', { class: 'mono' }, 'Authorization: Bearer <key>'), ' to ', h('span', { class: 'mono' }, r.apiUrl), '.')));
+      draw();
+    } catch (x) { toast(x.message); } finally { create.disabled = false; }
+  } }, 'Create key');
+  const code = (t) => h('div', { class: 'mono', style: 'font-size:12px;white-space:pre-wrap;background:var(--chip);padding:8px;border-radius:6px;margin:6px 0' }, t);
+  body.replaceChildren(
+    h('h1', null, 'Integrations'),
+    h('p', { class: 'muted' }, 'Keys for other systems — a time module, a CRM module, a report — to read Autotask data from PSArelay\'s mirror instead of calling Autotask. A read from the mirror costs no Autotask call. One key per system, so each can be narrowed or revoked on its own. A key opens only the read API, never the MCP endpoint.'),
+    shown,
+    h('section', { class: 'panel' }, h('h2', null, 'New key'),
+      h('div', { class: 'row', style: 'flex-wrap:wrap;gap:8px' }, name, days), formBox,
+      h('div', { style: 'margin-top:10px' }, create)),
+    h('section', { class: 'panel' }, h('h2', null, 'Keys'), list),
+    h('section', { class: 'panel' }, h('h2', null, 'How to call it'),
+      h('p', { class: 'muted', style: 'font-size:13px' }, 'Same request shapes as Autotask\'s REST API, at ', h('span', { class: 'mono' }, r0.apiUrl), '. Rows come in id order; page with an "id gt last id" filter while hasMore is true. Each answer says where it came from in X-PSArelay-Source (mirror / live) and X-PSArelay-Age (seconds).'),
+      code(`POST ${r0.apiUrl}/TimeEntries/query\nAuthorization: Bearer psk_…\n\n{ "filter": [ { "op": "gte", "field": "dateWorked", "value": "2026-11-01" },\n              { "op": "gt", "field": "id", "value": 0 } ],\n  "MaxRecords": 500 }`),
+      code(`GET ${r0.apiUrl}/Companies/123          → { "item": { … } }\nGET ${r0.apiUrl}                        → what this key may read, and how fresh each copy is`)));
 }
 
 // ── bulk jobs: staged mass changes, pushed by the worker at a set pace ────
