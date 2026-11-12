@@ -161,7 +161,7 @@ migrations, restarts, waits for `/health` and prints the version — and refuses
 
 - **Postgres layer** (mirror, plans, bulk jobs, audit): [POSTGRES](docs/POSTGRES.md)
 - **Admin console** (guided setup wizard, Cloudflare Tunnel walkthrough): [ADMIN](docs/ADMIN.md)
-- **Integration read API** (other systems read from the mirror, keyed per system): [INTEGRATION_API](docs/INTEGRATION_API.md)
+- **Integration API** (other systems read from the mirror and write through PSArelay, keyed per system): [INTEGRATION_API](docs/INTEGRATION_API.md)
 
 ## Configuration
 

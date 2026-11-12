@@ -817,6 +817,15 @@ export class AutotaskHttpClient {
   }
 
   /**
+   * A write on a relative Autotask path (POST / PATCH / DELETE), for the integration API. Never answered from the
+   * mirror or the cache. A DELETE may answer with an empty 2xx; a create / update must return a usable body.
+   */
+  async write<T = unknown>(method: 'POST' | 'PATCH' | 'DELETE', path: string, body?: unknown): Promise<T> {
+    assertSafeRelativePath(path);
+    return this.request<T>(method, path, body, false, { allowEmptyBody: method === 'DELETE' });
+  }
+
+  /**
    * GET /{Entity}/{id} — returns the entity, or null on 404.
    */
   async get<T>(entity: string, id: number): Promise<T | null> {

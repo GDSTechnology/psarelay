@@ -50,7 +50,7 @@ import { mirrorClassifier, teamActivityHour, teamActivityProfile } from '../bulk
 import { hourlyActivity } from '../services/call-log.js';
 import { clearTokenCache, tokenStore } from '../security/tokens.js';
 import { securityPosture } from '../security/posture.js';
-import { apiKeyStore, coercePolicy, mirroredEntityNames, ApiKeyInputError } from '../integrations/api-keys.js';
+import { apiKeyStore, coercePolicy, mirroredEntityNames, ApiKeyInputError, WRITABLE_ENTITIES } from '../integrations/api-keys.js';
 import { API_BASE } from '../integrations/read-api.js';
 import { CredentialStore, credentialSource, credentialTester, lookupZone, setCredentialSource, type AutotaskCredentials } from '../setup/credentials.js';
 import { secretKeyStatus } from '../security/secrets.js';
@@ -826,10 +826,12 @@ export function adminHandler(deps: AdminDeps) {
         return { name, ready: !!f?.ready, ageSeconds: f?.ageSeconds ?? null, rows: f?.rows ?? null };
       }));
       const base = mcpUrl().replace(/\/mcp$/, API_BASE);
-      if (!keys) return send(res, 200, { available: false, mirror: !!rt, apiUrl: base, entities, keys: [] });
+      const writable = [...WRITABLE_ENTITIES];
+      if (!keys) return send(res, 200, { available: false, mirror: !!rt, apiUrl: base, entities, writable, keys: [], recentWrites: [] });
       const usage = await keys.usage24h().catch(() => new Map());
-      const list = (await keys.list()).map((k) => ({ ...k, thisHour: keys.current(k.id), last24h: usage.get(k.id) ?? { mirror: 0, live: 0, refused: 0 } }));
-      return send(res, 200, { available: true, mirror: !!rt, apiUrl: base, entities, keys: list });
+      const list = (await keys.list()).map((k) => ({ ...k, thisHour: keys.current(k.id), last24h: usage.get(k.id) ?? { mirror: 0, live: 0, refused: 0, writes: 0 } }));
+      const recentWrites = await keys.recentWrites(50).catch(() => []);
+      return send(res, 200, { available: true, mirror: !!rt, apiUrl: base, entities, writable, keys: list, recentWrites });
     }
     if (path === '/api/integrations/keys' && method === 'POST') {
       requireUser(ctx, 'admin');
@@ -863,7 +865,7 @@ export function adminHandler(deps: AdminDeps) {
       let policy;
       try { policy = coercePolicy(b, cur); } catch (e) { if (e instanceof ApiKeyInputError) throw new HttpError(400, e.message, 'invalid'); throw e; }
       const item = await keys.update(id, policy, ctx.user!.username);
-      void log(ctx, 'integrations.key_updated', { id, before: { entities: cur.entities, allowLive: cur.allowLive, allowExternal: cur.allowExternal, hourlyLimit: cur.hourlyLimit, liveHourlyLimit: cur.liveHourlyLimit }, after: policy });
+      void log(ctx, 'integrations.key_updated', { id, before: { entities: cur.entities, allowLive: cur.allowLive, allowExternal: cur.allowExternal, hourlyLimit: cur.hourlyLimit, liveHourlyLimit: cur.liveHourlyLimit, writeEntities: cur.writeEntities, allowDelete: cur.allowDelete, writeHourlyLimit: cur.writeHourlyLimit }, after: policy });
       return send(res, 200, { ok: true, item, message: 'Saved. It applies to the next call.' });
     }
 
