@@ -5,14 +5,15 @@
 import { createServer, Server, IncomingMessage, ServerResponse } from 'node:http';
 import { AddressInfo } from 'node:net';
 import type { Pool } from 'pg';
-import { handleReadApi, validateFilter, type ReadApiDeps } from '../src/integrations/read-api';
-import { ApiKeyStore, coercePolicy, apiKeyShapeOk, newApiKey, hashApiKey, type ApiKeyAuth } from '../src/integrations/api-keys';
+import { handleReadApi, validateFilter, writeRoute, type ReadApiDeps } from '../src/integrations/read-api';
+import { ApiKeyStore, coercePolicy, apiKeyShapeOk, newApiKey, hashApiKey, type ApiKeyAuth, type WriteClaim } from '../src/integrations/api-keys';
 import { _setShadowRuntime, mirrorQuery, shadowRead } from '../src/db/shadow-runtime';
 
 const GOOD = newApiKey();
-const baseKey: ApiKeyAuth = { id: 7, name: 'Time module', entities: ['Companies', 'TimeEntries'], allowLive: false, allowExternal: true, hourlyLimit: 100, liveHourlyLimit: 5 };
+const baseKey: ApiKeyAuth = { id: 7, name: 'Time module', entities: ['Companies', 'TimeEntries'], allowLive: false, allowExternal: true, hourlyLimit: 100, liveHourlyLimit: 5,
+  writeEntities: [], allowDelete: false, writeHourlyLimit: 3 };
 
-function setup(over: { key?: Partial<ApiKeyAuth>; mirror?: Partial<ReadApiDeps['mirror']>; pressure?: 'ok' | 'stop' } = {}) {
+function setup(over: { key?: Partial<ApiKeyAuth>; mirror?: Partial<ReadApiDeps['mirror']>; pressure?: 'ok' | 'stop'; writeError?: Error; claim?: WriteClaim } = {}) {
   const fakePool = { query: async () => ({ rows: [], rowCount: 0 }) } as unknown as Pool;
   const keys = new ApiKeyStore(fakePool);
   const key = { ...baseKey, ...over.key };
@@ -21,7 +22,16 @@ function setup(over: { key?: Partial<ApiKeyAuth>; mirror?: Partial<ReadApiDeps['
   const live = {
     rawRequest: async <T>(method: string, path: string, body?: unknown) => { upstream.push({ method, path, body }); return { items: [{ id: 1, companyName: 'Live Co', phone: 'x' }], pageDetails: { nextPageUrl: 'https://webservices.example/next' } } as T; },
     get: async <T>(entity: string, id: number) => { upstream.push({ method: 'GET', path: `/${entity}/${id}` }); return { id, companyName: 'Live Co' } as T; },
+    write: async <T>(method: string, path: string, body?: unknown) => {
+      upstream.push({ method, path, body });
+      if (over.writeError) throw over.writeError;
+      return (method === 'DELETE' ? undefined : { itemId: (body as { id?: number })?.id ?? 900 }) as T;
+    },
   };
+  const writes: Array<{ id: number; status: string; httpStatus: number; recordId?: number | null; error?: string | null }> = [];
+  const claims: unknown[] = [];
+  keys.claimWrite = async (o) => { claims.push(o); return over.claim ?? { kind: 'new', id: 41 }; };
+  keys.finishWrite = async (id, o) => { writes.push({ id, ...o }); };
   const deps: ReadApiDeps = {
     keys,
     mirror: {
@@ -33,7 +43,7 @@ function setup(over: { key?: Partial<ApiKeyAuth>; mirror?: Partial<ReadApiDeps['
     live: async () => live,
     pressure: () => ({ level: over.pressure ?? 'ok', retryAfterSeconds: over.pressure === 'stop' ? 120 : null }),
   };
-  return { deps, keys, upstream };
+  return { deps, keys, upstream, writes, claims };
 }
 
 let server: Server;
@@ -64,14 +74,14 @@ describe('keys', () => {
     expect(hashApiKey(k)).toMatch(/^[0-9a-f]{64}$/);
   });
   test('policy: entity names normalised to the mirror, unknown / empty refused, caps bounded', () => {
-    expect(coercePolicy({ entities: ['timeentries', 'Companies', 'companies'] })).toEqual({ entities: ['Companies', 'TimeEntries'], allowLive: false, allowExternal: false, hourlyLimit: 3600, liveHourlyLimit: 100 });
+    expect(coercePolicy({ entities: ['timeentries', 'Companies', 'companies'] })).toMatchObject({ entities: ['Companies', 'TimeEntries'], allowLive: false, allowExternal: false, hourlyLimit: 3600, liveHourlyLimit: 100 });
     expect(() => coercePolicy({ entities: ['Invoicez'] })).toThrow(/not a mirrored entity/);
     expect(() => coercePolicy({ entities: [] })).toThrow(/at least one/);
     expect(() => coercePolicy({ entities: ['Companies'], liveHourlyLimit: 99999 })).toThrow(/0 to 5000/);
     expect(() => coercePolicy({ entities: ['Companies'], allowLive: 'yes' })).toThrow(/true or false/);
     // An edit keeps what it doesn't name.
-    expect(coercePolicy({ allowLive: true }, { entities: ['Tickets'], allowLive: false, allowExternal: true, hourlyLimit: 10, liveHourlyLimit: 2 }))
-      .toEqual({ entities: ['Tickets'], allowLive: true, allowExternal: true, hourlyLimit: 10, liveHourlyLimit: 2 });
+    expect(coercePolicy({ allowLive: true }, { entities: ['Tickets'], allowLive: false, allowExternal: true, hourlyLimit: 10, liveHourlyLimit: 2, writeEntities: [], allowDelete: false, writeHourlyLimit: 200 }))
+      .toMatchObject({ entities: ['Tickets'], allowLive: true, allowExternal: true, hourlyLimit: 10, liveHourlyLimit: 2 });
   });
 });
 
@@ -134,7 +144,7 @@ describe('/api/v1', () => {
     expect(b.hasMore).toBe(true);
     expect(b.pageDetails).toEqual({ count: 2, requestCount: 2, prevPageUrl: null, nextPageUrl: null });
     expect(s.upstream).toEqual([]);
-    expect(s.keys.current(7)).toEqual({ total: 1, live: 0 });
+    expect(s.keys.current(7)).toEqual({ total: 1, live: 0, writes: 0 });
   });
 
   test('bad input is a 400, not an upstream call', async () => {
@@ -143,7 +153,8 @@ describe('/api/v1', () => {
     expect((await call('/api/v1/Companies/query', { body: { filter: [{ op: 'nope', field: 'id' }] } })).status).toBe(400);
     expect((await call('/api/v1/Companies/query', { body: { MaxRecords: 501 } })).status).toBe(400);
     expect((await call('/api/v1/Companies/query', { method: 'GET' })).status).toBe(405);
-    expect((await call('/api/v1/Companies/5', { method: 'DELETE' })).status).toBe(405);
+    expect((await call('/api/v1/Companies/5', { method: 'DELETE' })).status).toBe(403); // a write, and this key is read-only
+    expect((await call('/api/v1/Companies/5', { method: 'PATCH', body: { name: 'x' } })).status).toBe(405);
     expect(s.upstream).toEqual([]);
   });
 
@@ -168,7 +179,7 @@ describe('/api/v1', () => {
     expect(b.items).toEqual([{ id: 1, companyName: 'Live Co' }]);
     expect(b.hasMore).toBe(true);
     expect(JSON.stringify(b)).not.toMatch(/webservices/);
-    expect(s.keys.current(7)).toEqual({ total: 1, live: 1 });
+    expect(s.keys.current(7)).toEqual({ total: 1, live: 1, writes: 0 });
   });
 
   test('live is refused under backpressure "stop" and past the live cap', async () => {
@@ -251,5 +262,165 @@ describe('mirror reads', () => {
     expect(await mirrorQuery('Quotes', [], 10)).toEqual({ ok: false, reason: 'not_mirrored' });
     _setShadowRuntime(null);
     expect(await mirrorQuery('Companies', [], 10)).toEqual({ ok: false, reason: 'mirror_off' });
+  });
+});
+
+describe('writes', () => {
+  const W = { writeEntities: ['TicketNotes', 'TimeEntries'] };
+  const entry = { ticketID: 4567, resourceID: 123, roleID: 456, dateWorked: '2026-11-11', hoursWorked: 1, summaryNotes: 'Fixed it' };
+
+  test('routes: Autotask paths, child URLs mapped to the entity a key needs', () => {
+    expect(writeRoute('/api/v1/timeentries', 'POST')).toEqual({ method: 'POST', entity: 'TimeEntries', asked: 'timeentries', path: '/TimeEntries', recordId: null });
+    expect(writeRoute('/api/v1/TimeEntries/12', 'DELETE')).toMatchObject({ entity: 'TimeEntries', path: '/TimeEntries/12', recordId: 12 });
+    expect(writeRoute('/api/v1/tickets/12/notes', 'POST')).toMatchObject({ entity: 'TicketNotes', path: '/Tickets/12/Notes' });
+    expect(writeRoute('/api/v1/Companies/5/Contacts', 'PATCH')).toMatchObject({ entity: 'Contacts', path: '/Companies/5/Contacts' });
+    expect(writeRoute('/api/v1/Invoices', 'POST')).toMatchObject({ entity: null });
+    expect(writeRoute('/api/v1/Contracts/3/Charges', 'POST')).toMatchObject({ entity: null }); // financial: MCP tools only
+    expect(writeRoute('/api/v1/TimeEntries', 'GET')).toBeNull();
+  });
+
+  test('a read-only key cannot write; nothing is sent', async () => {
+    const s = setup();
+    current = s.deps;
+    const r = await call('/api/v1/TimeEntries', { body: entry });
+    expect(r.status).toBe(403);
+    expect((await json(r)).error).toMatch(/read-only/);
+    expect(s.upstream).toEqual([]);
+    expect(s.claims).toEqual([]);
+  });
+
+  test('create: the body goes to Autotask as given, the answer comes back, the write is logged', async () => {
+    const s = setup({ key: W });
+    current = s.deps;
+    const r = await call('/api/v1/TimeEntries', { body: entry, headers: { 'Idempotency-Key': 'tm-8812' } });
+    expect(r.status).toBe(200);
+    expect(r.headers.get('x-psarelay-source')).toBe('live');
+    expect(await json(r)).toEqual({ itemId: 900 });
+    expect(s.upstream).toEqual([{ method: 'POST', path: '/TimeEntries', body: entry }]);
+    expect(s.claims).toEqual([{ keyId: 7, method: 'POST', path: '/TimeEntries', entity: 'TimeEntries', recordId: null, idempotencyKey: 'tm-8812' }]);
+    expect(s.writes).toEqual([expect.objectContaining({ id: 41, status: 'ok', httpStatus: 200, recordId: 900 })]);
+    expect(s.keys.current(7)).toMatchObject({ writes: 1 });
+  });
+
+  test('update: PATCH needs the id and sends only the given fields; PUT is refused', async () => {
+    const s = setup({ key: W });
+    current = s.deps;
+    expect((await call('/api/v1/TimeEntries', { method: 'PATCH', body: { summaryNotes: 'x' } })).status).toBe(400);
+    expect((await call('/api/v1/TimeEntries', { method: 'PATCH', body: { id: 5 } })).status).toBe(400);
+    expect((await call('/api/v1/TimeEntries', { method: 'PUT', body: { id: 5, summaryNotes: 'x' } })).status).toBe(405);
+    expect((await call('/api/v1/TimeEntries', { body: { id: 5, summaryNotes: 'x' } })).status).toBe(400); // a create with an id
+    expect(s.upstream).toEqual([]);
+    const r = await call('/api/v1/TimeEntries', { method: 'PATCH', body: { id: 5, summaryNotes: 'x' } });
+    expect(r.status).toBe(200);
+    expect(s.upstream).toEqual([{ method: 'PATCH', path: '/TimeEntries', body: { id: 5, summaryNotes: 'x' } }]);
+  });
+
+  test('child URL: a note on a ticket needs TicketNotes', async () => {
+    const s = setup({ key: { writeEntities: ['TimeEntries'] } });
+    current = s.deps;
+    expect((await call('/api/v1/Tickets/12/Notes', { body: { title: 't', description: 'd' } })).status).toBe(403);
+    expect(s.upstream).toEqual([]);
+    const t = setup({ key: W });
+    current = t.deps;
+    expect((await call('/api/v1/tickets/12/notes', { body: { title: 't', description: 'd' } })).status).toBe(200);
+    expect(t.upstream).toEqual([{ method: 'POST', path: '/Tickets/12/Notes', body: { title: 't', description: 'd' } }]);
+  });
+
+  test('delete only when the key allows it', async () => {
+    const s = setup({ key: W });
+    current = s.deps;
+    expect((await call('/api/v1/TimeEntries/12', { method: 'DELETE' })).status).toBe(403);
+    expect(s.upstream).toEqual([]);
+    const t = setup({ key: { ...W, allowDelete: true } });
+    current = t.deps;
+    const r = await call('/api/v1/TimeEntries/12', { method: 'DELETE' });
+    expect(r.status).toBe(200);
+    expect(await json(r)).toEqual({ itemId: 12 });
+    expect(t.upstream).toEqual([{ method: 'DELETE', path: '/TimeEntries/12', body: undefined }]);
+  });
+
+  test('entities outside the writable list are refused, financial ones included', async () => {
+    const s = setup({ key: W });
+    current = s.deps;
+    expect((await call('/api/v1/Invoices', { body: { x: 1 } })).status).toBe(403);
+    expect((await call('/api/v1/Tickets', { body: { title: 'x' } })).status).toBe(403); // writable, not by this key
+    expect(s.upstream).toEqual([]);
+  });
+
+  test('backpressure "stop" and the hourly write cap stop a write before it is sent', async () => {
+    const s = setup({ key: W, pressure: 'stop' });
+    current = s.deps;
+    const r = await call('/api/v1/TimeEntries', { body: entry });
+    expect(r.status).toBe(503);
+    expect(r.headers.get('retry-after')).toBe('120');
+    const t = setup({ key: W });
+    current = t.deps;
+    for (let i = 0; i < 3; i++) expect((await call('/api/v1/TimeEntries', { body: entry })).status).toBe(200);
+    const capped = await call('/api/v1/TimeEntries', { body: entry });
+    expect(capped.status).toBe(429);
+    expect(t.upstream).toHaveLength(3);
+    expect(s.upstream).toEqual([]);
+  });
+
+  test('Idempotency-Key: a finished write is replayed, a running or unclear one is not sent again', async () => {
+    const s = setup({ key: W, claim: { kind: 'replay', httpStatus: 200, response: { itemId: 77 } } });
+    current = s.deps;
+    const r = await call('/api/v1/TimeEntries', { body: entry, headers: { 'Idempotency-Key': 'tm-1' } });
+    expect(r.status).toBe(200);
+    expect(r.headers.get('x-psarelay-source')).toBe('replay');
+    expect(await json(r)).toEqual({ itemId: 77 });
+    expect(s.upstream).toEqual([]);
+    for (const claim of [{ kind: 'busy' }, { kind: 'unknown' }] as WriteClaim[]) {
+      const t = setup({ key: W, claim });
+      current = t.deps;
+      expect((await call('/api/v1/TimeEntries', { body: entry, headers: { 'Idempotency-Key': 'tm-1' } })).status).toBe(409);
+      expect(t.upstream).toEqual([]);
+    }
+    expect((await call('/api/v1/TimeEntries', { body: entry, headers: { 'Idempotency-Key': 'has space' } })).status).toBe(400);
+  });
+
+  test('Autotask refuses → 502 "not_written" (retryable); no answer → "unknown" (check first)', async () => {
+    const refused = Object.assign(new Error('Autotask POST /TimeEntries failed: HTTP 500: Ticket is closed'), { status: 500 });
+    const s = setup({ key: W, writeError: refused });
+    current = s.deps;
+    const r = await call('/api/v1/TimeEntries', { body: entry });
+    expect(r.status).toBe(502);
+    expect(await json(r)).toMatchObject({ outcome: 'not_written', autotaskStatus: 500 });
+    expect(s.writes).toEqual([expect.objectContaining({ status: 'failed' })]);
+    const t = setup({ key: W, writeError: new Error('Autotask POST /TimeEntries network error: timeout') });
+    current = t.deps;
+    const u = await call('/api/v1/TimeEntries', { body: entry });
+    expect(u.status).toBe(502);
+    expect(await json(u)).toMatchObject({ outcome: 'unknown' });
+    expect(t.writes).toEqual([expect.objectContaining({ status: 'unknown' })]);
+  });
+
+  test('the read-only switch / a read-only plan stops API writes too', async () => {
+    const s = setup({ key: W });
+    current = { ...s.deps, writeLock: () => 'PSArelay is read-only.' };
+    const r = await call('/api/v1/TimeEntries', { body: entry });
+    expect(r.status).toBe(503);
+    expect((await json(r)).error).toMatch(/Writes are off/);
+    expect(s.upstream).toEqual([]);
+    expect(s.claims).toEqual([]);
+    expect((await call('/api/v1/TimeEntries/query', { body: {} })).status).toBe(200); // reads unaffected
+  });
+
+  test('info shows what the key may write', async () => {
+    const s = setup({ key: { ...W, allowDelete: true } });
+    current = s.deps;
+    const b = await json(await call('/api/v1'));
+    expect(b.key.write).toEqual({ entities: ['TicketNotes', 'TimeEntries'], allowDelete: true, hourlyLimit: 3 });
+  });
+
+  test('policy: write entities normalised, non-writable refused, delete needs writes, write-only keys allowed', () => {
+    const p = coercePolicy({ entities: [], writeEntities: ['timeentries', 'TimeEntries'], allowDelete: true });
+    expect(p).toMatchObject({ entities: [], writeEntities: ['TimeEntries'], allowDelete: true, writeHourlyLimit: 200 });
+    expect(() => coercePolicy({ entities: ['Companies'], writeEntities: ['Invoices'] })).toThrow(/can't be written/);
+    expect(coercePolicy({ entities: ['Companies'], allowDelete: true }).allowDelete).toBe(false);
+    expect(() => coercePolicy({ entities: [], writeEntities: [] })).toThrow(/at least one/);
+    // an existing read-only key keeps its writes off when edited without them
+    const base = coercePolicy({ entities: ['Companies'] });
+    expect(coercePolicy({ hourlyLimit: 10 }, base)).toMatchObject({ writeEntities: [], allowDelete: false });
   });
 });

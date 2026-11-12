@@ -1,11 +1,20 @@
-// /api/v1 — the read API other systems (time / CRM modules) call instead of Autotask. Answered from the Postgres
-// mirror; a read the mirror can't answer goes to Autotask only when the key allows it, inside its hourly live cap,
-// and never while the tenant is under backpressure "stop". Requests and responses use Autotask's REST shapes, so an
-// Autotask client only changes its base URL and key:
+// /api/v1 — the integration API other systems (time / CRM modules) call instead of Autotask, so all of a tenant's
+// Autotask traffic goes through one place that knows the limits. Reads are answered from the Postgres mirror; a read
+// the mirror can't answer goes to Autotask only when the key allows it, inside its hourly live cap, and never while
+// the tenant is under backpressure "stop". Writes (per key, migration 0025) go to Autotask through PSArelay's own
+// connection — its per-endpoint thread gate and 429 cooldown — and are refused under "stop". Requests and responses
+// use Autotask's REST shapes, so an Autotask client only changes its base URL and key:
 //
-//   GET  /api/v1                       what this key may read, and how fresh each entity's copy is
-//   POST /api/v1/{Entity}/query        { filter, MaxRecords?, IncludeFields? } → { items, pageDetails, hasMore }
-//   GET  /api/v1/{Entity}/{id}         → { item }  (item null when the record is not there)
+//   GET    /api/v1                              what this key may read / write, and how fresh each entity's copy is
+//   POST   /api/v1/{Entity}/query               { filter, MaxRecords?, IncludeFields? } → { items, pageDetails, hasMore }
+//   GET    /api/v1/{Entity}/{id}                → { item }  (item null when the record is not there)
+//   POST   /api/v1/{Entity}                     create → Autotask's answer ({ itemId })
+//   PATCH  /api/v1/{Entity}                     update { id, …only the fields to change } → { itemId }
+//   DELETE /api/v1/{Entity}/{id}                delete (only when the key allows deletes)
+//   POST | PATCH  /api/v1/{Parent}/{id}/{Child}      Autotask's child URLs (/Tickets/{id}/Notes …); DELETE …/{Child}/{id}
+//
+// PUT is refused: in Autotask it replaces the whole record and blanks every field left out. A write may carry an
+// Idempotency-Key header: a repeat with the same key replays the first answer instead of writing again.
 //
 // Every answer carries X-PSArelay-Source (mirror | live) and, from the mirror, X-PSArelay-Age (seconds). Rows come
 // in ascending id order; page with { op: "gt", field: "id", value: <last id> } while hasMore is true.
@@ -17,7 +26,7 @@ import { shadowEntity } from '../db/shadow-entities.js';
 import type { MirrorGetResult, MirrorQueryResult } from '../db/shadow-runtime.js';
 import type { ShadowFilter } from '../db/shadow-sql.js';
 import type { Freshness } from '../db/shadow-store.js';
-import type { ApiKeyAuth, ApiKeyStore } from './api-keys.js';
+import { WRITE_CHILD, writableEntity, type ApiKeyAuth, type ApiKeyStore } from './api-keys.js';
 import type { Logger } from '../utils/logger.js';
 
 export const API_BASE = '/api/v1';
@@ -29,9 +38,10 @@ const FIELD = /^[A-Za-z][A-Za-z0-9_]{0,99}$/;
 export interface LiveClient {
   rawRequest<T = unknown>(method: string, path: string, body?: unknown): Promise<T>;
   get<T>(entity: string, id: number): Promise<T | null>;
+  write<T = unknown>(method: 'POST' | 'PATCH' | 'DELETE', path: string, body?: unknown): Promise<T>;
 }
 export interface ReadApiDeps {
-  keys: Pick<ApiKeyStore, 'verify' | 'current' | 'record'> | null;
+  keys: Pick<ApiKeyStore, 'verify' | 'current' | 'record' | 'claimWrite' | 'finishWrite'> | null;
   mirror: {
     query(entity: string, filters: ShadowFilter[], limit: number): Promise<MirrorQueryResult<Record<string, unknown>>>;
     get(entity: string, id: number): Promise<MirrorGetResult>;
@@ -40,6 +50,8 @@ export interface ReadApiDeps {
   live: () => Promise<LiveClient>;
   /** The tenant's backpressure verdict (services/backpressure). */
   pressure: () => { level: 'ok' | 'slow' | 'stop'; retryAfterSeconds: number | null };
+  /** Why writes are off right now (the console's read-only switch, a read-only plan), or null. */
+  writeLock?: () => string | null;
   logger?: Logger;
 }
 
@@ -134,11 +146,16 @@ export async function handleReadApi(req: IncomingMessage, res: ServerResponse, u
     const path = url.pathname.replace(/\/+$/, '');
     const method = req.method ?? 'GET';
     if (path === API_BASE && method === 'GET') return await info(res, key, deps);
+    if (method === 'PUT') throw new ApiError(405, 'PUT is not accepted: in Autotask it replaces the whole record and blanks every field left out. Use PATCH with the id and only the fields to change.', {}, { Allow: 'GET, POST, PATCH, DELETE' });
     const q = /^\/api\/v1\/([A-Za-z]+)\/query$/.exec(path);
     const g = /^\/api\/v1\/([A-Za-z]+)\/(\d{1,15})$/.exec(path);
-    if (!q && !g) throw new ApiError(404, `Not found. Endpoints: GET ${API_BASE}, POST ${API_BASE}/{Entity}/query, GET ${API_BASE}/{Entity}/{id}.`);
     if (q && method !== 'POST') throw new ApiError(405, 'Queries are POST, with an Autotask filter body.', {}, { Allow: 'POST' });
-    if (g && method !== 'GET') throw new ApiError(405, 'This API is read-only.', {}, { Allow: 'GET' });
+    if (!q && !(g && method === 'GET')) {
+      const w = writeRoute(path, method);
+      if (w) return await write(req, res, key, w, deps);
+      if (g) throw new ApiError(405, `A record is read with GET, and deleted with DELETE. To change it, PATCH ${API_BASE}/{Entity} with { id, …fields }.`, {}, { Allow: 'GET, DELETE' });
+      throw new ApiError(404, `Not found. Endpoints: GET ${API_BASE}, POST ${API_BASE}/{Entity}/query, GET ${API_BASE}/{Entity}/{id}, POST / PATCH ${API_BASE}/{Entity}, DELETE ${API_BASE}/{Entity}/{id}, and Autotask's child URLs (${API_BASE}/Tickets/{id}/Notes …).`);
+    }
     const def = shadowEntity((q ?? g)![1]!);
     if (!def || !key.entities.includes(def.name)) throw new ApiError(403, `This key may not read "${(q ?? g)![1]}". It may read: ${key.entities.join(', ')}.`);
     return q ? await query(req, res, key, def.name, deps) : await getOne(res, key, def.name, Number(g![2]), deps);
@@ -156,7 +173,11 @@ async function info(res: ServerResponse, key: ApiKeyAuth, deps: ReadApiDeps): Pr
     return { name, ready: !!f?.ready, ageSeconds: f?.ageSeconds ?? null, rows: f?.rows ?? null, historyFrom: f?.windowFrom ?? null };
   }));
   deps.keys!.record(key.id, 'mirror');
-  send(res, 200, { key: { name: key.name, allowLive: key.allowLive, hourlyLimit: key.hourlyLimit, liveHourlyLimit: key.liveHourlyLimit, usedThisHour: deps.keys!.current(key.id) }, entities });
+  send(res, 200, {
+    key: { name: key.name, allowLive: key.allowLive, hourlyLimit: key.hourlyLimit, liveHourlyLimit: key.liveHourlyLimit,
+      write: { entities: key.writeEntities, allowDelete: key.allowDelete, hourlyLimit: key.writeHourlyLimit }, usedThisHour: deps.keys!.current(key.id) },
+    entities,
+  });
 }
 
 /** Whether a mirror miss may go to Autotask; throws the 503 the caller gets when it may not. */
@@ -216,4 +237,111 @@ async function getOne(res: ServerResponse, key: ApiKeyAuth, entity: string, id: 
   deps.keys!.record(key.id, 'live');
   const item = await liveCall(() => http.get<Record<string, unknown>>(entity, id));
   send(res, 200, { item: item ?? null }, { 'X-PSArelay-Source': 'live', 'X-PSArelay-Mirror-Miss': reason });
+}
+
+// ── writes ──
+
+interface WriteRoute { method: 'POST' | 'PATCH' | 'DELETE'; entity: string | null; asked: string; path: string; recordId: number | null }
+const ID = /^\d{1,15}$/;
+const childEntity = (parent: string, child: string): { entity: string; parent: string; child: string } | null => {
+  const k = Object.keys(WRITE_CHILD).find((x) => x.toLowerCase() === `${parent}/${child}`.toLowerCase());
+  if (!k) return null;
+  const [p, c] = k.split('/') as [string, string];
+  return { entity: WRITE_CHILD[k]!, parent: p, child: c };
+};
+
+/** The Autotask path and entity of a write URL, or null when the URL is not a write. Entity null = not writable. */
+export function writeRoute(path: string, method: string): WriteRoute | null {
+  if (method !== 'POST' && method !== 'PATCH' && method !== 'DELETE') return null;
+  const segs = path.slice(API_BASE.length).split('/').filter(Boolean);
+  if (!segs.every((x) => /^[A-Za-z0-9]{1,60}$/.test(x))) return null;
+  const top = (name: string) => writableEntity(name) ?? null;
+  if (method !== 'DELETE' && segs.length === 1) { const e = top(segs[0]!); return { method, entity: e, asked: segs[0]!, path: `/${e ?? segs[0]}`, recordId: null }; }
+  if (method === 'DELETE' && segs.length === 2 && ID.test(segs[1]!)) { const e = top(segs[0]!); return { method, entity: e, asked: segs[0]!, path: `/${e ?? segs[0]}/${Number(segs[1])}`, recordId: Number(segs[1]) }; }
+  const childLen = method === 'DELETE' ? 4 : 3;
+  if (segs.length === childLen && ID.test(segs[1]!) && (method !== 'DELETE' || ID.test(segs[3]!))) {
+    const c = childEntity(segs[0]!, segs[2]!);
+    const asked = `${segs[0]}/{id}/${segs[2]}`;
+    if (!c) return { method, entity: null, asked, path: '', recordId: null };
+    const id = method === 'DELETE' ? Number(segs[3]) : null;
+    return { method, entity: c.entity, asked, path: `/${c.parent}/${Number(segs[1])}/${c.child}${id != null ? `/${id}` : ''}`, recordId: id };
+  }
+  return null;
+}
+
+const IDEM = /^[\x21-\x7e]{1,200}$/;
+const recordIdOf = (v: unknown): number | null => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
+
+async function write(req: IncomingMessage, res: ServerResponse, key: ApiKeyAuth, w: WriteRoute, deps: ReadApiDeps): Promise<void> {
+  if (!w.entity) throw new ApiError(403, `"${w.asked}" can't be written through this API.`);
+  if (!key.writeEntities.includes(w.entity)) {
+    throw new ApiError(403, key.writeEntities.length
+      ? `This key may not write ${w.entity}. It may write: ${key.writeEntities.join(', ')}.`
+      : `This key is read-only. Allow writes to ${w.entity} on the Integrations page (admin console) if this system should write.`);
+  }
+  if (w.method === 'DELETE' && !key.allowDelete) throw new ApiError(403, 'This key may not delete. Allow deletes on the Integrations page if this system should.');
+  const lock = deps.writeLock?.();
+  if (lock) throw new ApiError(503, `Writes are off: ${lock}`, { live: 'write_lock' });
+
+  let body: Record<string, unknown> | undefined;
+  let recordId = w.recordId;
+  if (w.method !== 'DELETE') {
+    body = await readBody(req);
+    if (!Object.keys(body).length) throw new ApiError(400, 'Send the record as a JSON object (Autotask field names).');
+    if (w.method === 'PATCH') {
+      const id = body.id;
+      if (typeof id !== 'number' || !Number.isInteger(id) || id < 0) throw new ApiError(400, 'PATCH needs the record\'s "id" in the body (a whole number) and only the fields to change.');
+      if (Object.keys(body).length < 2) throw new ApiError(400, 'PATCH needs at least one field to change besides "id".');
+      recordId = id;
+    } else if (body.id != null && body.id !== 0) {
+      throw new ApiError(400, 'A create (POST) must not carry an "id". To change an existing record, PATCH it.');
+    }
+  }
+  const idemRaw = req.headers['idempotency-key'];
+  const idem = Array.isArray(idemRaw) ? idemRaw[0] : idemRaw;
+  if (idem !== undefined && !IDEM.test(idem)) throw new ApiError(400, 'Idempotency-Key is 1–200 printable characters, no spaces.');
+
+  if (deps.keys!.current(key.id).writes >= key.writeHourlyLimit) {
+    const wait = secondsToNextHour();
+    throw new ApiError(429, `This key's hourly write cap (${key.writeHourlyLimit}) is used up.`, { retryAfterSeconds: wait }, { 'Retry-After': String(wait) });
+  }
+  const p = deps.pressure();
+  if (p.level === 'stop') {
+    const wait = p.retryAfterSeconds ?? 60;
+    throw new ApiError(503, 'Autotask is under load (backpressure: stop) — the write was not sent. Retry after the wait.', { retryAfterSeconds: wait, live: 'pressure' }, { 'Retry-After': String(wait) });
+  }
+
+  const claim = await deps.keys!.claimWrite({ keyId: key.id, method: w.method, path: w.path, entity: w.entity, recordId, idempotencyKey: idem ?? null });
+  if (claim.kind === 'replay') {
+    deps.keys!.record(key.id, 'mirror'); // answered here: no Autotask call
+    return send(res, claim.httpStatus, claim.response ?? {}, { 'X-PSArelay-Source': 'replay' });
+  }
+  if (claim.kind === 'busy') throw new ApiError(409, 'A request with this Idempotency-Key is still running, or the key was used for a different call.');
+  if (claim.kind === 'unknown') throw new ApiError(409, 'An earlier request with this Idempotency-Key reached Autotask without a clear answer, so it is not sent again. Check the record, then use a new key.');
+
+  deps.keys!.record(key.id, 'writes'); // counted before the call: a failed Autotask call still spent the budget
+  const http = await deps.live();
+  let r: unknown;
+  try {
+    r = await http.write(w.method, w.path, body);
+  } catch (e) {
+    const status = (e as { status?: number }).status;
+    const msg = (e instanceof Error ? e.message : String(e)).slice(0, 500);
+    // Autotask answered with a refusal (or the local 429 cooldown / auth pause stopped it): nothing was written.
+    // No status, or a 2xx with an unusable body: it may have been written — never replayed or re-sent under this key.
+    const answered = typeof status === 'number' && !(e as { retryable?: boolean }).retryable;
+    const busy = status === 429;
+    const httpStatus = busy ? 503 : 502;
+    await deps.keys!.finishWrite(claim.id, { status: answered ? 'failed' : 'unknown', httpStatus, error: msg }).catch(() => undefined);
+    deps.logger?.warn(`Integration API write failed: key "${key.name}" ${w.method} ${w.path}: ${msg}`);
+    const wait = (e as { retryAfterSeconds?: number }).retryAfterSeconds;
+    throw new ApiError(httpStatus, answered ? `Autotask refused the write: ${msg}` : `The write reached Autotask without a clear answer — it may have been applied. Check the record before retrying. ${msg}`,
+      { outcome: answered ? 'not_written' : 'unknown', ...(typeof status === 'number' ? { autotaskStatus: status } : {}) },
+      { 'X-PSArelay-Source': 'live', ...(busy && wait ? { 'Retry-After': String(wait) } : {}) });
+  }
+  const itemId = recordIdOf((r as { itemId?: unknown } | null)?.itemId) ?? recordId;
+  const answer = r && typeof r === 'object' ? r : { itemId };
+  await deps.keys!.finishWrite(claim.id, { status: 'ok', httpStatus: 200, recordId: itemId, response: answer }).catch((err) => deps.logger?.warn('Integration API: could not log a write', err));
+  deps.logger?.info(`Integration API write: key "${key.name}" ${w.method} ${w.path}${itemId != null ? ` → ${itemId}` : ''}`);
+  send(res, 200, answer, { 'X-PSArelay-Source': 'live' });
 }

@@ -43,6 +43,7 @@ import { usageSnapshot } from '../services/http-cache.js';
 import { authBlockStatus } from '../services/autotask-http.js';
 import { backpressure } from '../services/backpressure.js';
 import { settingValue } from '../admin/settings.js';
+import { entitlements } from '../entitlements/index.js';
 import { allowedOrigin, isExternalRequest } from '../security/http.js';
 import { bearerToken, tokenStore, type TokenAuth } from '../security/tokens.js';
 import { CredentialStore, setCredentialSource } from '../setup/credentials.js';
@@ -482,6 +483,9 @@ export class PsarelayServer {
           },
           live: () => this.autotaskService.httpClient(),
           pressure: () => backpressure(tenant),
+          // The same switches that stop write tools and bulk jobs stop API writes.
+          writeLock: () => settingValue<boolean>('tools.writesEnabled') === false ? 'PSArelay is read-only (admin console → Settings → Allow write tools is off).'
+            : entitlements().readOnly ? 'this PSArelay plan is read-only.' : null,
           logger: this.logger,
         }).catch((err) => {
           this.logger.error('Integration API failed:', err);
