@@ -302,6 +302,18 @@ describe('writes', () => {
     expect(s.keys.current(7)).toMatchObject({ writes: 1 });
   });
 
+  test('bookings: Appointments are mirrored, readable and writable (create + move)', async () => {
+    expect(coercePolicy({ entities: ['appointments'], writeEntities: ['appointments'] })).toMatchObject({ entities: ['Appointments'], writeEntities: ['Appointments'] });
+    const s = setup({ key: { entities: ['Appointments'], writeEntities: ['Appointments'] } });
+    current = s.deps;
+    expect((await call('/api/v1/Appointments/query', { body: { filter: [{ op: 'gte', field: 'startDateTime', value: '2026-11-01' }] } })).status).toBe(200);
+    const booking = { resourceID: 123, title: 'Site visit', startDateTime: '2026-11-12T14:00:00Z', endDateTime: '2026-11-12T15:00:00Z' };
+    expect((await call('/api/v1/Appointments', { body: booking, headers: { 'Idempotency-Key': 'booking-1' } })).status).toBe(200);
+    const move = { id: 77, startDateTime: '2026-11-13T14:00:00Z', endDateTime: '2026-11-13T15:00:00Z' };
+    expect((await call('/api/v1/Appointments', { method: 'PATCH', body: move })).status).toBe(200);
+    expect(s.upstream).toEqual([{ method: 'POST', path: '/Appointments', body: booking }, { method: 'PATCH', path: '/Appointments', body: move }]);
+  });
+
   test('update: PATCH needs the id and sends only the given fields; PUT is refused', async () => {
     const s = setup({ key: W });
     current = s.deps;

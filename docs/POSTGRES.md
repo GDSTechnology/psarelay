@@ -143,6 +143,10 @@ tenant's field list offers a modified stamp, otherwise refreshed in full (hourly
 `search_configuration_items` (including the serial-number filter), `search_expense_items` and
 `search_ticket_charges` are answered from the mirror while it is fresh.
 
+**Calendar** (since 6.16): **Appointments**, windowed by `startDateTime` (so every future appointment is mirrored);
+incremental on `updateDateTime` when the tenant's field list has it, otherwise re-read hourly. Booking modules read
+and write them through the integration API.
+
 **Text matching** in the mirror ignores case and whitespace differences (double spaces, line breaks, non-breaking
 spaces), so "replaced the" finds "replaced  the". Time-entry text lives in `summaryNotes` and `internalNotes`.
 

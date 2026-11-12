@@ -57,7 +57,7 @@ describe('entities + write detection', () => {
     expect(shadowEntity('timeentries')!.watermarkField).toBe('lastModifiedDateTime');
     expect(SHADOW_ENTITIES.filter((e) => !e.watermarkField && !e.window).map((e) => e.name)).toEqual(['ContractServices', 'ContractBlocks', 'Resources', 'Opportunities', 'ConfigurationItems']);
     // Billing entities: windowed, watermark resolved per tenant (window refresh when none).
-    expect(SHADOW_ENTITIES.filter((e) => e.watermarkCandidates).map((e) => e.name)).toEqual(['TicketNotes', 'Invoices', 'BillingItems', 'TicketCharges', 'ProjectCharges', 'ContractCharges', 'ExpenseItems', 'Opportunities', 'ConfigurationItems']);
+    expect(SHADOW_ENTITIES.filter((e) => e.watermarkCandidates).map((e) => e.name)).toEqual(['TicketNotes', 'Invoices', 'BillingItems', 'TicketCharges', 'ProjectCharges', 'ContractCharges', 'ExpenseItems', 'Opportunities', 'ConfigurationItems', 'Appointments']);
     expect(modifiedAt(shadowEntity('Tickets')!, { createDate: '2026-10-01T00:00:00Z' })?.toISOString()).toBe('2026-10-01T00:00:00.000Z');
   });
   test('writtenRow: top-level PATCH/POST, by-id DELETE, child-route create; ignores queries and unmirrored entities', () => {

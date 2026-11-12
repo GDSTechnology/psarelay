@@ -4,7 +4,7 @@
 
 export type ShadowEntityName = 'Tickets' | 'TimeEntries' | 'Tasks' | 'Projects' | 'ServiceCalls' | 'CompanyToDos' | 'Companies' | 'Contacts' | 'Contracts' | 'ContractServices' | 'ContractBlocks' | 'Resources'
   | 'Invoices' | 'BillingItems' | 'TicketCharges' | 'ProjectCharges' | 'ContractCharges' | 'TicketNotes'
-  | 'ExpenseItems' | 'Opportunities' | 'ConfigurationItems';
+  | 'ExpenseItems' | 'Opportunities' | 'ConfigurationItems' | 'Appointments';
 
 import type { ShadowFilter } from './shadow-sql.js';
 
@@ -131,6 +131,15 @@ export const SHADOW_ENTITIES: ShadowEntity[] = [
   // Assets (UPS / firewall alerts look them up by serial number): mirrored whole; incremental when possible,
   // otherwise a full refresh every 6 hours (CIs are many and change rarely).
   { name: 'ConfigurationItems', watermarkField: null, createField: 'createDate', watermarkCandidates: ['lastModifiedTime', 'lastModifiedDateTime', 'lastActivityDate'], fullEveryMinutes: 360 },
+  // Calendar appointments (2026-11-11: booking modules read and write them through /api/v1): windowed by their start,
+  // so every future booking is mirrored. updateDateTime is the documented change stamp, resolved from the field list;
+  // without it the entity runs in window-refresh mode.
+  {
+    name: 'Appointments', watermarkField: null, createField: 'createDateTime', requiredFields: ['startDateTime'],
+    watermarkCandidates: ['updateDateTime', 'lastModifiedDateTime'], refreshEveryMinutes: 60,
+    window: (c) => ({ op: 'gte', field: 'startDateTime', value: c }),
+    windowCovers: (fs, c) => lowerBoundAtLeast(fs, ['startDateTime', 'endDateTime'], c),
+  },
 ];
 
 export const shadowEntity = (name: string): ShadowEntity | undefined =>

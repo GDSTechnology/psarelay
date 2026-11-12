@@ -24,7 +24,7 @@ export const API_KEY_PREFIX = 'psk_';
 export const WRITABLE_ENTITIES = [
   'TimeEntries', 'Tickets', 'TicketNotes', 'Tasks', 'TaskNotes', 'Projects', 'ProjectNotes', 'ServiceCalls',
   'ServiceCallTickets', 'ServiceCallTicketResources', 'CompanyToDos', 'Companies', 'CompanyNotes', 'Contacts',
-  'ConfigurationItems', 'Opportunities',
+  'ConfigurationItems', 'Opportunities', 'Appointments',
 ] as const;
 export const WRITE_CHILD: Record<string, string> = {
   'Tickets/Notes': 'TicketNotes', 'Tasks/Notes': 'TaskNotes', 'Projects/Notes': 'ProjectNotes', 'Projects/Tasks': 'Tasks',

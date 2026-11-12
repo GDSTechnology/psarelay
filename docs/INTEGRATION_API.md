@@ -95,7 +95,7 @@ entities sync every 5 minutes (`MCP_PG_SHADOW_INTERVAL_SECONDS`).
 A key writes only the entities ticked under **May write** (none by default, so a read-only key stays read-only).
 Writable: TimeEntries, Tickets, TicketNotes, Tasks, TaskNotes, Projects, ProjectNotes, ServiceCalls,
 ServiceCallTickets, ServiceCallTicketResources, CompanyToDos, Companies, CompanyNotes, Contacts, ConfigurationItems,
-Opportunities. Financial records (contracts, services, charges, invoices) are not: they go through the MCP's
+Opportunities, Appointments. Financial records (contracts, services, charges, invoices) are not: they go through the MCP's
 confirm-gated tools. A child URL needs the child entity: `POST /Tickets/{id}/Notes` needs **TicketNotes**.
 
 ```http
@@ -128,6 +128,17 @@ Content-Type: application/json
   through `PATCH /Companies/{id}/Contacts`. `TimeEntries.hoursToBill` is read-only (use `offsetHours`).
 
 Every write is logged (key, Autotask call, record, outcome) and listed on the Integrations page under **Recent writes**.
+
+### Bookings
+
+A booking module has two choices in Autotask:
+
+- **Calendar appointments** (`Appointments`: `resourceID`, `title`, `startDateTime`, `endDateTime`, `description`).
+  Mirrored by their start date (every future one is in the mirror). Create with `POST /api/v1/Appointments`, move or
+  rename with `PATCH` (`{ id, startDateTime, endDateTime }`), cancel with `DELETE /api/v1/Appointments/{id}` when the
+  key may delete.
+- **Service calls** (dispatch work on tickets): `ServiceCalls` → `ServiceCallTickets` (the ticket) →
+  `ServiceCallTicketResources` (the tech), created in that order.
 
 ## Errors
 
