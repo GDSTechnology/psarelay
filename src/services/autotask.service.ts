@@ -133,7 +133,7 @@ import { McpServerConfig } from '../types/mcp';
 import { Logger } from '../utils/logger';
 import { getShadowRuntime } from '../db/shadow-runtime.js';
 import { randomUUID } from 'node:crypto';
-import { historyEvent } from '../utils/audit-events.js';
+import { historyEvent, historyIdOfKey } from '../utils/audit-events.js';
 import { FieldInfo, PicklistValue } from './picklist.cache';
 import {
   findDuplicateNote, formatChoices, hoursBetween, HUMAN_NOTE_TYPE_LABEL, matchPicklist, matchPicklistExact, MyServiceCall,
@@ -1255,11 +1255,10 @@ export class AutotaskService {
   async getTicketHistoryEvents(id: number, opts: { includeNoise?: boolean; live?: boolean } = {}): Promise<Record<string, unknown>> {
     // Served from the audit ledger when its copy is current (0 calls); timestamp-only rows aren't stored, so includeNoise reads live.
     const cached = opts.includeNoise || opts.live ? null : await this.cachedTicketHistory(id);
-    let rows: HistoryRow[];
-    let parsedFromCache: Map<number, { field: string | null; from: string | null; to: string | null }> | null = null;
+    // From the index each row carries its stored parse; rows of one save share an id (#210), so it can't be a map key.
+    let rows: Array<HistoryRow & { parsed?: { field: string | null; from: string | null; to: string | null } }>;
     if (cached) {
       rows = cached.rows;
-      parsedFromCache = cached.parsed;
     } else {
       const http = await this.ensureClient();
       rows = await http.query<HistoryRow>('TicketHistory', [{ op: 'eq', field: 'ticketID', value: id }], { maxRecords: 500 });
@@ -1285,7 +1284,7 @@ export class AutotaskService {
     let actorCtx: ClassifyContext | null = null;
     try { actorCtx = await this.getActorContext(); } catch { /* classification is best-effort */ }
     const events = kept.map((r) => {
-      const stored = parsedFromCache?.get(Number(r.id));
+      const stored = r.parsed;
       const change = stored?.field ? { field: stored.field, from: stored.from, to: stored.to, ambiguous: false }
         : r.detail ? parseHistoryChange(String(r.detail), labelsFor(String(r.detail).split(/ changed from /i)[0] ?? '')) : null;
       const rid = r.resourceID != null ? Number(r.resourceID) : null;
@@ -1318,7 +1317,7 @@ export class AutotaskService {
    * mirror, itself fresh), and the ticket not written since. Otherwise null → live.
    */
   private async cachedTicketHistory(id: number): Promise<{
-    rows: HistoryRow[]; parsed: Map<number, { field: string | null; from: string | null; to: string | null }>;
+    rows: Array<HistoryRow & { parsed?: { field: string | null; from: string | null; to: string | null } }>;
     indexedAt: string; ticketLastModified: string; truncated: boolean;
   } | null> {
     const rt = getShadowRuntime();
@@ -1332,16 +1331,15 @@ export class AutotaskService {
       const at = (await rt.ledger.historyFetched([id])).get(id);
       if (!lastMod || Number.isNaN(lastMod.getTime()) || !at || at < lastMod) return null;
       const evs = await rt.ledger.query({ start: '1970-01-01T00:00:00Z', end: '9999-01-01T00:00:00Z', sources: ['ticket_history'], entityTypes: ['ticket'], entityIds: [id] });
-      const parsed = new Map<number, { field: string | null; from: string | null; to: string | null }>();
-      const rows: HistoryRow[] = evs.map((e) => {
-        const hid = Number(String(e.eventId).replace(/^th:/, ''));
+      const rows = evs.map((e) => {
+        const hid = historyIdOfKey(e.eventId);
         const d = (e.details ?? {}) as Record<string, unknown>;
-        if (e.field && (e.oldValue != null || e.newValue != null)) parsed.set(hid, { field: e.field, from: e.oldValue ?? null, to: e.newValue ?? null });
+        const parsed = e.field && (e.oldValue != null || e.newValue != null) ? { field: e.field, from: e.oldValue ?? null, to: e.newValue ?? null } : undefined;
         const detail = typeof d.detail === 'string' ? d.detail
           : e.field && (e.oldValue != null || e.newValue != null) ? `${e.field} changed from ${e.oldValue ?? ''} to ${e.newValue ?? ''}` : null;
-        return { id: hid, date: e.timestamp, ...(typeof d.historyAction === 'string' ? { action: d.historyAction } : {}), detail, resourceID: e.resourceId };
+        return { id: hid, date: e.timestamp, ...(typeof d.historyAction === 'string' ? { action: d.historyAction } : {}), detail, resourceID: e.resourceId, ...(parsed ? { parsed } : {}) };
       });
-      return { rows, parsed, indexedAt: at.toISOString(), ticketLastModified: lastMod.toISOString(), truncated: rows.length >= 500 };
+      return { rows, indexedAt: at.toISOString(), ticketLastModified: lastMod.toISOString(), truncated: rows.length >= 500 };
     } catch { return null; }
   }
 

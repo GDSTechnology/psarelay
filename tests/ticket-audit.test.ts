@@ -236,7 +236,7 @@ describe('getTicketHistoryEvents', () => {
       jest.spyOn(s, 'resolveApiUserResourceId').mockResolvedValue(30683921);
       const first: any = await s.getTicketHistoryEvents(7);
       expect(first.source).toEqual({ from: 'live' });
-      expect(r.stored.map((e) => [e.eventId, e.entityReference])).toEqual([['th:1', 'T7'], ['th:2', 'T7']]);
+      expect(r.stored.map((e) => [e.eventId.replace(/:[0-9a-f]{12}$/, ''), e.entityReference])).toEqual([['th:1', 'T7'], ['th:2', 'T7']]);
       const second: any = await s.getTicketHistoryEvents(7);
       expect(histCalls()).toBe(1);
       expect(second.source).toMatchObject({ from: 'index', ticketLastModified: '2026-10-05T10:01:00.000Z' });

@@ -4,7 +4,7 @@
 // and the signed webhook ingest.
 
 import { createHmac } from 'crypto';
-import { historyEvent, noteEvent, timeEntryEvent, webhookEvents, rowDiffEvents, isAfterHours, localClock } from '../src/utils/audit-events';
+import { historyEvent, historyEventKey, historyIdOfKey, noteEvent, timeEntryEvent, webhookEvents, rowDiffEvents, isAfterHours, localClock } from '../src/utils/audit-events';
 import { buildDailyAudit } from '../src/utils/daily-audit';
 import { collectAuditEvents } from '../src/db/audit-collector';
 import { verifyAutotaskSignature, ingestAutotaskWebhook } from '../src/db/webhook-ingest';
@@ -20,11 +20,28 @@ describe('event mappers', () => {
   const ticket = { id: 210436, ticketNumber: 'T20261005.0099', companyID: 123 };
   test('history: status → Complete is "complete", from Complete is "reopen", resource change "assign", noise dropped, system flagged', () => {
     expect(historyEvent({ id: 1, action: 'Status Changed', date: '2026-10-06T18:37:22Z', detail: 'Status changed from In Progress to Complete', resourceID: 5 }, ticket))
-      .toMatchObject({ eventId: 'th:1', action: 'complete', field: 'Status', oldValue: 'In Progress', newValue: 'Complete', entityReference: 'T20261005.0099', companyId: 123, source: 'ticket_history', systemGenerated: false });
+      .toMatchObject({ eventId: expect.stringMatching(/^th:1:[0-9a-f]{12}$/), action: 'complete', field: 'Status', oldValue: 'In Progress', newValue: 'Complete', entityReference: 'T20261005.0099', companyId: 123, source: 'ticket_history', systemGenerated: false });
     expect(historyEvent({ id: 2, action: 'Status Changed', date: '2026-10-06T19:00:00Z', detail: 'Status changed from Complete to Re-Opened', resourceID: 5 }, ticket)!.action).toBe('reopen');
     expect(historyEvent({ id: 3, action: 'Primary Resource Changed', date: '2026-10-06T19:00:00Z', detail: 'Primary Resource changed from A to B', resourceID: 5 }, ticket)!.action).toBe('assign');
     expect(historyEvent({ id: 4, action: 'Last Activity Date Changed', date: '2026-10-06T19:00:00Z', resourceID: 5 }, ticket)).toBeNull();
     expect(historyEvent({ id: 5, action: 'Ticket Triage Rule Fired', date: '2026-10-06T19:00:00Z', resourceID: 4 }, ticket)!.systemGenerated).toBe(true);
+  });
+  test('#210: rows of one save share a TicketHistory id and timestamp — each still gets its own, stable key', () => {
+    const at = '2026-10-13T16:45:28.950Z';
+    const save = [
+      { id: 77, action: 'Account Changed', date: at, detail: 'Account changed from Acme to Spam Account', resourceID: 5 },
+      { id: 77, action: 'Location Changed', date: at, detail: 'Location changed from HQ to ', resourceID: 5 },
+      { id: 77, action: 'Additional Contacts Removed', date: at, resourceID: 5 },
+    ];
+    const keys = save.map((r) => historyEvent(r, ticket)!.eventId);
+    expect(new Set(keys).size).toBe(3);
+    for (const k of keys) expect(k).toMatch(/^th:77:[0-9a-f]{12}$/);
+    expect(save.map((r) => historyEvent(r, ticket)!.eventId)).toEqual(keys); // a re-read finds the same rows
+    // The key is built only from what the ledger stores, so migration 0026 can recompute it in SQL.
+    const e = historyEvent(save[0]!, ticket)!;
+    expect(historyEventKey(77, { field: e.field, oldValue: e.oldValue, newValue: e.newValue, details: e.details })).toBe(e.eventId);
+    expect(historyIdOfKey(e.eventId)).toBe(77);
+    expect(historyIdOfKey('th:77')).toBe(77); // keys stored before 0026
   });
   test('note: creator, parent ticket, visibility labels, body', () => {
     expect(noteEvent('ticketNote', { id: 987654, createDateTime: '2026-10-06T19:14:02Z', creatorResourceID: 5, title: 'Fixed', description: 'Replaced PSU', noteType: 1, publish: 2 }, { type: 'ticket', id: 210436, reference: 'T1', companyId: 123 }, { noteType: 'Task Summary', publish: 'Internal Project Team' }))
