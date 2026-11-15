@@ -28,6 +28,9 @@ Webhook (POST, Raw Body ON, Respond: "Using 'Respond to Webhook' node")
 - **Respond fast.** Autotask deactivates a webhook after repeated failed or slow deliveries and then calls its `deactivationUrl`. Answer 200 as soon as the signature checks out and do the slow work after it.
 - **Deduplicate.** A delivery can be retried, so treat the payload's event id (`Guid`; confirm the field name on the first live payload) as an idempotency key.
 - The MCP's own API user is excluded from the webhook by default, so writes the MCP makes (including ones n8n triggers through it) don't fire it again.
+- **Watching a UDF.** `autotask_create_webhook` takes `udfFields` next to `fields`: `[{ "name": "PortalUserId" }]` (the
+  UDF's name, looked up in the webhook's UDF list) or `[{ "udfFieldID": 123 }]`. The dry run shows the resolved id; an
+  unknown name fails and lists the UDFs that exist.
 
 ## 3. Signature check: Code node
 

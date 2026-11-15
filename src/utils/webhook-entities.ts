@@ -121,3 +121,42 @@ export interface WebhookFieldSpec { fieldID: number; isSubscribedField?: boolean
 export function buildWebhookFieldRow(webhookID: number, f: WebhookFieldSpec): Record<string, any> {
   return { [WEBHOOK_PARENT_FK]: webhookID, fieldID: f.fieldID, isSubscribedField: f.isSubscribedField ?? true, isDisplayAlwaysField: f.isDisplayAlwaysField ?? false };
 }
+
+/**
+ * A user-defined field to monitor (child `<Entity>WebhookUdfFields`): by `udfFieldID`, or by the UDF's `name`,
+ * resolved from that child's `udfFieldID` picklist (labels = UDF names).
+ */
+export interface WebhookUdfFieldSpec { udfFieldID?: number | undefined; name?: string | undefined; isSubscribedField?: boolean | undefined; isDisplayAlwaysField?: boolean | undefined }
+export function buildWebhookUdfFieldRow(webhookID: number, udfFieldID: number, f: WebhookUdfFieldSpec): Record<string, any> {
+  return { [WEBHOOK_PARENT_FK]: webhookID, udfFieldID, isSubscribedField: f.isSubscribedField ?? true, isDisplayAlwaysField: f.isDisplayAlwaysField ?? false };
+}
+
+export interface ResolvedUdfField { udfFieldID: number; name?: string; spec: WebhookUdfFieldSpec }
+/**
+ * Resolve UDF specs to ids. `choices` is the udfFieldID picklist (null when it could not be read). A name matches a
+ * label exactly, ignoring case. Errors say what is wrong; nothing is guessed. Duplicates are dropped.
+ */
+export function resolveWebhookUdfFields(specs: WebhookUdfFieldSpec[], choices: Array<{ value: string; label: string }> | null): { rows: ResolvedUdfField[]; errors: string[] } {
+  const rows: ResolvedUdfField[] = [];
+  const errors: string[] = [];
+  for (const s of specs) {
+    if (s.udfFieldID != null) {
+      if (!Number.isInteger(s.udfFieldID) || s.udfFieldID <= 0) { errors.push(`udfFields: udfFieldID ${s.udfFieldID} is not a positive integer`); continue; }
+      const label = choices?.find((c) => Number(c.value) === s.udfFieldID)?.label;
+      rows.push({ udfFieldID: s.udfFieldID, ...(label ? { name: label } : {}), spec: s });
+      continue;
+    }
+    const name = String(s.name ?? '').trim();
+    if (!name) { errors.push('udfFields: each entry needs udfFieldID or name'); continue; }
+    if (!choices) { errors.push(`udfFields: the UDF list could not be read, so "${name}" can't be looked up; pass its udfFieldID`); continue; }
+    const hit = choices.filter((c) => c.label.trim().toLowerCase() === name.toLowerCase());
+    if (hit.length !== 1) {
+      const names = choices.map((c) => c.label).slice(0, 40).join(', ');
+      errors.push(hit.length ? `udfFields: "${name}" matches ${hit.length} UDFs; pass its udfFieldID` : `udfFields: no UDF named "${name}". Available: ${names || '(none)'}`);
+      continue;
+    }
+    rows.push({ udfFieldID: Number(hit[0]!.value), name: hit[0]!.label, spec: s });
+  }
+  const seen = new Set<number>();
+  return { rows: rows.filter((r) => (seen.has(r.udfFieldID) ? false : (seen.add(r.udfFieldID), true))), errors };
+}
