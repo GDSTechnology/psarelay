@@ -71,6 +71,42 @@ describe('service webhook writes', () => {
     expect(create).toHaveBeenNthCalledWith(3, 'TicketWebhookExcludedResources', { webhookID: 900, resourceID: 30683829 });
   });
 
+  test('createWebhook udfFields: a name resolves from the UDF picklist (dry run shows the id), then the UDF row is created', async () => {
+    const s = mk();
+    const ids = [910, 911, 912];
+    const create = jest.fn().mockImplementation(async () => ids.shift());
+    jest.spyOn(s as any, 'ensureClient').mockResolvedValue({ create });
+    const picklists = jest.spyOn(s, 'getPicklists').mockResolvedValue({ entity: 'ContactWebhookUdfFields', picklists: { udfFieldID: [{ value: '29682885', label: 'PortalUserId' }, { value: '29682886', label: 'Other' }] }, unknownFields: [], notPicklists: [] });
+    const dry = await s.createWebhook('contacts', { ...base, subscribeUpdate: true, udfFields: [{ name: 'portaluserid' }], excludeSelf: false });
+    expect(dry.status).toBe('dry_run');
+    expect(picklists).toHaveBeenCalledWith('ContactWebhookUdfFields', ['udfFieldID']);
+    expect(dry.plannedUdfFields).toEqual([{ webhookID: 0, udfFieldID: 29682885, isSubscribedField: true, isDisplayAlwaysField: false, name: 'PortalUserId' }]);
+    expect(create).not.toHaveBeenCalled();
+
+    const r = await s.createWebhook('contacts', { ...base, subscribeUpdate: true, fields: [{ fieldID: 5 }], udfFields: [{ name: 'PortalUserId' }, { udfFieldID: 29682885 }], excludeSelf: false, dryRun: false });
+    expect(r.status).toBe('created');
+    expect(r).toMatchObject({ webhookID: 910, fieldsCreated: 1, udfFieldsCreated: 1 });
+    expect(create).toHaveBeenNthCalledWith(2, 'ContactWebhookFields', { webhookID: 910, fieldID: 5, isSubscribedField: true, isDisplayAlwaysField: false });
+    expect(create).toHaveBeenNthCalledWith(3, 'ContactWebhookUdfFields', { webhookID: 910, udfFieldID: 29682885, isSubscribedField: true, isDisplayAlwaysField: false }); // the duplicate is sent once
+    expect(create).toHaveBeenCalledTimes(3);
+  });
+
+  test('createWebhook udfFields: an unknown or unresolvable name fails before anything is written', async () => {
+    const s = mk();
+    const create = jest.fn();
+    jest.spyOn(s as any, 'ensureClient').mockResolvedValue({ create });
+    jest.spyOn(s, 'getPicklists').mockResolvedValue({ entity: 'x', picklists: { udfFieldID: [{ value: '1', label: 'Other' }] }, unknownFields: [], notPicklists: [] });
+    const r = await s.createWebhook('contacts', { ...base, subscribeUpdate: true, udfFields: [{ name: 'Missing' }], excludeSelf: false, dryRun: false });
+    expect(r.status).toBe('validation_failed');
+    expect(JSON.stringify(r)).toMatch(/no UDF named \\"Missing\\". Available: Other/);
+    jest.spyOn(s, 'getPicklists').mockRejectedValue(new Error('500'));
+    const r2 = await s.createWebhook('contacts', { ...base, subscribeUpdate: true, udfFields: [{ name: 'PortalUserId' }, {}], excludeSelf: false, dryRun: false });
+    expect(r2.status).toBe('validation_failed');
+    expect(JSON.stringify(r2)).toMatch(/pass its udfFieldID/);
+    expect(JSON.stringify(r2)).toMatch(/needs udfFieldID or name/);
+    expect(create).not.toHaveBeenCalled();
+  });
+
   test('updateWebhook dry-run then execute maps fields', async () => {
     const s = mk();
     const update = jest.fn();

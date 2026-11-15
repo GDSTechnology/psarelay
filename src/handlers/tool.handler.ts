@@ -2409,12 +2409,12 @@ export class AutotaskToolHandler {
           subscribeCreate: a.subscribeCreate, subscribeUpdate: a.subscribeUpdate, subscribeDelete: a.subscribeDelete,
           sendThresholdExceededNotification: a.sendThresholdExceededNotification, notificationEmailAddress: a.notificationEmailAddress,
           secretKey: a.secretKey,
-          fields: a.fields, excludedResourceIDs: a.excludedResourceIDs, excludeSelf: a.excludeSelf, dryRun: a.dryRun,
+          fields: a.fields, udfFields: a.udfFields, excludedResourceIDs: a.excludedResourceIDs, excludeSelf: a.excludeSelf, dryRun: a.dryRun,
         });
         const ex = (r.plannedExcludedResources ?? r.excludedResources) as Array<{ resourceID: number; reason: string }> | undefined;
         const exText = ex?.length ? ` — excluded resources: ${ex.map((e) => `${e.resourceID} (${e.reason})`).join(', ')}` : ` — NO excluded resources (the MCP's own writes WILL fire it)`;
         const warn = (r.warnings as string[] | undefined)?.length ? ` WARNING: ${(r.warnings as string[]).join(' ')}` : '';
-        const msg = r.status === 'dry_run' ? `Dry run: would create a ${a.entity} webhook → ${a.webhookUrl} with ${(r.plannedFields as unknown[])?.length ?? 0} field(s)${exText}; secret from ${a.secretKey ? 'the argument (hidden)' : 'AUTOTASK_WEBHOOK_SECRET'}; nothing written.${warn}`
+        const msg = r.status === 'dry_run' ? `Dry run: would create a ${a.entity} webhook → ${a.webhookUrl} with ${(r.plannedFields as unknown[])?.length ?? 0} field(s), ${(r.plannedUdfFields as unknown[])?.length ?? 0} UDF field(s)${exText}; secret from ${a.secretKey ? 'the argument (hidden)' : 'AUTOTASK_WEBHOOK_SECRET'}; nothing written.${warn}`
           : r.status === 'validation_failed' ? `Validation failed: ${JSON.stringify(r.errors ?? r.detail)}`
           : `Created ${a.entity} webhook ${r.webhookID}` + ((r.errors as any[])?.length ? ` with ${(r.errors as any[]).length} child error(s)` : '');
         // The receiver must verify X-Hook-Signature; point the builder of the

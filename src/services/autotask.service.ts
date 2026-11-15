@@ -58,7 +58,7 @@ import { resolveWebhookSecret, secretErrors, secretWarnings, maskSecret, buildEx
 import { computeActivityWithoutTime, AwtNote, AwtCompletion, AwtEmail, AwtTimeEntry, AwtTicket, AwtResourceResult, GapConfidence } from '../utils/activity-without-time';
 import { computeTicketsNeedingScheduling, TicketsNeedingSchedulingResult, ServiceCallLite } from '../utils/tickets-needing-scheduling';
 import { computeTicketThroughput, TicketThroughputResult } from '../utils/ticket-throughput';
-import { resolveWebhookEntity, WEBHOOK_ENTITIES, WEBHOOK_PARENT_FK, buildWebhookPayload, validateWebhookCreate, buildWebhookFieldRow, WebhookParams, WebhookFieldSpec } from '../utils/webhook-entities';
+import { resolveWebhookEntity, WEBHOOK_ENTITIES, WEBHOOK_PARENT_FK, buildWebhookPayload, validateWebhookCreate, buildWebhookFieldRow, buildWebhookUdfFieldRow, resolveWebhookUdfFields, WebhookParams, WebhookFieldSpec, WebhookUdfFieldSpec } from '../utils/webhook-entities';
 import { computeRequestSegmentation, RequestSegmentationResult, SegmentRule } from '../utils/request-segmentation';
 import { defaultTimeZone, normalizeTimestamp, validTimeZone } from '../utils/timezone';
 import {
@@ -8253,6 +8253,8 @@ export class AutotaskService {
    */
   async createWebhook(entityKey: string, params: WebhookParams & {
     fields?: WebhookFieldSpec[];
+    /** User-defined fields to monitor, by udfFieldID or by name. */
+    udfFields?: WebhookUdfFieldSpec[];
     excludedResourceIDs?: number[];
     /** Exclude this MCP's own API user (loop prevention). Default true. */
     excludeSelf?: boolean;
@@ -8267,6 +8269,14 @@ export class AutotaskService {
       ...secretErrors(secret),
       ...validateWebhookCreate({ ...params, secretKey: secret ?? 'placeholder-checked-above' }),
     ];
+    // UDFs: names resolved from the child's udfFieldID picklist (a read; also on a dry run, so the plan shows ids).
+    const udfSpecs = params.udfFields ?? [];
+    let udfChoices: Array<{ value: string; label: string }> | null = null;
+    if (udfSpecs.length) {
+      try { udfChoices = (await this.getPicklists(map.udfFields, ['udfFieldID'])).picklists.udfFieldID ?? null; } catch { udfChoices = null; }
+    }
+    const udf = resolveWebhookUdfFields(udfSpecs, udfChoices);
+    errors.push(...udf.errors);
     if (errors.length) return wp.fail('input', { errors });
     wp.ok('input', { entity: map.key, secretSource });
 
@@ -8286,13 +8296,14 @@ export class AutotaskService {
     if (params.excludeSelf !== false && self == null) {
       warnings.push("Could not resolve this MCP's own API-user resource to exclude it — add it to excludedResourceIDs (or AUTOTASK_WEBHOOK_EXCLUDE_RESOURCE_IDS) or the MCP's own writes may re-trigger this webhook.");
     }
-    wp.ok('plan', { fields: fields.length, excludedResources: excluded.length });
+    wp.ok('plan', { fields: fields.length, udfFields: udf.rows.length, excludedResources: excluded.length });
 
     if (params.dryRun !== false) {
       return wp.dryRun({
         entity: map.key,
         plannedWebhook: maskSecret(payload, secretSource),
         plannedFields: fields.map((f) => buildWebhookFieldRow(0, f)),
+        plannedUdfFields: udf.rows.map((r) => ({ ...buildWebhookUdfFieldRow(0, r.udfFieldID, r.spec), ...(r.name ? { name: r.name } : {}) })),
         plannedExcludedResources: exclusions,
         ...(warnings.length ? { warnings } : {}),
       });
@@ -8305,12 +8316,17 @@ export class AutotaskService {
       try { await http.create(map.fields, buildWebhookFieldRow(webhookID, f)); }
       catch (e) { childErrors.push({ step: `field:${f.fieldID}`, detail: (e as Error).message }); }
     }
+    for (const r of udf.rows) {
+      try { await http.create(map.udfFields, buildWebhookUdfFieldRow(webhookID, r.udfFieldID, r.spec)); }
+      catch (e) { childErrors.push({ step: `udfField:${r.udfFieldID}`, detail: (e as Error).message }); }
+    }
     for (const rid of excluded) {
       try { await http.create(map.excludedResources, { [WEBHOOK_PARENT_FK]: webhookID, resourceID: rid }); }
       catch (e) { childErrors.push({ step: `excludedResource:${rid}`, detail: (e as Error).message }); }
     }
     return wp.done(childErrors.length ? 'created_with_errors' : 'created', {
-      entity: map.key, webhookID, fieldsCreated: fields.length - childErrors.filter((e) => e.step.startsWith('field')).length,
+      entity: map.key, webhookID, fieldsCreated: fields.length - childErrors.filter((e) => e.step.startsWith('field:')).length,
+      udfFieldsCreated: udf.rows.length - childErrors.filter((e) => e.step.startsWith('udfField:')).length,
       excludedResourcesCreated: excluded.length - childErrors.filter((e) => e.step.startsWith('excludedResource')).length,
       excludedResources: exclusions,
       secretSource,
