@@ -27,6 +27,7 @@ export default defineConfig({
 					label: 'Guides',
 					items: [
 						{ label: 'Connect your AI', slug: 'guides/connect' },
+						{ label: 'Integration API', slug: 'guides/integration-api' },
 						{ label: 'Safety model', slug: 'guides/safety' },
 						{ label: 'Postgres mirror', slug: 'guides/mirror' },
 						{ label: 'Admin console', slug: 'guides/console' },

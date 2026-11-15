@@ -9,9 +9,9 @@ users and settings.
 
 ## What is mirrored
 
-18 entities: tickets, ticket notes, time entries, tasks, projects, service calls, company to-dos, companies,
-contacts, contracts, contract services and blocks, resources, invoices, billing items and ticket / project /
-contract charges.
+22 entities: tickets, ticket notes, time entries, tasks, projects, service calls, company to-dos, companies,
+contacts, contracts, contract services and blocks, resources, invoices, billing items, ticket / project / contract
+charges, expense items, opportunities, configuration items and calendar appointments.
 
 | Sync mode | Used for | How |
 |---|---|---|
@@ -30,7 +30,8 @@ production, with **no Autotask call**. User-defined fields are a structured colu
 work too. A row the MCP just wrote is read live until the mirror has it.
 
 `autotask_shadow_query` and `autotask_shadow_aggregate` give clients direct read-only access (counts, sums,
-group-by) at no API cost.
+group-by) at no API cost. Other systems read the same copy over REST through the
+[Integration API](/guides/integration-api/).
 
 ## The mirror checks itself
 

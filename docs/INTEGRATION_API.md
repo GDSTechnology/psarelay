@@ -21,6 +21,12 @@ reads the mirror whether or not `MCP_PG_SHADOW_SERVE_READS` is on: that setting 
 
 The API listens on the MCP port (8080), next to `/mcp`. Every call sends `Authorization: Bearer psk_…`.
 
+- **From another container** on the same Docker host: join PSArelay's compose network and call it by service name,
+  e.g. `http://psarelay:8080/api/v1` (installs from before the rename: `http://autotask-mcp:8080/api/v1`). Calls
+  over the private network work with the default key setting.
+- **From elsewhere** (another server, through a tunnel or reverse proxy): the key needs **Outside use** ticked;
+  without it such calls get 403.
+
 | Call | Answer |
 |---|---|
 | `GET /api/v1` | What this key may read, its caps and this hour's use, and how fresh each entity's copy is |
@@ -62,10 +68,33 @@ Rows come back in **ascending id order**, from the mirror and from Autotask alik
 | `X-PSArelay-Age` | From the mirror: how old the copy is, in seconds |
 | `X-PSArelay-Mirror-Miss` | Why the mirror couldn't answer (see below) |
 
+## What can be read
+
+A key reads the mirrored entities ticked under **May read**: Tickets, TicketNotes, TimeEntries, Tasks, Projects,
+ServiceCalls, CompanyToDos, Companies, Contacts, Contracts, ContractServices, ContractBlocks, Resources, Invoices,
+BillingItems, TicketCharges, ProjectCharges, ContractCharges, ExpenseItems, Opportunities, ConfigurationItems and
+Appointments. Each row is the full Autotask record, user-defined fields included (`userDefinedFields`), so UDF filters
+(`"udf": true`) work. Tickets, TicketNotes, TimeEntries, the billing entities and Appointments keep a history window
+(see below); the rest are mirrored whole. `GET /api/v1` lists each entity's copy age and window.
+
+Entities that aren't mirrored (Quotes, Products, Roles …) can't be read through `/api/v1` yet. Ask for them to be
+added rather than calling Autotask directly.
+
+## Change notifications
+
+PSArelay does **not** push change events to other systems (no outbound webhook, callback or queue). To react to a
+change, poll the mirror: a query costs no Autotask call, so polling every minute is fine. The mirror itself is
+current within about 5 minutes (one sync run). For Tickets, Companies and Contacts, an Autotask webhook forwarded to
+PSArelay makes it re-read the changed record on the next run, which also catches changes that don't move the
+record's modified stamp, such as a UDF-only edit. (TicketNotes and ConfigurationItems webhooks are recorded in the
+audit log but don't refresh the mirror yet.)
+([N8N_WEBHOOKS.md](N8N_WEBHOOKS.md); `autotask_create_webhook` with `udfFields` watches a UDF).
+
 ## When the mirror can't answer
 
 The mirror answers when the entity is mirrored, its copy is fresh enough, the filter stays inside the mirrored
-history (Tickets and TimeEntries keep `MCP_PG_SHADOW_HISTORY_MONTHS`) and every filter field is in the copy.
+history (windowed entities keep `MCP_PG_SHADOW_HISTORY_MONTHS`: Tickets, TicketNotes, TimeEntries, the billing
+entities, ExpenseItems and Appointments) and every filter field is in the copy.
 Otherwise the miss has a reason:
 
 | Reason | Meaning |
