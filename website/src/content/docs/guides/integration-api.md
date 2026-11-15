@@ -54,7 +54,7 @@ Content-Type: application/json
 - **When the mirror can't answer**, a mirror-only key gets 503 with the reason; a key allowed to go live makes one
   Autotask call within its live cap.
 - **No push events**: to react to changes, poll the mirror (free). Autotask webhooks forwarded to PSArelay make the
-  mirror re-read changed tickets, companies and contacts on the next run.
+  mirror re-read changed tickets, ticket notes, companies, contacts and configuration items on the next run.
 - **Every write is logged** and listed on the Integrations page.
 
 Full reference — filters, errors, idempotency, bookings, key settings:

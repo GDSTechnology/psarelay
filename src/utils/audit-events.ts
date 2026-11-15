@@ -179,12 +179,12 @@ function keyIn(obj: Record<string, unknown> | null | undefined, field: string): 
 
 const WEBHOOK_ENTITY: Record<string, { type: AuditEntityType; shadow: string | null }> = {
   ticket: { type: 'ticket', shadow: 'Tickets' },
-  ticketnote: { type: 'ticketNote', shadow: null },
+  ticketnote: { type: 'ticketNote', shadow: 'TicketNotes' },
   company: { type: 'company', shadow: 'Companies' },
   account: { type: 'company', shadow: 'Companies' },
   contact: { type: 'contact', shadow: 'Contacts' },
-  configurationitem: { type: 'configurationItem', shadow: null },
-  installedproduct: { type: 'configurationItem', shadow: null },
+  configurationitem: { type: 'configurationItem', shadow: 'ConfigurationItems' },
+  installedproduct: { type: 'configurationItem', shadow: 'ConfigurationItems' },
 };
 export function webhookEntity(entityType: unknown): { type: AuditEntityType; shadow: string | null } | null {
   return WEBHOOK_ENTITY[String(entityType ?? '').replace(/[^a-z]/gi, '').toLowerCase()] ?? null;

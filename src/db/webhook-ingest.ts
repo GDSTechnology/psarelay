@@ -6,8 +6,8 @@
 // ledger only ever records genuine callouts, whatever path they took. Each
 // callout becomes audit events: PersonID = the resource who acted in the UI;
 // new values from the callout, OLD values from the mirrored row as it was
-// before the change. The row is then queued for refresh, so the shadow is
-// current without waiting for the next sync.
+// before the change. The row is then queued for a re-read on the next sync run
+// (markStale: searches keep using the mirror meanwhile).
 
 import { createHmac, timingSafeEqual } from 'crypto';
 import { getShadowRuntime } from './shadow-runtime.js';
@@ -36,6 +36,6 @@ export async function ingestAutotaskWebhook(raw: Buffer, signature: string | und
   const oldRow = ent.shadow && Number.isFinite(id) ? await rt.store.getRow(ent.shadow, id) : null;
   const events = webhookEvents(p, oldRow);
   const stored = await rt.ledger.insert(events);
-  if (ent.shadow && Number.isFinite(id)) rt.sync.markDirty(ent.shadow, id);
+  if (ent.shadow && Number.isFinite(id)) rt.sync.markStale(ent.shadow, id);
   return { status: 200, body: { ok: true, events: events.length, stored, duplicate: events.length > 0 && stored === 0 } };
 }

@@ -84,10 +84,10 @@ added rather than calling Autotask directly.
 
 PSArelay does **not** push change events to other systems (no outbound webhook, callback or queue). To react to a
 change, poll the mirror: a query costs no Autotask call, so polling every minute is fine. The mirror itself is
-current within about 5 minutes (one sync run). For Tickets, Companies and Contacts, an Autotask webhook forwarded to
-PSArelay makes it re-read the changed record on the next run, which also catches changes that don't move the
-record's modified stamp, such as a UDF-only edit. (TicketNotes and ConfigurationItems webhooks are recorded in the
-audit log but don't refresh the mirror yet.)
+current within about 5 minutes (one sync run). For webhook-capable entities (Tickets, TicketNotes, Companies,
+Contacts, ConfigurationItems) an Autotask webhook forwarded to PSArelay makes it re-read the changed record on the
+next run, which also catches changes that don't move the record's modified stamp, such as a UDF-only edit. Searches
+keep using the mirror meanwhile; only a by-id read of that record goes live (or gets 503) until it is re-read.
 ([N8N_WEBHOOKS.md](N8N_WEBHOOKS.md); `autotask_create_webhook` with `udfFields` watches a UDF).
 
 ## When the mirror can't answer

@@ -298,7 +298,10 @@ attributable event) and `ticket_history_fetch`. It powers
 - **Webhooks** (Tickets, TicketNotes, Companies, Contacts, ConfigurationItems)
   arrive via n8n at `POST /ingest/autotask-webhook` (internal only). The MCP
   re-verifies Autotask's `X-Hook-Signature`, records `PersonID` as the actor, takes
-  the new values from the callout and the **old values from the shadow row**.
+  the new values from the callout and the **old values from the shadow row**, then
+  queues that row for a re-read on the next sync run. Searches keep using the mirror
+  meanwhile (a webhook is not a PSArelay write); only a by-id read of the row goes
+  live until it is re-read.
   See [N8N_WEBHOOKS.md](N8N_WEBHOOKS.md#5-forward-to-the-mcp-audit-ledger).
 - **Row diffs** — ServiceCalls and CompanyToDos are mirrored with watched fields;
   a change between syncs is recorded old → new. Autotask doesn't record who made

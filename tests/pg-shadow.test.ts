@@ -204,6 +204,19 @@ describe('ShadowSync', () => {
     expect(store.rows.get('Tickets')!.get(7)).toEqual({ id: 7, status: 5 });
   });
 
+  test('markStale (a webhook): the row is re-read on the next run, searches of the entity stay on the mirror', async () => {
+    const at = fakeAutotask({ Contacts: [{ id: 8, isActive: 0 }] });
+    const store = memStore();
+    const sync = new ShadowSync(at.http, store as any, logger, { maxCallsPerRun: 1, pauseAtPct: 85, usagePct: async () => 10 });
+    sync.markStale('contacts', 8); sync.markStale('Quotes', 1);
+    expect(sync.dirtyCount()).toBe(1);
+    expect(sync.isDirty('Contacts', 8)).toBe(true);           // a by-id read of this row goes live
+    expect(sync.writtenWithin('Contacts', 60_000)).toBe(false); // searches don't
+    await sync.runOnce();
+    expect(at.calls[0]).toEqual({ entity: 'Contacts', filter: [{ op: 'in', field: 'id', value: [8] }] });
+    expect(store.rows.get('Contacts')!.get(8)).toEqual({ id: 8, isActive: 0 });
+  });
+
   test('new notes / time entries queue their ticket and task for a re-read (lastActivity* moves without the modified stamp); searches stay on the mirror', async () => {
     const sync = new ShadowSync(fakeAutotask({}).http, memStore() as any, logger, { maxCallsPerRun: 1, pauseAtPct: 85 });
     sync.markParentsStale(shadowEntity('TicketNotes')!, [{ id: 1, ticketID: 70 }, { id: 2, ticketID: 71 }]);

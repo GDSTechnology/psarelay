@@ -10,6 +10,15 @@ Each entry lists the merge commit and the PR number. Brief section references
 
 ---
 
+## v6.17.1 — 2026-11-15 — Webhooks refresh every mirrored entity without sending searches live
+
+- TicketNotes and ConfigurationItems webhook callouts now queue the changed row for a re-read, like Tickets,
+  Companies and Contacts (they were only written to the audit log: the mapping predated those entities' mirrors).
+- A webhook callout queues the row with the new `markStale` instead of `markDirty`. `markDirty` means "PSArelay just
+  wrote this" and sends every search of the entity live (or to 503 for a mirror-only API key) for 90 s, so busy
+  Tickets / Contacts webhooks could keep the mirror from answering at all. Now only a by-id read of the changed row
+  goes live until the next run re-reads it.
+
 ## v6.17.0 — 2026-11-15 — Webhooks can watch user-defined fields (#256, e8a136a)
 
 - `autotask_create_webhook` takes `udfFields`: `[{ udfFieldID }]` or `[{ name }]`, plus `isSubscribedField` /
