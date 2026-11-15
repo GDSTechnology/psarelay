@@ -166,7 +166,10 @@ curl -s http://127.0.0.1:18080/health > ~/autotask-mcp-prev-health.json
 Then run the deploy: **`update-psarelay`**. It is re-run-safe: it pulls, and *only if the
 pull brought a new image* it tags the previous one `:rollback`, runs the migrations,
 recreates the service, prunes the old untagged image, waits for `/health` and prints
-the version. With nothing new released it changes nothing. It also refuses while a
+the version. Every run (a no-op one too) also removes old PSArelay images that are still
+tagged: other version tags, and anything under the pre-rename name
+`ghcr.io/gdstechnology/autotask-mcp`. It keeps `:latest`, `:rollback` and any tag a
+container is named by. With nothing new released it changes nothing else. It also refuses while a
 bulk job is **preparing** (a restart fails the preparation; `--force` overrides).
 `update-psarelay --recreate` restarts on the same image after an env-file change;
 `update-psarelay --help` lists the options.
@@ -203,6 +206,10 @@ Why it is shaped this way:
 - **Prune every deploy.** Without it each release leaves the old image untagged (~300 MB; ~750 MB before the image was slimmed)
   behind; months of releases filled the host disk (one cleanup reclaimed 25 GB).
   `prune -f` removes only dangling images, never tagged or running ones.
+- **Old tags are removed by name.** The prune can't see a tagged image, so the
+  images left under the pre-rename name (`autotask-mcp:latest` / `:rollback`) and
+  stray version tags stayed on disk (~330 MB each). The script now removes them
+  (`docker rmi`, never `-f`), and only under the two PSArelay names.
 - **Compare OLD vs NEW.** An earlier two-step version tagged the *running* image
   as `:rollback` unconditionally. Re-run with no new release, it pointed
   `:rollback` at the current version and the prune deleted the real previous

@@ -10,6 +10,14 @@ Each entry lists the merge commit and the PR number. Brief section references
 
 ---
 
+## v6.17.3 — 2026-11-15 — update-psarelay removes old PSArelay images still tagged
+
+- `docker image prune -f` only removes untagged images, so images under the pre-rename name
+  (`ghcr.io/gdstechnology/autotask-mcp:latest` / `:rollback`, ~330 MB each) and stray version tags stayed on disk
+  after the cutover. Every run now removes them by name, keeping `psarelay:latest`, `psarelay:rollback` and any tag
+  a container is named by (`docker rmi` without `-f`; only the two PSArelay names are touched).
+- The prod host was cleaned by hand the same day; the script covers other installs and future version tags.
+
 ## v6.17.2 — 2026-11-15 — Ticket history index keeps every field changed in one save (#210)
 
 - The rows of one TicketHistory save share an id and a timestamp; the ledger keyed them `th:<id>`, so only the first
