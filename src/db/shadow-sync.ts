@@ -64,6 +64,17 @@ export class ShadowSync {
     this.lastWrite.set(e.name, Date.now());
   }
   /**
+   * Queue a row Autotask says changed (a webhook callout): the next run re-reads it first. Unlike markDirty this is
+   * not "PSArelay wrote it", so searches of the entity keep using the mirror meanwhile; only a by-id read of this row
+   * goes live until it is re-read. (markDirty would send every search of the entity live for 90 s, and busy webhooks
+   * would keep the mirror from answering at all.)
+   */
+  markStale(entity: string, id: number): void {
+    const e = shadowEntity(entity);
+    if (!e || !Number.isFinite(id)) return;
+    (this.dirty.get(e.name) ?? this.dirty.set(e.name, new Set()).get(e.name)!).add(id);
+  }
+  /**
    * A note or time entry moves its ticket's / task's lastActivity* fields WITHOUT moving their modified stamp
    * (mirror check 2026-10-22: Tickets.lastActivityDate, Tasks.lastActivityResourceID), so the incremental
    * sync never re-read them. New / changed activity rows queue their parent for a re-read on the next run.

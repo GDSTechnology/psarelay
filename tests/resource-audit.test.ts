@@ -135,13 +135,25 @@ describe('webhook ingest', () => {
   });
   test('valid callout → events with old value from the shadow, row queued for refresh; bad signature 401; no secret 503', async () => {
     const insert = jest.fn(async (evs: any[]) => evs.length);
+    const markStale = jest.fn();
     const markDirty = jest.fn();
-    _setShadowRuntime({ store: { getRow: async () => ({ phone: '555-0199' }) }, ledger: { insert }, sync: { markDirty } } as any);
+    _setShadowRuntime({ store: { getRow: async () => ({ phone: '555-0199' }) }, ledger: { insert }, sync: { markStale, markDirty } } as any);
     const r = await ingestAutotaskWebhook(body, sig, { AUTOTASK_WEBHOOK_SECRET: SECRET });
     expect(r).toEqual({ status: 200, body: { ok: true, events: 1, stored: 1, duplicate: false } });
     expect(insert.mock.calls[0]![0][0]).toMatchObject({ resourceId: 5, entityType: 'company', field: 'phone', oldValue: '555-0199', newValue: '555-0100' });
-    expect(markDirty).toHaveBeenCalledWith('Companies', 9);
+    expect(markStale).toHaveBeenCalledWith('Companies', 9);
+    expect(markDirty).not.toHaveBeenCalled(); // a webhook is not a PSArelay write: searches stay on the mirror
     expect((await ingestAutotaskWebhook(body, 'sha1=bogus', { AUTOTASK_WEBHOOK_SECRET: SECRET })).status).toBe(401);
     expect((await ingestAutotaskWebhook(body, sig, {})).status).toBe(503);
+  });
+  test('TicketNote and ConfigurationItem callouts refresh their mirrored rows too', async () => {
+    const markStale = jest.fn();
+    _setShadowRuntime({ store: { getRow: async () => null }, ledger: { insert: async (evs: any[]) => evs.length }, sync: { markStale } } as any);
+    for (const [EntityType, Id, entity] of [['TicketNote', 31, 'TicketNotes'], ['ConfigurationItem', 32, 'ConfigurationItems'], ['InstalledProduct', 33, 'ConfigurationItems']] as const) {
+      const b = Buffer.from(JSON.stringify({ Action: 'Update', Guid: `g${Id}`, EntityType, Id, EventTime: '2026-10-06T15:00:00Z', PersonID: 5, Fields: { title: 'x' } }));
+      const s = 'sha1=' + createHmac('sha1', SECRET).update(b).digest('base64');
+      expect((await ingestAutotaskWebhook(b, s, { AUTOTASK_WEBHOOK_SECRET: SECRET })).status).toBe(200);
+      expect(markStale).toHaveBeenLastCalledWith(entity, Id);
+    }
   });
 });
