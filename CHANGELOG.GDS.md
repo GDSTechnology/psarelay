@@ -10,6 +10,115 @@ Each entry lists the merge commit and the PR number. Brief section references
 
 ---
 
+## v6.17.0 — 2026-11-15 — Webhooks can watch user-defined fields (#256, e8a136a)
+
+- `autotask_create_webhook` takes `udfFields`: `[{ udfFieldID }]` or `[{ name }]`, plus `isSubscribedField` /
+  `isDisplayAlwaysField`. A name is looked up in the webhook's UDF list (the `udfFieldID` picklist of
+  `<Entity>WebhookUdfFields`), on the dry run too, so the plan shows the ids. An unknown, ambiguous or unreadable name
+  fails before anything is written and lists the UDFs that exist. Duplicates are sent once.
+- Why: a Contacts webhook must watch an app-user UDF so the mirror hears about link changes that don't move
+  `lastModifiedDate`. Before this, the UDF row needed a raw request.
+- Not verified live: that the picklist lists UDFs by name (if not, a name fails cleanly and asks for the id).
+
+## v6.16.0 — 2026-11-12 — Appointments mirrored and writable through the integration API (#255, bc384bd)
+
+- Mirror: `Appointments`, windowed by `startDateTime` (every future booking is mirrored); incremental on
+  `updateDateTime` when the tenant's field list has it, otherwise re-read hourly. No migration.
+- Integration API: Appointments is writable (create, PATCH to move / rename, DELETE to cancel when the key may delete).
+- `docs/INTEGRATION_API.md` gains a Bookings section (Appointments vs service calls).
+
+## v6.15.0 — 2026-11-11 — Integration API writes (#254, 7668e1a)
+
+- Keys may create, update and delete through PSArelay: per key "May write" entities (none by default), "May delete"
+  and writes per hour (default 200). Migration 0025 (`api_key.write_entities`, `allow_delete`,
+  `write_hourly_limit`; `api_key_write` log).
+- `POST /api/v1/{Entity}`, `PATCH /api/v1/{Entity}` (`{ id, …fields }`), `DELETE /api/v1/{Entity}/{id}` and
+  Autotask's child URLs. PUT is refused (it blanks unsent fields). Financial entities aren't writable here.
+- Writes use PSArelay's own Autotask connection (thread gate, 429 cooldown), are refused under backpressure "stop"
+  and when the read-only switch or a read-only plan is on, and the mirror re-reads what they changed.
+- `Idempotency-Key` is claimed before the write: a repeat replays the first answer; an unclear one (timeout) is never
+  re-sent. Every write is logged; the Integrations page lists recent writes.
+- Why: the time module needs to log time, and the point of the API is that all of a tenant's Autotask traffic goes
+  through PSArelay, which knows the limits.
+- Fix: the Keys panel showed the text "null", and the key name box was unstyled.
+
+## v6.14.0 — 2026-11-11 — Integration read API (#253, 21d49de)
+
+- `/api/v1` on the MCP port, in Autotask's request shapes: `POST /{Entity}/query`, `GET /{Entity}/{id}`, `GET /`
+  (key, caps, use, freshness). Answered from the Postgres mirror (no Autotask call); headers say mirror / live and the
+  copy's age.
+- A mirror miss answers 503 with the reason, unless the key allows live reads (one call, within its live cap, never
+  under backpressure).
+- Keys (`psk_`, migration 0024): their own table, so a key never opens `/mcp` and an MCP token never opens `/api/v1`.
+  SHA-256 only, shown once. Per key: entities, live, outside use (off = private network only), hourly caps, expiry.
+  New console page **Integrations**; create / edit / revoke are logged.
+- Why: time / CRM modules and report jobs stop counting against the tenant's 10,000 calls/hour and 3 threads per
+  endpoint.
+
+## v6.13.0 — 2026-11-05 — Create and update catalog Services (#252, 16c429c)
+
+- `autotask_create_service` / `autotask_update_service`: financial, dry run by default, writes need
+  `dryRun:false` + `confirm:true`. Fields checked against the tenant's live Services field list; `periodType` by id or
+  label; the billing code must exist and be active; 0 is a valid price or cost.
+- Duplicates: an exact SKU always refuses; an exact name refuses unless `allowDuplicateName`.
+- Update PATCHes only changed fields and shows every before → after (a PUT-only zone gets the full merged record);
+  read back after every write. A create whose POST errors re-reads the catalog instead of posting twice.
+- Read-only: `autotask_get_service_field_info`, `autotask_find_service_by_sku`, `autotask_validate_service`.
+- Customer-facing text is refused if it carries cost / markup / supplier notes.
+
+## v6.12.1 — 2026-11-05 — Ticket charges can be corrected; no cost on invoice text (#251, df5b068)
+
+- `update_ticket_charge` PATCHes `/Tickets/{ticketID}/Charges` (TicketCharges has no top-level update route: PATCH
+  404, PUT 405), reads the charge back and reports each field old → new.
+- Charge names / descriptions print on the invoice: create / update refuse cost figures, markup, supplier / pickup,
+  serial-number or PO notes (`allowInternalText` for a false alarm); `add_ticket_materials` likewise.
+- Why: a charge went on with our cost and markup in its description, and the correction failed.
+
+## v6.12.0 — 2026-11-05 — Ticket materials (#249, b68ed2d) and customer re-engagement report (#250, 1a5abef)
+
+- `autotask_add_ticket_materials`: ticket number + `{ query or productId, quantity }` per line; resolves only when
+  unambiguous, prices from the catalog, charge type / status from picklist defaults; a product already on the ticket
+  is skipped. Dry run by default; writes need `confirm:true`; each charge is read back. `find_product` returns prices;
+  `billableToAccount` now maps to `isBillableToCompany` (it was ignored).
+- `autotask_report_customer_reengagement`: last customer-facing touchpoint per active customer company, from the
+  mirror in three SQL reads (0 Autotask calls). Only work by a person counts (published notes, time, CRM to-dos,
+  opportunities, service calls; never resource 4, API users or the MCP). Optional .xlsx.
+
+## v6.11.0 — 2026-11-02 — Every read tool is marked read-only (#248, 5ce83b9)
+
+- 63 read tools had no `readOnlyHint`, so Microsoft 365 Copilot asked the person to Confirm every lookup. Every
+  get / search / list / find / query / count / report tool is now read-only unless it writes; a test checks the
+  marker reaches clients in a real `tools/list`.
+
+## v6.10.2 — 2026-10-27 — "My day" readable; "my tickets" (#247, a013480)
+
+- `autotask_get_my_day` assigned tickets carry status / priority / queue labels, the company name and a ticket link;
+  missing-time items name their ticket.
+- `search_tickets` `assignedToMe: true` fills the resource from the verified sign-in.
+
+## v6.10.1 — 2026-10-26 — "Act as me" knows a signed-in person (#246, 9271299)
+
+- `resolveCaller` uses the identity of a verified token (Copilot SSO, console-login sign-ins), so my-day, log-my-time
+  and the other act-as tools stop asking "who are you?".
+- `search_tickets` rows carry status / priority / queue labels and a ticket link.
+- Microsoft 365 links record "Last used" (at most one write per person per 5 minutes).
+
+## v6.10.0 — 2026-10-26 — Microsoft 365 Copilot single sign-on (#245, a351b18)
+
+- Copilot's Entra SSO sends the person's Entra token on `/mcp`; PSArelay verifies it against Microsoft's published
+  keys (trusted tenants, audience, the Enterprise token store as client, expiry, scope, no guests).
+- The person is linked to their Autotask resource when exactly one active resource matches (email / email2 / email3,
+  then userName); API users (`licenseType` 7) and resource 4 are never linked. Unlinked people are told to ask their
+  administrator and nothing runs. New console page **Microsoft 365**. Migration 0023.
+
+## v6.9.0 — 2026-10-26 — Copilot can connect; administrators choose AI clients (#244, c4123c4)
+
+- Copilot's connector registers by DCR but needs a client secret: `/oauth/register` issues one for
+  `client_secret_post` / `_basic` and for an unspecified method (checked only when sent). Public clients unchanged.
+  Only the hash is stored (migration 0022).
+- Settings → Security → **AI clients allowed to connect** (default all; `MCP_AI_CLIENTS`): an unticked client is
+  refused at registration and sign-in, its sign-ins end at the next refresh, and its card is hidden on Connect.
+
 ## Unreleased — Console: free-trial strip and "Choose a plan"
 
 - A strip under the top bar on every page while the plan is a trial or read-only: days left, read-only, and
