@@ -12,7 +12,9 @@
 #   3. tags the image it is replacing as :rollback (before anything is pruned),
 #   4. runs the database migrations (only what is new),
 #   5. restarts the MCP, prunes old images, waits for /health and prints the version,
-#   6. refreshes this script from the new image.
+#   6. removes old PSArelay images still tagged (other versions, the pre-rename autotask-mcp name),
+#      keeping :latest, :rollback and any image a container uses,
+#   7. refreshes this script from the new image.
 #
 # Install once (the copy in the image — no download from the internet):
 #   docker run --rm --entrypoint cat ghcr.io/gdstechnology/psarelay:latest /app/deploy/update-psarelay.sh > /usr/local/bin/update-psarelay
@@ -44,7 +46,7 @@ while [ $# -gt 0 ]; do
     --container) CONTAINER="$2"; shift ;;
     --port) PORT="$2"; shift ;;
     --image) IMAGE="$2"; shift ;;
-    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
     *) echo "Unknown option: $1 (see --help)" >&2; exit 2 ;;
   esac
   shift
@@ -86,6 +88,22 @@ health() {
   done
   echo "/health did not answer within 60 s — check: docker compose logs --tail 50 ${SERVICE}" >&2
   return 1
+}
+# Old PSArelay images still tagged: other version tags, and anything under the name used before the rename
+# (ghcr.io/gdstechnology/autotask-mcp). Keeps ${IMAGE}:latest, ${IMAGE}:rollback and whatever a container uses
+# or a container (running or stopped) is named by — docker rmi would only untag those, and a compose file still
+# on the old name would re-pull it. Never -f, so an image a container was made from is never deleted. Only these two names.
+cleanup_old_images() {
+  local ref removed=0 used
+  used="$(docker ps -a --format '{{.Image}}' 2>/dev/null || true)"
+  while read -r ref; do
+    case "$ref" in ""|*":<none>"|"${IMAGE}:latest"|"${IMAGE}:rollback") continue ;; esac
+    if printf '%s\n' "$used" | grep -qxF -e "$ref" -e "${ref%:latest}"; then continue; fi
+    if docker rmi "$ref" >/dev/null 2>&1; then echo "Removed old image ${ref}"; removed=1; fi
+  done < <(docker images --format '{{.Repository}}:{{.Tag}}' "$IMAGE" 2>/dev/null || true
+           [ "$IMAGE" = "$LEGACY_IMAGE" ] || docker images --format '{{.Repository}}:{{.Tag}}' "$LEGACY_IMAGE" 2>/dev/null || true)
+  # Untagging can leave the image itself dangling: drop those too.
+  [ "$removed" = 1 ] && docker image prune -f >/dev/null || true
 }
 running_version() { curl -s --max-time 3 "http://127.0.0.1:${PORT}/health" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p' || true; }
 
@@ -146,6 +164,7 @@ NEW="$(docker image inspect "${IMAGE}:latest" --format '{{.Id}}')"
 if [ "$OLD" = "$NEW" ] && [ "$RECREATE" = 0 ]; then
   say "PSArelay is already on the latest image — nothing changed"
   health
+  cleanup_old_images
   exit 0
 fi
 
@@ -164,6 +183,7 @@ fi
 
 say "Health"
 health
+cleanup_old_images
 
 # Keep this script current: take the copy from the image that now runs.
 SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"

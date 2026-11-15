@@ -60,7 +60,8 @@ update-psarelay
 ```
 
 It updates only PSArelay service: pulls, keeps the previous image as `:rollback`, runs database
-migrations, restarts, waits for `/health` and prints the version. It refuses while a bulk job is preparing,
+migrations, restarts, waits for `/health` and prints the version. It removes old PSArelay images (other
+versions, and the pre-rename `autotask-mcp` name), keeping `:latest` and `:rollback`. It refuses while a bulk job is preparing,
 and refreshes itself from each new image.
 
 Then add the [Postgres layer](/guides/mirror/) and the [admin console](/guides/console/).
