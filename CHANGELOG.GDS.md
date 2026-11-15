@@ -10,6 +10,16 @@ Each entry lists the merge commit and the PR number. Brief section references
 
 ---
 
+## v6.17.2 — 2026-11-15 — Ticket history index keeps every field changed in one save (#210)
+
+- The rows of one TicketHistory save share an id and a timestamp; the ledger keyed them `th:<id>`, so only the first
+  was kept (ticket 211214: 10 rows live, 3 indexed; a company change in the same save as another field vanished).
+  Nexus reads this history to learn from technicians' spam and queue moves.
+- Keys are now `th:<id>:<12 hex>` = md5(historyAction | field | old | new | unparsed detail), built only from stored
+  columns. The index read no longer maps parsed values by history id (it collided the same way).
+- Migration 0026 re-keys the stored rows in SQL (same hash; checked against the code on Postgres 16) and clears
+  `ticket_history_fetch`, so each ticket's next history read goes live once and fills in the dropped rows. No sweep.
+
 ## v6.17.1 — 2026-11-15 — Webhooks refresh every mirrored entity without sending searches live
 
 - TicketNotes and ConfigurationItems webhook callouts now queue the changed row for a re-read, like Tickets,

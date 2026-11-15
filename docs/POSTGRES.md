@@ -133,6 +133,12 @@ answers it one ticket at a time. Instead it is **indexed** in the audit ledger
   `ticketLastModified`) or `live`; `live: true` forces a fresh read.
 - **What the index leaves out.** It skips timestamp-only rows, so
   `includeTimestampOnly` always reads live.
+- **One save, several rows.** When one save changes several fields, Autotask's
+  history rows share a TicketHistory id and a timestamp. Each is stored under
+  `th:<id>:<hash of what it says>`, so all of them are kept (before 6.17.2 /
+  migration 0026 only the first was, issue #210). Migration 0026 re-keyed the
+  stored rows and cleared `ticket_history_fetch`, so each ticket's next history
+  read goes to Autotask once and fills in the rows that were dropped.
 
 **Billing / financial review** (since 3.57): Invoices, BillingItems, and
 TicketCharges, ProjectCharges and ContractCharges; **ExpenseItems** since 6.4

@@ -6,6 +6,7 @@
 // noted, logged time, completed, scheduled, deleted). Being assigned is not an
 // action, and nothing here infers work from assignment.
 
+import { createHash } from 'crypto';
 import { NOISE_HISTORY_ACTIONS, SYSTEM_RESOURCE_ID, parseHistoryChange } from './ticket-audit';
 import { dayIn } from './staff-tools';
 
@@ -47,6 +48,20 @@ const num = (v: unknown): number | null => (v === null || v === undefined || v =
 const str = (v: unknown): string | null => (v === null || v === undefined ? null : String(v));
 
 /** A TicketHistory row → an event (null for timestamp-only noise). */
+/**
+ * The ledger key of a TicketHistory row. The rows of ONE save (several fields changed at once) share a TicketHistory
+ * id and a timestamp (issue #210: 10 rows live, 3 kept), so the id alone keeps only the first. The key adds a short
+ * hash of what the row says, built only from what the ledger stores, so migration 0026 can re-key old rows in SQL:
+ * md5(historyAction | field | old | new | unparsed detail), first 12 hex characters.
+ */
+export function historyEventKey(historyId: unknown, e: { field?: string | null | undefined; oldValue?: string | null | undefined; newValue?: string | null | undefined; details?: Record<string, unknown> | null | undefined }): string {
+  const d = e.details ?? {};
+  const s = [d.historyAction, e.field, e.oldValue, e.newValue, d.detail].map((v) => (v == null ? '' : String(v))).join('|');
+  return `th:${historyId}:${createHash('md5').update(s, 'utf8').digest('hex').slice(0, 12)}`;
+}
+/** The TicketHistory id inside a ledger key ("th:123" before migration 0026, "th:123:<hash>" after). */
+export const historyIdOfKey = (key: string): number => Number(String(key).split(':')[1]);
+
 export function historyEvent(
   row: { id: number; action?: string; date?: string; detail?: string | null; resourceID?: number | null },
   ticket: { id: number; ticketNumber?: string | null; companyID?: number | null },
@@ -65,8 +80,11 @@ export function historyEvent(
   else if (/^status$/i.test(field ?? '') && /^complete$/i.test(change?.from ?? '')) action = 'reopen';
   else if (/resource/i.test(field ?? '') && !/role/i.test(field ?? '')) action = 'assign';
   const rid = num(row.resourceID);
+  const oldValue = change?.from ?? null;
+  const newValue = change?.to ?? null;
+  const details = { historyAction: actionText, ...(detail && !change ? { detail } : {}), ...(change?.ambiguous ? { parseAmbiguous: true } : {}) };
   return {
-    eventId: `th:${row.id}`,
+    eventId: historyEventKey(row.id, { field, oldValue, newValue, details }),
     timestamp: ts,
     resourceId: rid,
     action,
@@ -75,11 +93,11 @@ export function historyEvent(
     entityReference: ticket.ticketNumber ?? null,
     companyId: num(ticket.companyID),
     field,
-    oldValue: change?.from ?? null,
-    newValue: change?.to ?? null,
+    oldValue,
+    newValue,
     source: 'ticket_history',
     systemGenerated: rid === SYSTEM_RESOURCE_ID || /rule fired/i.test(actionText),
-    details: { historyAction: actionText, ...(detail && !change ? { detail } : {}), ...(change?.ambiguous ? { parseAmbiguous: true } : {}) },
+    details,
   };
 }
 

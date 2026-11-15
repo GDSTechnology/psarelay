@@ -50,7 +50,7 @@ describe('runBackfillStep', () => {
       { op: 'gte', field: 'completedDate', value: '2026-01-01T00:00:00.000Z' }, { op: 'lt', field: 'completedDate', value: '2026-03-01T00:00:00.000Z' }, { op: 'gt', field: 'id', value: 0 }] });
     expect(w.calls.map((c) => c.entity)).toEqual(['Tickets', 'TicketNotes', 'TimeEntries', 'TicketHistory', 'TicketHistory']);
     expect(w.calls[1]!.filters[0]).toEqual({ op: 'in', field: 'ticketID', value: [1, 2] });
-    expect(w.stored.map((e) => e.eventId).sort()).toEqual(['te:2001', 'te:2002', 'th:3001', 'th:3002', 'ticketNote:1001', 'ticketNote:1002']);
+    expect(w.stored.map((e) => e.eventId.replace(/:[0-9a-f]{12}$/, '')).sort()).toEqual(['te:2001', 'te:2002', 'th:3001', 'th:3002', 'ticketNote:1001', 'ticketNote:1002']);
     expect(r).toMatchObject({ ticketsProcessed: 2, eventsIngested: 6, apiCallsUsed: 6 }); // + the usage check
     expect(w.job()).toMatchObject({ cursor: 2, ticketsDone: 2, status: 'running' });
     const last = await runBackfillStep(w.deps, w.job(), opts);

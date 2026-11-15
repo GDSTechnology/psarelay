@@ -10,6 +10,9 @@ import { _setShadowRuntime } from '../src/db/shadow-runtime';
 import { AutotaskToolHandler } from '../src/handlers/tool.handler';
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';
+
+// TicketHistory keys carry a content hash since #210 (th:<id>:<12 hex>); compare on the id part.
+const k = (id: string) => id.replace(/^(th:\d+):[0-9a-f]{12}$/, '$1');
 import type { McpServerConfig } from '../src/types/mcp';
 
 afterEach(() => { _setShadowRuntime(null); jest.restoreAllMocks(); });
@@ -106,7 +109,7 @@ describe('ingestActivity', () => {
     expect(r.ran).toBe(true);
     expect(w.calls.map((c) => c.entity)).toEqual(['TicketNotes', 'TicketHistory', 'TicketHistory']); // TimeEntries + Tickets from the shadow
     expect(r.apiCallsUsed).toBe(3);
-    expect(ledger.rows.map((e) => e.eventId)).toEqual(['te:700', 'te:700:m:2026-10-09T11:00:00.000Z', 'ticketNote:501', 'th:101', 'th:201']);
+    expect(ledger.rows.map((e) => k(e.eventId))).toEqual(['te:700', 'te:700:m:2026-10-09T11:00:00.000Z', 'ticketNote:501', 'th:101', 'th:201']);
     expect(r.sources.tickets).toMatchObject({ read: 'shadow', checked: 2, historyFetched: 2, pending: 0, watermark: '2026-10-09T10:00:00.000Z' });
     expect(ledger.cps.get('timeEntries')!.watermark.toISOString()).toBe('2026-10-09T11:00:00.000Z');
 
@@ -126,7 +129,7 @@ describe('ingestActivity', () => {
     expect(r.incomplete.join()).toMatch(/1 ticket\(s\) left for the next call/);
     const r2 = await ingestActivity(deps(w, ledger), { ...opts, sources: ['tickets'], maxApiCalls: 1 });
     expect(r2.sources.tickets).toMatchObject({ checked: 1, historyFetched: 1, pending: 0 });
-    expect(ledger.rows.map((e) => e.eventId)).toEqual(['th:101', 'th:201']);
+    expect(ledger.rows.map((e) => k(e.eventId))).toEqual(['th:101', 'th:201']);
   });
 
   test('re-scan overlaps the watermark, so a row the shadow synced late is still picked up', async () => {
@@ -138,7 +141,7 @@ describe('ingestActivity', () => {
     const late = { ...T1, lastTrackedModificationDateTime: '2026-10-09T09:55:00Z' };
     const w2 = world({ tickets: [late, T2], history: HIST });
     await ingestActivity(deps(w2, ledger), { ...opts, sources: ['tickets'] });
-    expect(ledger.rows.map((e) => e.eventId)).toEqual(['th:201', 'th:101']);
+    expect(ledger.rows.map((e) => k(e.eventId))).toEqual(['th:201', 'th:101']);
   });
 
   test('notes come from the TicketNotes mirror (0 calls) when its window covers the scan; live when the window starts later', async () => {
@@ -234,25 +237,25 @@ describe('autotask_get_activity_feed (tool)', () => {
     const call = await setup(w, ledger);
 
     const p1 = await call({ since: SINCE.toISOString(), limit: 1 });
-    expect(p1.data.events.map((e: any) => e.eventId)).toEqual(['th:101']);
+    expect(p1.data.events.map((e: any) => k(e.eventId))).toEqual(['th:101']);
     expect(p1.data.events[0]).toMatchObject({ eventType: 'ticket.status.changed', ticketId: 1, before: 'New', after: 'In Progress', actor: { actorType: 'human' } });
     expect(p1.data.hasMore).toBe(true);
     expect(p1.data.coverage.complete).toBe(true);
 
     const p2 = await call({ cursor: p1.data.nextCursor, limit: 10, ingest: false });
-    expect(p2.data.events.map((e: any) => [e.eventId, e.actor.actorType])).toEqual([['th:201', 'integration']]);
+    expect(p2.data.events.map((e: any) => [k(e.eventId), e.actor.actorType])).toEqual([['th:201', 'integration']]);
 
     // Late arrival: an OLDER change stored after the reader passed it.
     await ledger.insert([{ eventId: 'th:099', timestamp: '2026-10-09T08:00:00.000Z', resourceId: 10, action: 'update', entityType: 'ticket', entityId: 1, field: 'Priority', oldValue: 'Low', newValue: 'High', source: 'ticket_history', systemGenerated: false }]);
     const p3 = await call({ cursor: p2.data.nextCursor, ingest: false });
-    expect(p3.data.events.map((e: any) => e.eventId)).toEqual(['th:099']);
+    expect(p3.data.events.map((e: any) => k(e.eventId))).toEqual(['th:099']);
     expect(p3.data.hasMore).toBe(false);
 
     const replay = await call({ cursor: p1.data.nextCursor, limit: 10, ingest: false });
-    expect(replay.data.events.map((e: any) => e.eventId)).toEqual(['th:201', 'th:099']);
+    expect(replay.data.events.map((e: any) => k(e.eventId))).toEqual(['th:201', 'th:099']);
 
     const humans = await call({ since: SINCE.toISOString(), actorTypes: ['human'], ingest: false });
-    expect(humans.data.events.map((e: any) => e.eventId)).toEqual(['th:101', 'th:099']);
+    expect(humans.data.events.map((e: any) => k(e.eventId))).toEqual(['th:101', 'th:099']);
     expect(humans.data.scanned).toBe(3);
   });
 
