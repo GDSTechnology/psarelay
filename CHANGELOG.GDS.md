@@ -10,6 +10,22 @@ Each entry lists the merge commit and the PR number. Brief section references
 
 ---
 
+## v6.18.0 — 2026-11-16 — Appointment tools: book, move, cancel, and find free time (#21)
+
+- Six tools in a new `appointments` category: `autotask_get_appointment`, `autotask_search_appointments` (overlap
+  window, one or more resources, from the mirror), `autotask_create_appointment`, `autotask_update_appointment`,
+  `autotask_delete_appointment` and `autotask_get_resource_availability`.
+- Times: offset ISO, or local wall-clock + `timeZone` (default the resource's location timezone); stored in UTC,
+  answered with `startLocal` / `endLocal` too.
+- Booking checks the person's other appointments and the service calls they are on: an overlap returns `conflict` and
+  writes nothing unless `allowOverlap`. The same resource + title + start + end returns the existing appointment
+  (`exists`), so a retry never double-books. Updates PATCH only what changed; moving keeps the length. Delete reads
+  first and says what it removed. Create acts as the caller when no resource is named.
+- Availability: per person, busy blocks + free slots inside working hours (default 08:00–17:00, weekdays, 30+ minutes,
+  nothing before now); with several people, `allFree` = when all of them are free. Up to 10 people, 14 days.
+- `autotask_get_my_day` now lists the day's appointments (one more read; from the mirror when it is on).
+- Not yet exercised against the live tenant: the Appointments field list was taken from the API reference.
+
 ## v6.17.3 — 2026-11-15 — update-psarelay removes old PSArelay images still tagged
 
 - `docker image prune -f` only removes untagged images, so images under the pre-rename name

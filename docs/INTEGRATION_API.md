@@ -169,6 +169,13 @@ A booking module has two choices in Autotask:
 - **Service calls** (dispatch work on tickets): `ServiceCalls` → `ServiceCallTickets` (the ticket) →
   `ServiceCallTicketResources` (the tech), created in that order.
 
+The REST API writes exactly what it is sent. An AI assistant books through the MCP tools instead (6.18.0), which add
+the checks a booking needs: `autotask_get_resource_availability` (free slots inside working hours, for one person or
+when everyone is free), `autotask_create_appointment` (local time + timezone → UTC; refuses an overlap with the
+person's other appointments or service calls unless `allowOverlap`; the same booking twice returns the first),
+`autotask_update_appointment` (moving keeps the length) and `autotask_delete_appointment`. A booking module can do the
+same with two reads first: `GET /api/v1/Appointments?resourceID=…` for the day, and the person's service calls.
+
 ## Errors
 
 | Status | When |

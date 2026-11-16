@@ -46,6 +46,7 @@ Claude), hardened against real tenant data.
 |---|---|
 | **Tickets & service desk** (39) | Search, create, update (partial `PATCH` — never blanks fields), notes, attachments and the originating email, charges, checklists, ticket history and who-changed-what, `get_ticket_by_number`, move a ticket to another company with its routing in one write, an interactive ticket card in MCP Apps hosts. |
 | **Time & billing** (26) | Time entries (incl. bulk and "log my time"), billing items approve-and-post, expense reports, timesheet-lock aware errors, `my_day`. |
+| **Calendar & appointments** (6) | Book, move and cancel appointments in local time (stored in UTC, answered in both), overlap checks against other appointments and service calls, rerun-safe booking, and free time across up to 10 people for finding a meeting slot. |
 | **Projects** (51) | Projects, phases, tasks, predecessors, notes; generate a labour plan and build a project from it. |
 | **Contracts & financial** (41) | Contracts, services, bundles, blocks, adjustments, charges, quotes, opportunities, invoices — including the contract writes the API makes awkward (adjustments verified by effect). |
 | **Commerce** (3) | Sell through Autotask: an offering catalog (recurring plans and add-ons per user, one-time services), quotes, and orders that set up company, users, contract, services, delivery ticket and charges in one approved plan — then track each order to its invoice and payment. → [COMMERCE](docs/COMMERCE.md) |

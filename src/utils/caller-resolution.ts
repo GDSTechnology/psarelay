@@ -113,6 +113,7 @@ export const ACTING_RESOURCE_TOOLS: Record<string, string> = {
   autotask_get_my_day: 'resourceID',
   autotask_start_work_on_ticket: 'resourceID',
   autotask_add_ticket_update: 'resourceID',
+  autotask_create_appointment: 'resourceID',
 };
 
 /**
@@ -125,6 +126,7 @@ export const CURRENT_USER_DEFAULT_TOOLS: Record<string, string> = {
   autotask_get_my_day: 'resourceID',
   autotask_start_work_on_ticket: 'resourceID',
   autotask_add_ticket_update: 'resourceID',
+  autotask_create_appointment: 'resourceID',
 };
 
 /**
