@@ -174,7 +174,7 @@ describe('getMyDay — service calls, To-Dos, gaps, sequential', () => {
     jest.spyOn(s, 'searchTickets').mockResolvedValue({ items: [], page: 1, pageSize: 100, hasMore: false });
     jest.spyOn(s, 'searchTasks').mockResolvedValue({ items: [], page: 1, pageSize: 100, hasMore: false });
     await s.getMyDay(5, '2026-10-02');
-    expect(query.mock.calls.map((c: any[]) => c[0])).toEqual(['TimeEntries', 'ServiceCalls', 'CompanyToDos']);
+    expect(query.mock.calls.map((c: any[]) => c[0])).toEqual(['TimeEntries', 'ServiceCalls', 'Appointments', 'CompanyToDos']);
   });
 });
 

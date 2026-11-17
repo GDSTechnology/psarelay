@@ -1972,7 +1972,7 @@ export const TOOL_DEFINITIONS: McpTool[] = [
   },
   {
     name: 'autotask_get_my_day',
-    description: 'The acting user\'s working picture for a date (default today in your local timezone): tickets assigned to them, the time they have already logged that day (split ticket/task/Regular Time), their open tasks, their service calls that day, their open To-Dos starting in the 7 days up to that day, and missingTime — one row per service-call ticket with NO time logged that day. Built for a scheduled assistant to see what already exists and backfill only the gaps. Acts as the caller by default (currentUser) — or pass resourceID. Read-only.',
+    description: 'The acting user\'s working picture for a date (default today in your local timezone): tickets assigned to them, the time they have already logged that day (split ticket/task/Regular Time), their open tasks, their service calls and appointments that day, their open To-Dos starting in the 7 days up to that day, and missingTime — one row per service-call ticket with NO time logged that day. Built for a scheduled assistant to see what already exists and backfill only the gaps. Acts as the caller by default (currentUser) — or pass resourceID. Read-only.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1984,6 +1984,102 @@ export const TOOL_DEFINITIONS: McpTool[] = [
       required: []
     },
     annotations: { title: 'Get my day', readOnlyHint: true }
+  },
+  {
+    name: 'autotask_get_appointment',
+    description: 'Get one Appointment by id — a calendar entry on a resource (resourceID, title, description, startDateTime, endDateTime, creatorResourceID). Times come back in UTC plus startLocal / endLocal in the resource\'s timezone (or timeZone). Read-only.',
+    inputSchema: { type: 'object', properties: { id: { type: 'number', description: 'Appointment id' }, timeZone: { type: 'string', description: 'IANA ("America/New_York") or Windows ("Eastern Standard Time") timezone for times given without an offset, and for the startLocal / endLocal in the answer. Default: the resource\'s location timezone, else the tenant default.' } }, required: ['id'] },
+    annotations: { title: 'Get appointment', readOnlyHint: true }
+  },
+  {
+    name: 'autotask_search_appointments',
+    description: 'Appointments overlapping a window, for one or more resources (or everyone). Window: from/to (offset ISO, local time + timeZone, or a bare YYYY-MM-DD = that whole local day), else date + days (default today, 1 day); at most 62 days. Sorted by start; each row has UTC and local times. Served from the mirror when it is on. Read-only.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        resourceIDs: { type: 'array', items: { type: 'number' }, description: 'Whose appointments (omit for every resource)' },
+        from: { type: 'string', description: 'Window start (offset ISO, local + timeZone, or YYYY-MM-DD)' },
+        to: { type: 'string', description: 'Window end (offset ISO, local + timeZone, or YYYY-MM-DD = through the end of that day)' },
+        date: { type: 'string', description: 'First local day (YYYY-MM-DD) when from/to are not given. Default today.' },
+        days: { type: 'number', description: 'Number of days from date (default 1, max 62)' },
+        titleContains: { type: 'string', description: 'Only appointments whose title contains this text' },
+        timeZone: { type: 'string', description: 'IANA ("America/New_York") or Windows ("Eastern Standard Time") timezone for times given without an offset, and for the startLocal / endLocal in the answer. Default: the resource\'s location timezone, else the tenant default.' },
+        pageSize: { type: 'number', description: 'Rows per page (default 100, max 500)' },
+        page: { type: 'number', description: 'Page number (default 1)' }
+      },
+      required: []
+    },
+    annotations: { title: 'Search appointments', readOnlyHint: true }
+  },
+  {
+    name: 'autotask_create_appointment',
+    description: 'Book an Appointment on a resource\'s calendar — the way to schedule future work (never log a future time entry for it). Give startDateTime and endDateTime or durationMinutes, as offset ISO or local time + timeZone (default: the resource\'s location timezone). Checks the resource\'s other appointments and service calls first: an overlap returns status "conflict" and writes nothing unless allowOverlap:true. Rerun-safe: the same resource + title + start + end returns the existing appointment (status "exists"). dryRun:true returns the plan. Acts as the caller when resourceID is omitted.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        resourceID: { type: 'number', description: 'Whose calendar. Omit to book for the calling user (currentUser).' },
+        currentUser: { type: 'boolean', description: 'Book on the calling user\'s calendar (default when resourceID is omitted).' },
+        title: { type: 'string', description: 'Appointment title' },
+        description: { type: 'string', description: 'Details (optional)' },
+        startDateTime: { type: 'string', description: 'Start: offset ISO ("2026-11-20T14:00:00-05:00") or local ("2026-11-20T14:00") + timeZone' },
+        endDateTime: { type: 'string', description: 'End (or give durationMinutes)' },
+        durationMinutes: { type: 'number', description: 'Length in minutes, when endDateTime is not given' },
+        timeZone: { type: 'string', description: 'IANA ("America/New_York") or Windows ("Eastern Standard Time") timezone for times given without an offset, and for the startLocal / endLocal in the answer. Default: the resource\'s location timezone, else the tenant default.' },
+        allowOverlap: { type: 'boolean', description: 'Book even when it overlaps other appointments / service calls (default false)' },
+        checkServiceCalls: { type: 'boolean', description: 'Count the resource\'s service calls as busy (default true)' },
+        dryRun: { type: 'boolean', description: 'Return the plan and any conflicts without writing (default false)' }
+      },
+      required: ['title', 'startDateTime']
+    },
+    annotations: { title: 'Create appointment', readOnlyHint: false, destructiveHint: false, idempotentHint: true }
+  },
+  {
+    name: 'autotask_update_appointment',
+    description: 'Change an Appointment: title, description, resource, or time. Only the fields given change. Moving the start keeps the length unless endDateTime or durationMinutes is also given. A new time or resource is checked for overlaps (the appointment itself excluded): a conflict writes nothing unless allowOverlap:true. Returns before / after. dryRun:true returns the plan.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'number', description: 'Appointment id' },
+        title: { type: 'string' },
+        description: { type: 'string' },
+        resourceID: { type: 'number', description: 'Move it to another resource\'s calendar' },
+        startDateTime: { type: 'string', description: 'New start (offset ISO, or local + timeZone)' },
+        endDateTime: { type: 'string', description: 'New end' },
+        durationMinutes: { type: 'number', description: 'New length in minutes' },
+        timeZone: { type: 'string', description: 'IANA ("America/New_York") or Windows ("Eastern Standard Time") timezone for times given without an offset, and for the startLocal / endLocal in the answer. Default: the resource\'s location timezone, else the tenant default.' },
+        allowOverlap: { type: 'boolean', description: 'Allow the new time to overlap other bookings (default false)' },
+        checkServiceCalls: { type: 'boolean', description: 'Count service calls as busy (default true)' },
+        dryRun: { type: 'boolean', description: 'Return the plan without writing (default false)' }
+      },
+      required: ['id']
+    },
+    annotations: { title: 'Update appointment', readOnlyHint: false, destructiveHint: false, idempotentHint: true }
+  },
+  {
+    name: 'autotask_delete_appointment',
+    description: '⚠ DESTRUCTIVE — permanently deletes an Appointment from the resource\'s calendar (Autotask has no undo). Reads it first and returns what was deleted; an id that does not exist returns status "not_found". Confirm with the user before invoking.',
+    inputSchema: { type: 'object', properties: { id: { type: 'number', description: 'Appointment id' }, timeZone: { type: 'string', description: 'IANA ("America/New_York") or Windows ("Eastern Standard Time") timezone for times given without an offset, and for the startLocal / endLocal in the answer. Default: the resource\'s location timezone, else the tenant default.' } }, required: ['id'] },
+    annotations: { title: 'Delete appointment (irreversible)', readOnlyHint: false, destructiveHint: true, idempotentHint: true }
+  },
+  {
+    name: 'autotask_get_resource_availability',
+    description: 'Free time for booking. Per resource (up to 10): busy blocks (appointments + service calls) and free slots inside working hours on each local day; with several resources, allFree = the slots when ALL of them are free (find a meeting time). Default: 5 days from today, 08:00–17:00 in the first resource\'s timezone, weekdays only, slots of 30+ minutes, nothing before now. Read-only.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        resourceIDs: { type: 'array', items: { type: 'number' }, description: 'Resources to check (1–10)' },
+        date: { type: 'string', description: 'First local day (YYYY-MM-DD). Default today.' },
+        days: { type: 'number', description: 'Number of days (default 5, max 14)' },
+        workdayStart: { type: 'string', description: 'Local start of the working day, "HH:MM" (default 08:00)' },
+        workdayEnd: { type: 'string', description: 'Local end of the working day, "HH:MM" (default 17:00)' },
+        minMinutes: { type: 'number', description: 'Shortest slot worth returning (default 30)' },
+        includeWeekends: { type: 'boolean', description: 'Include Saturday and Sunday (default false)' },
+        includeServiceCalls: { type: 'boolean', description: 'Count service calls as busy (default true)' },
+        timeZone: { type: 'string', description: 'IANA or Windows timezone for the days and working hours. Default: the first resource\'s location timezone.' }
+      },
+      required: ['resourceIDs']
+    },
+    annotations: { title: 'Resource availability', readOnlyHint: true }
   },
   {
     name: 'autotask_log_my_time',
@@ -6667,6 +6763,10 @@ export const TOOL_CATEGORIES: Record<string, { description: string; tools: strin
   service_calls: {
     description: 'Service call dispatching, ticket linking, and resource assignments',
     tools: ['autotask_reconcile_service_call', 'autotask_report_service_call_leakage', 'autotask_report_tickets_needing_scheduling', 'autotask_search_service_calls', 'autotask_get_service_call', 'autotask_create_service_call', 'autotask_update_service_call', 'autotask_delete_service_call', 'autotask_search_service_call_tickets', 'autotask_create_service_call_ticket', 'autotask_delete_service_call_ticket', 'autotask_search_service_call_ticket_resources', 'autotask_create_service_call_ticket_resource', 'autotask_delete_service_call_ticket_resource', 'autotask_search_service_call_tasks', 'autotask_create_service_call_task', 'autotask_delete_service_call_task', 'autotask_search_service_call_task_resources', 'autotask_create_service_call_task_resource', 'autotask_delete_service_call_task_resource']
+  },
+  appointments: {
+    description: 'Appointments — calendar entries on a resource (book, move, cancel) and free time for booking (distinct from service calls, To-Dos and time entries; future work is an appointment, never a future time entry)',
+    tools: ['autotask_get_appointment', 'autotask_search_appointments', 'autotask_create_appointment', 'autotask_update_appointment', 'autotask_delete_appointment', 'autotask_get_resource_availability']
   },
   company_todos: {
     description: 'Company To-Dos — CRM calendar follow-ups (distinct from tasks, checklist items, time entries, appointments, and service calls)',

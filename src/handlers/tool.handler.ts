@@ -2172,6 +2172,44 @@ export class AutotaskToolHandler {
         const active = r.filter((c) => c.active);
         return { result: r, message: `${active.length} active Regular Time categor(y/ies): ${active.map((c) => c.name).join(', ')}` };
       }],
+      ['autotask_get_appointment', async (a) => {
+        const r = await s.getAppointment(a.id, a.timeZone);
+        return { result: r, message: r ? `Appointment ${a.id}: ${r.title ?? ''} ${r.startLocal ?? ''}–${r.endLocal ?? ''} (${r.timeZone})` : `Appointment ${a.id} not found` };
+      }],
+      ['autotask_search_appointments', async (a) => {
+        const r = await s.searchAppointments({ resourceIDs: a.resourceIDs, from: a.from, to: a.to, date: a.date, days: a.days, timeZone: a.timeZone, titleContains: a.titleContains, pageSize: a.pageSize, page: a.page });
+        return { result: r, message: `${r.items.length} appointment(s) between ${r.window.startLocal} and ${r.window.endLocal} (${r.timeZone})${r.hasMore ? ' — more on the next page' : ''}` };
+      }],
+      ['autotask_create_appointment', async (a) => {
+        if (a.resourceID == null) return { result: null, message: 'Could not determine whose calendar. Provide resourceID, or call as an identified user (currentUser).' };
+        const r = await s.createAppointment({ resourceID: a.resourceID, title: a.title, description: a.description, startDateTime: a.startDateTime, endDateTime: a.endDateTime, durationMinutes: a.durationMinutes, timeZone: a.timeZone, allowOverlap: a.allowOverlap, checkServiceCalls: a.checkServiceCalls, dryRun: a.dryRun });
+        const when = r.appointment ? `${r.appointment.startLocal}–${r.appointment.endLocal} (${r.appointment.timeZone})` : '';
+        const msg: Record<string, string> = {
+          created: `Booked appointment ${r.appointmentID}: ${r.appointment?.title} ${when}${r.conflicts?.length ? ` — overlaps ${r.conflicts.length} booking(s) (allowOverlap)` : ''}`,
+          exists: r.message, conflict: r.message, planned: `Plan only (dryRun): ${r.appointment?.title} ${when}${r.conflicts?.length ? `, overlaps ${r.conflicts.length} booking(s)` : ', no overlaps'}`,
+          invalid: `Not booked: ${r.error}`,
+        };
+        return { result: r, message: msg[r.status] ?? r.status };
+      }],
+      ['autotask_update_appointment', async (a) => {
+        const { id, ...rest } = a;
+        const r = await s.updateAppointment(id, rest);
+        const msg: Record<string, string> = {
+          updated: `Updated appointment ${id}: ${Object.keys(r.changes ?? {}).join(', ')} → ${r.after?.startLocal}–${r.after?.endLocal} (${r.after?.timeZone})`,
+          unchanged: r.message, conflict: r.message, not_found: `Appointment ${id} not found — nothing changed`,
+          planned: `Plan only (dryRun): would change ${Object.keys(r.changes ?? {}).join(', ')}`, invalid: `Not changed: ${r.error}`,
+        };
+        return { result: r, message: msg[r.status] ?? r.status };
+      }],
+      ['autotask_delete_appointment', async (a) => {
+        const r = await s.deleteAppointment(a.id, a.timeZone);
+        return { result: r, message: r.status === 'deleted' ? `Deleted appointment ${a.id}: ${r.deleted?.title ?? ''} ${r.deleted?.startLocal ?? ''}–${r.deleted?.endLocal ?? ''}` : `Appointment ${a.id} not found — nothing deleted` };
+      }],
+      ['autotask_get_resource_availability', async (a) => {
+        const r = await s.getResourceAvailability({ resourceIDs: a.resourceIDs, date: a.date, days: a.days, timeZone: a.timeZone, workdayStart: a.workdayStart, workdayEnd: a.workdayEnd, minMinutes: a.minMinutes, includeWeekends: a.includeWeekends, includeServiceCalls: a.includeServiceCalls });
+        const per = (r.resources as Array<Record<string, any>>).map((x) => `${x.resourceName ?? x.resourceID}: ${x.free.length} free slot(s), ${x.busy.length} busy`).join('; ');
+        return { result: r, message: `${r.days[0]} to ${r.days[r.days.length - 1]} (${r.timeZone}): ${per}${r.allFree ? `; all free together: ${r.allFree.length} slot(s)` : ''}` };
+      }],
       ['autotask_get_my_day', async (a) => {
         if (a.resourceID == null) {
           return { result: null, message: 'Could not determine the acting user. Provide resourceID, or call as an identified user (currentUser).' };

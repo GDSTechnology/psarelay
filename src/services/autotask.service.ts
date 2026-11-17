@@ -140,6 +140,10 @@ import {
   NoteVisibility, PicklistChoice, PUBLISH_LABELS, ServiceCallRow, serviceCallTimeGaps, StartWorkResult,
   TODO_WINDOW_DAYS, addDays, dayIn, localDayWindow,
 } from '../utils/staff-tools';
+import {
+  BusyBlock, conflictsWith, daysBetween as apptDaysBetween, freeSlots as freeApptSlots, localDaysWindow, localWallClock,
+  overlaps as overlapsAppt, resolveTimes as resolveApptTimes, toUtc as toApptUtc, withLocalTimes,
+} from '../utils/appointments';
 
 /**
  * Default "match all" filter required by Autotask for unconstrained queries.
@@ -2353,6 +2357,7 @@ export class AutotaskService {
     ], { maxRecords: 500 }));
     const tasks = await section('tasks', async () => (await this.searchTasks({ assignedResourceID: resourceID, pageSize: 100 } as any)).items);
     const serviceCalls = await section('serviceCalls', () => this.myServiceCallsOn(resourceID, dayStart, dayEnd));
+    const appointments = await section('appointments', async () => (await this.searchAppointments({ resourceIDs: [resourceID], from: dayStart, to: dayEnd, timeZone: tz, pageSize: 200 })).items as Array<Record<string, any>>);
     // Open To-Dos starting in the TODO_WINDOW_DAYS up to the day. Not "every
     // open To-Do": never-completed ones pile up (a live tech had 500+, all 1–12
     // months old, nearly all ticket-linked), which buries today's in noise.
@@ -2390,12 +2395,14 @@ export class AutotaskService {
       regularTime,
       openTasks: tasks ?? [],
       serviceCalls: calls,
+      appointments: appointments ?? [],
       openTodos: todos ?? [],
       todoWindowDays: TODO_WINDOW_DAYS,
       missingTime,
       totals: {
         assignedTickets: (assignedTickets ?? []).length,
         serviceCalls: calls.length,
+        appointments: (appointments ?? []).length,
         openTodos: (todos ?? []).length,
         missingTime: missingTime.length,
         timeEntries: entries.length,
@@ -2452,6 +2459,217 @@ export class AutotaskService {
         ticketIDs: ticketsByCall.get(Number(c.id)) ?? [],
       }))
       .sort((a, b) => String(a.startDateTime ?? '').localeCompare(String(b.startDateTime ?? '')));
+  }
+
+  // =====================================================
+  // Appointments (#21 §5) — calendar entries on a resource: resourceID, title, description,
+  // startDateTime, endDateTime (+ creatorResourceID / createDateTime / updateDateTime).
+  // Scheduled work is an appointment, never a future time entry. Times are stored in UTC; callers may
+  // give local wall-clock + timeZone, and every answer carries startLocal / endLocal too.
+  // =====================================================
+
+  /** The zone appointment times are read and shown in: asked for, else the resource's location, else the tenant default. */
+  private async appointmentZone(timeZone?: string, resourceID?: unknown): Promise<string> {
+    if (validTimeZone(timeZone)) return validTimeZone(timeZone)!;
+    const rid = resourceID != null && resourceID !== '' ? Number(resourceID) : NaN;
+    return (Number.isFinite(rid) ? await this.resolveResourceTimeZone(rid) : undefined) ?? defaultTimeZone();
+  }
+
+  async getAppointment(id: number, timeZone?: string): Promise<Record<string, any> | null> {
+    const http = await this.ensureClient();
+    const a = await http.get<Record<string, any>>('Appointments', id);
+    if (!a) return null;
+    return withLocalTimes(a, await this.appointmentZone(timeZone, a.resourceID));
+  }
+
+  /**
+   * Appointments overlapping a window (start < window end AND end > window start), for one or more
+   * resources. Window: `from`/`to` (offset ISO, local + timeZone, or a bare day = that local day),
+   * else `date` + `days` (default today, 1 day). At most 62 days.
+   */
+  async searchAppointments(o: {
+    resourceIDs?: number[] | undefined; from?: string | undefined; to?: string | undefined; date?: string | undefined; days?: number | undefined;
+    timeZone?: string | undefined; titleContains?: string | undefined; pageSize?: number | undefined; page?: number | undefined;
+  } = {}): Promise<Record<string, any>> {
+    const ids = (o.resourceIDs ?? []).map(Number).filter((n) => Number.isFinite(n));
+    const tz = await this.appointmentZone(o.timeZone, ids.length === 1 ? ids[0] : undefined);
+    const day = /^\d{4}-\d{2}-\d{2}$/;
+    const edge = (v: string, end: boolean) => (day.test(v.trim()) ? (end ? localDayWindow(v.trim(), tz).end : localDayWindow(v.trim(), tz).start) : toApptUtc(v, tz));
+    let start: string; let end: string;
+    if (o.from || o.to) {
+      const first = o.from ?? o.to!;
+      start = edge(first, false);
+      end = o.to ? edge(o.to, true) : localDayWindow(dayIn(new Date(start), tz), tz).end;
+    } else {
+      const d0 = o.date && day.test(o.date.slice(0, 10)) ? o.date.slice(0, 10) : dayIn(new Date(), tz);
+      const n = Math.max(1, Math.min(62, Math.floor(Number(o.days) || 1)));
+      ({ start, end } = localDaysWindow(d0, addDays(d0, n - 1), tz));
+    }
+    if (!(Date.parse(end) > Date.parse(start))) throw new Error(`The window end (${end}) must be after its start (${start}).`);
+    if (Date.parse(end) - Date.parse(start) > 62 * 86_400_000) throw new Error('Search at most 62 days of appointments at a time.');
+    const filters: QueryFilter[] = [
+      { op: 'lt', field: 'startDateTime', value: end },
+      { op: 'gt', field: 'endDateTime', value: start },
+    ];
+    if (ids.length === 1) filters.push({ op: 'eq', field: 'resourceID', value: ids[0] });
+    else if (ids.length > 1) filters.push({ op: 'in', field: 'resourceID', value: ids });
+    if (o.titleContains?.trim()) filters.push({ op: 'contains', field: 'title', value: o.titleContains.trim() });
+    const r = await this.queryPaged<Record<string, any>>('Appointments', filters, { pageSize: o.pageSize ?? 100, page: o.page ?? 1 } as AutotaskQueryOptions, { defaultPageSize: 100, maxPageSize: 500 });
+    const items = [...r.items]
+      .sort((a, b) => String(a.startDateTime ?? '').localeCompare(String(b.startDateTime ?? '')))
+      .map((a) => withLocalTimes(a, tz));
+    return { ...r, items, timeZone: tz, window: { start, end, startLocal: localWallClock(start, tz), endLocal: localWallClock(end, tz) } };
+  }
+
+  /**
+   * What already fills a resource's time in [start, end): their appointments and (unless skipped) the
+   * service calls they are on. Canceled service calls don't count. Read errors are returned, not thrown,
+   * so a booking can say what it could not check.
+   */
+  private async resourceBusy(resourceID: number, start: string, end: string, includeServiceCalls = true): Promise<{ busy: BusyBlock[]; errors: Array<{ section: string; error: string }> }> {
+    const busy: BusyBlock[] = []; const errors: Array<{ section: string; error: string }> = [];
+    try {
+      const r = await this.searchAppointments({ resourceIDs: [resourceID], from: start, to: end, pageSize: 500 });
+      for (const a of r.items as Array<Record<string, any>>) {
+        if (a.startDateTime && a.endDateTime) busy.push({ kind: 'appointment', id: Number(a.id), title: a.title ?? null, start: String(a.startDateTime), end: String(a.endDateTime) });
+      }
+    } catch (e) { errors.push({ section: 'appointments', error: e instanceof Error ? e.message : String(e) }); }
+    if (includeServiceCalls) {
+      try {
+        // Calls are found by start time; look a day back so one that started earlier but still runs counts.
+        const calls = await this.myServiceCallsOn(resourceID, new Date(Date.parse(start) - 86_400_000).toISOString().replace(/\.\d{3}Z$/, 'Z'), end);
+        for (const c of calls) {
+          if (c.canceled || !c.startDateTime || !c.endDateTime || !overlapsAppt(String(c.startDateTime), String(c.endDateTime), start, end)) continue;
+          busy.push({ kind: 'service_call', id: c.serviceCallID, title: c.ticketIDs.length ? `Service call (tickets ${c.ticketIDs.join(', ')})` : 'Service call', start: String(c.startDateTime), end: String(c.endDateTime) });
+        }
+      } catch (e) { errors.push({ section: 'serviceCalls', error: e instanceof Error ? e.message : String(e) }); }
+    }
+    busy.sort((a, b) => a.start.localeCompare(b.start));
+    return { busy, errors };
+  }
+
+  /**
+   * Book an appointment. Refuses (writes nothing) when it overlaps the resource's other appointments or
+   * service calls, unless allowOverlap. Rerun-safe: an appointment already there for the same resource,
+   * title, start and end is returned instead of a second one. dryRun returns the plan.
+   */
+  async createAppointment(o: {
+    resourceID: number; title: string; description?: string | undefined; startDateTime?: string | undefined; endDateTime?: string | undefined;
+    durationMinutes?: number | undefined; timeZone?: string | undefined; allowOverlap?: boolean | undefined; checkServiceCalls?: boolean | undefined; dryRun?: boolean | undefined;
+  }): Promise<Record<string, any>> {
+    if (o.resourceID == null || !Number.isFinite(Number(o.resourceID))) return { status: 'invalid', error: 'resourceID is required.' };
+    const title = String(o.title ?? '').trim();
+    if (!title) return { status: 'invalid', error: 'title is required.' };
+    const resourceID = Number(o.resourceID);
+    const tz = await this.appointmentZone(o.timeZone, resourceID);
+    const t = resolveApptTimes({ startDateTime: o.startDateTime, endDateTime: o.endDateTime, durationMinutes: o.durationMinutes, timeZone: tz });
+    if (!t.ok) return { status: 'invalid', error: t.error };
+    const body: Record<string, any> = { resourceID, title, startDateTime: t.start, endDateTime: t.end };
+    if (o.description != null && String(o.description).trim()) body.description = String(o.description);
+    const { busy, errors } = await this.resourceBusy(resourceID, t.start, t.end, o.checkServiceCalls !== false);
+    const same = busy.find((b) => b.kind === 'appointment' && b.title === title && Date.parse(b.start) === Date.parse(t.start) && Date.parse(b.end) === Date.parse(t.end));
+    if (same) return { status: 'exists', appointmentID: same.id, appointment: withLocalTimes({ id: same.id, ...body }, tz), message: `Appointment ${same.id} is already booked for this resource, title and time — nothing written.` };
+    const conflicts = conflictsWith(busy, t.start, t.end).map((b) => ({ ...b, startLocal: localWallClock(b.start, tz), endLocal: localWallClock(b.end, tz) }));
+    const base = { appointment: withLocalTimes(body, tz), conflicts, ...(errors.length ? { notChecked: errors } : {}) };
+    if (conflicts.length && !o.allowOverlap) return { status: 'conflict', ...base, message: `Overlaps ${conflicts.length} existing booking(s) — nothing written. Pick another time, or pass allowOverlap:true to double-book.` };
+    if (o.dryRun) return { status: 'planned', ...base };
+    const http = await this.ensureClient();
+    const id = await http.create('Appointments', body);
+    this.logger.info(`Appointment created with ID: ${id}`);
+    return { status: 'created', appointmentID: id, ...base, appointment: withLocalTimes({ id, ...body }, tz) };
+  }
+
+  /**
+   * Change an appointment (PATCH: only the fields given). Moving it keeps its length unless a new end or
+   * durationMinutes is given. A new time or resource is checked for overlaps (the appointment itself excluded).
+   */
+  async updateAppointment(id: number, o: {
+    title?: string | undefined; description?: string | undefined; resourceID?: number | undefined; startDateTime?: string | undefined; endDateTime?: string | undefined;
+    durationMinutes?: number | undefined; timeZone?: string | undefined; allowOverlap?: boolean | undefined; checkServiceCalls?: boolean | undefined; dryRun?: boolean | undefined;
+  }): Promise<Record<string, any>> {
+    const http = await this.ensureClient();
+    const before = await http.get<Record<string, any>>('Appointments', id);
+    if (!before) return { status: 'not_found', appointmentID: id };
+    const resourceID = o.resourceID != null ? Number(o.resourceID) : Number(before.resourceID);
+    const tz = await this.appointmentZone(o.timeZone, resourceID);
+    const patch: Record<string, any> = {};
+    if (o.title != null && String(o.title).trim() && String(o.title).trim() !== before.title) patch.title = String(o.title).trim();
+    if (o.description != null && o.description !== before.description) patch.description = o.description;
+    if (o.resourceID != null && resourceID !== Number(before.resourceID)) patch.resourceID = resourceID;
+    const timesGiven = o.startDateTime != null || o.endDateTime != null || o.durationMinutes != null;
+    let start = String(before.startDateTime); let end = String(before.endDateTime);
+    if (timesGiven) {
+      const lengthMs = Date.parse(end) - Date.parse(start);
+      const newStart = o.startDateTime ? toApptUtc(o.startDateTime, tz) : start;
+      const t = o.endDateTime || o.durationMinutes != null
+        ? resolveApptTimes({ startDateTime: newStart, endDateTime: o.endDateTime, durationMinutes: o.durationMinutes, timeZone: tz })
+        : resolveApptTimes({ startDateTime: newStart, durationMinutes: Math.round(lengthMs / 60_000), timeZone: tz });
+      if (!t.ok) return { status: 'invalid', appointmentID: id, error: t.error };
+      if (Date.parse(t.start) !== Date.parse(start)) patch.startDateTime = t.start;
+      if (Date.parse(t.end) !== Date.parse(end)) patch.endDateTime = t.end;
+      start = t.start; end = t.end;
+    }
+    const beforeLocal = withLocalTimes(before, tz);
+    if (!Object.keys(patch).length) return { status: 'unchanged', appointmentID: id, appointment: beforeLocal, message: 'Nothing to change — it already has these values.' };
+    let conflicts: Array<Record<string, any>> = []; let errors: Array<{ section: string; error: string }> = [];
+    if (patch.startDateTime || patch.endDateTime || patch.resourceID != null) {
+      const b = await this.resourceBusy(resourceID, start, end, o.checkServiceCalls !== false);
+      errors = b.errors;
+      conflicts = conflictsWith(b.busy, start, end, id).map((x) => ({ ...x, startLocal: localWallClock(x.start, tz), endLocal: localWallClock(x.end, tz) }));
+    }
+    const after = withLocalTimes({ ...before, ...patch }, tz);
+    const base = { appointmentID: id, before: beforeLocal, after, changes: patch, conflicts, ...(errors.length ? { notChecked: errors } : {}) };
+    if (conflicts.length && !o.allowOverlap) return { status: 'conflict', ...base, message: `The new time overlaps ${conflicts.length} existing booking(s) — nothing written. Pick another time, or pass allowOverlap:true.` };
+    if (o.dryRun) return { status: 'planned', ...base };
+    await http.update('Appointments', id, patch);
+    this.logger.info(`Appointment ${id} updated`);
+    return { status: 'updated', ...base };
+  }
+
+  /** Delete an appointment. Reads it first, so the answer says what was removed (or that it was not there). */
+  async deleteAppointment(id: number, timeZone?: string): Promise<Record<string, any>> {
+    const http = await this.ensureClient();
+    const before = await http.get<Record<string, any>>('Appointments', id);
+    if (!before) return { status: 'not_found', appointmentID: id };
+    await http.delete('Appointments', id);
+    this.logger.info(`Appointment ${id} deleted`);
+    return { status: 'deleted', appointmentID: id, deleted: withLocalTimes(before, await this.appointmentZone(timeZone, before.resourceID)) };
+  }
+
+  /**
+   * Free time for booking: per resource, busy blocks (appointments + service calls) and free slots inside
+   * working hours on each local day; with several resources, also the slots when ALL of them are free.
+   */
+  async getResourceAvailability(o: {
+    resourceIDs: number[]; date?: string | undefined; days?: number | undefined; timeZone?: string | undefined; workdayStart?: string | undefined; workdayEnd?: string | undefined;
+    minMinutes?: number | undefined; includeWeekends?: boolean | undefined; includeServiceCalls?: boolean | undefined; now?: Date | undefined;
+  }): Promise<Record<string, any>> {
+    const ids = [...new Set((o.resourceIDs ?? []).map(Number).filter((n) => Number.isFinite(n)))];
+    if (!ids.length) throw new Error('resourceIDs is required (1–10 resources).');
+    if (ids.length > 10) throw new Error('At most 10 resources at a time.');
+    const tz = await this.appointmentZone(o.timeZone, ids[0]);
+    const first = o.date && /^\d{4}-\d{2}-\d{2}/.test(o.date) ? o.date.slice(0, 10) : dayIn(o.now ?? new Date(), tz);
+    const n = Math.max(1, Math.min(14, Math.floor(Number(o.days) || 5)));
+    const days = apptDaysBetween(first, addDays(first, n - 1));
+    const { start, end } = localDaysWindow(days[0]!, days[days.length - 1]!, tz);
+    const opts = { days, timeZone: tz, workdayStart: o.workdayStart ?? '08:00', workdayEnd: o.workdayEnd ?? '17:00', minMinutes: Math.max(5, Number(o.minMinutes) || 30), includeWeekends: o.includeWeekends, now: o.now };
+    const names = await this.getResourceNames(ids).catch(() => new Map<number, string>());
+    const resources: Array<Record<string, any>> = []; const all: BusyBlock[] = [];
+    for (const rid of ids) {
+      const { busy, errors } = await this.resourceBusy(rid, start, end, o.includeServiceCalls !== false);
+      all.push(...busy);
+      resources.push({
+        resourceID: rid, resourceName: names.get(rid) ?? null,
+        busy: busy.map((b) => ({ ...b, startLocal: localWallClock(b.start, tz), endLocal: localWallClock(b.end, tz) })),
+        free: freeApptSlots({ ...opts, busy }),
+        ...(errors.length ? { notChecked: errors } : {}),
+      });
+    }
+    return {
+      timeZone: tz, days, workday: { start: opts.workdayStart, end: opts.workdayEnd, includeWeekends: !!o.includeWeekends }, minMinutes: opts.minMinutes,
+      resources,
+      ...(ids.length > 1 ? { allFree: freeApptSlots({ ...opts, busy: all }) } : {}),
+    };
   }
 
   /** Active picklist values of an entity field (field info is cached for an hour). */
