@@ -10,6 +10,26 @@ Each entry lists the merge commit and the PR number. Brief section references
 
 ---
 
+## v6.21.0 — 2026-11-18 — Resumable project build with resources, dates and notes; clone a project (#46, #20)
+
+- **`autotask_clone_project`**: copy a project's phases (nested), tasks, hours, task types, descriptions and
+  dependencies into a new project for any company (0 included). Task dates move with the new start date (default
+  today); resources and the project lead only with `includeResources`. Dry run by default; built by the build
+  engine, so re-running the same clone finishes a partial one (build key `clone:<source>:<company>:<name>`).
+- **Build engine** (`build_project_from_plan`, `extend_project`): tasks can carry their resource (role defaults to
+  the resource's default role) and dates; plans can carry project notes (never written twice, by title). On resume a
+  reused task missing its planned resource or dates gets them; the dry run of a resume says what is still missing.
+- **Fixed: same-titled tasks were merged.** Resume matched tasks by title across the whole project, so "Install AP"
+  under Site A and Site B became one task. Phases now match by (parent, title) and tasks by (phase, title), each
+  existing record used once; a task moved to another phase still matches when its title is unique.
+- **Fixed: resume on a project with more than 100 tasks re-created tasks 101+** (the existing tasks were read through
+  a 100-row page). The build now reads phases / tasks / notes directly, and if that read fails it creates nothing.
+- **Fixed: `projectDefaults` never reached Autotask** — `projectType` / `startDate` / `endDate` were sent under those
+  names. They map to `type` / `startDateTime` / `endDateTime`; a new project's missing type, status and dates
+  default to Client, New, first task start (or today) and last task end (or start + 30 days), listed in
+  `defaultsApplied`.
+- Not yet exercised against the live tenant.
+
 ## v6.20.0 — 2026-11-17 — Close an opportunity as won or lost, with its delivery project (#20)
 
 - `autotask_close_opportunity` (financial, **dry run by default**; the write needs `dryRun:false` + `confirm:true`):

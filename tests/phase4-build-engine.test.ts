@@ -38,7 +38,7 @@ describe('project-build (pure)', () => {
 
   test('planProjectBuild: counts + dependency edges with lag', () => {
     const bp = planProjectBuild(plan);
-    expect(bp.counts).toEqual({ phases: 2, tasks: 2, dependencies: 1 });
+    expect(bp.counts).toEqual({ phases: 2, tasks: 2, dependencies: 1, notes: 0 });
     expect(bp.dependencies[0]).toEqual({ taskRef: 't2', predecessorRef: 't1', lagDays: 1 });
     expect(bp.orderedPhases[0].ref).toBe('p1'); // parent first
   });
@@ -118,8 +118,7 @@ describe('buildProjectFromPlan (orchestrator)', () => {
     jest.spyOn(s, 'searchProjects').mockResolvedValue({
       items: [{ id: 500, projectName: 'Deploy', description: `x\n${buildMarker('10:Deploy')}` }],
     } as any);
-    jest.spyOn(s, 'searchPhases').mockResolvedValue({ items: [{ id: 601, title: 'Plan' }] } as any);
-    jest.spyOn(s, 'searchTasks').mockResolvedValue({ items: [{ id: 701, title: 'Survey' }] } as any);
+    jest.spyOn(s, 'getProjectBuildState').mockResolvedValue({ phases: [{ id: 601, title: 'Plan' }], tasks: [{ id: 701, title: 'Survey' }], noteTitles: [] } as any);
     jest.spyOn(s, 'listTaskPredecessors').mockResolvedValue([]);
     const createProject = jest.spyOn(s, 'createProject').mockResolvedValue(999);
     jest.spyOn(s, 'createPhase').mockResolvedValue(602); // only p2 is missing
@@ -141,8 +140,7 @@ describe('buildProjectFromPlan (orchestrator)', () => {
     jest.spyOn(s, 'searchProjects').mockResolvedValue({
       items: [{ id: 500, projectName: 'Deploy', description: buildMarker('10:Deploy') }],
     } as any);
-    jest.spyOn(s, 'searchPhases').mockResolvedValue({ items: [{ id: 601, title: 'Plan' }, { id: 602, title: 'Exec' }] } as any);
-    jest.spyOn(s, 'searchTasks').mockResolvedValue({ items: [{ id: 701, title: 'Survey' }, { id: 702, title: 'Install' }] } as any);
+    jest.spyOn(s, 'getProjectBuildState').mockResolvedValue({ phases: [{ id: 601, title: 'Plan' }, { id: 602, title: 'Exec', parentPhaseID: 601 }], tasks: [{ id: 701, title: 'Survey' }, { id: 702, title: 'Install' }], noteTitles: [] } as any);
     jest.spyOn(s, 'listTaskPredecessors').mockResolvedValue([{ predecessorTaskID: 701 }] as any);
     const addPred = jest.spyOn(s, 'addTaskPredecessor').mockResolvedValue(9);
 
