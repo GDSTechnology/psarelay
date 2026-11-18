@@ -6803,6 +6803,69 @@ export const TOOL_DEFINITIONS: McpTool[] = [
     }
   },
   {
+    name: 'autotask_list_contract_terms',
+    description: `List the billing terms on a contract: prepaid hour blocks, block-hour factors, role rates, role costs, excluded work types and roles, retainer purchases and ticket purchases (all kinds, or the ones asked for). Returns the contract header (type), counts and the rows per kind. ${"Kinds: block = prepaid hour block (Block Hours contracts; datePurchased, startDate, endDate, hours, hourlyRate, isPaid, status…; create/update), blockHourFactor = hours drawn per hour worked in a role (Block Hours; roleID, blockHourMultiplier; create/update/delete), rate = role rate override (roleID, contractHourlyRate; create/update/delete), roleCost = internal cost of a resource in a role (resourceID, roleID, rate; create/update), exclusionBillingCode = work type NOT covered (billingCodeID; create/delete), exclusionRole = role NOT covered (roleID; create/delete), retainer = retainer purchase (Retainer contracts; startDate, endDate, amount, isPaid…; create/update), ticketPurchase = tickets bought (Per Ticket contracts; startDate, endDate, ticketsPurchased, perTicketRate…; create/update)."}`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        contractID: { type: 'number', description: 'Contract to read' },
+        kinds: { type: 'array', items: { type: 'string', enum: ['block', 'blockHourFactor', 'rate', 'roleCost', 'exclusionBillingCode', 'exclusionRole', 'retainer', 'ticketPurchase'] }, description: 'Only these kinds (default all)' }
+      },
+      required: ['contractID']
+    },
+    annotations: { title: 'List contract terms', readOnlyHint: true }
+  },
+  {
+    name: 'autotask_create_contract_term',
+    description: `Add a billing term to a contract. ${"Kinds: block = prepaid hour block (Block Hours contracts; datePurchased, startDate, endDate, hours, hourlyRate, isPaid, status…; create/update), blockHourFactor = hours drawn per hour worked in a role (Block Hours; roleID, blockHourMultiplier; create/update/delete), rate = role rate override (roleID, contractHourlyRate; create/update/delete), roleCost = internal cost of a resource in a role (resourceID, roleID, rate; create/update), exclusionBillingCode = work type NOT covered (billingCodeID; create/delete), exclusionRole = role NOT covered (roleID; create/delete), retainer = retainer purchase (Retainer contracts; startDate, endDate, amount, isPaid…; create/update), ticketPurchase = tickets bought (Per Ticket contracts; startDate, endDate, ticketsPurchased, perTicketRate…; create/update)."} Fields are checked against the live field list (unknown / read-only fields refused, required ones enforced, picklist labels such as status or paymentType resolved by label). A row matching an existing one (same role, billing code, or same dates and quantity) is reported as a duplicate unless allowDuplicate. SAFE BY DEFAULT: dry run unless dryRun:false; the write needs confirm:true.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['block', 'blockHourFactor', 'rate', 'roleCost', 'exclusionBillingCode', 'exclusionRole', 'retainer', 'ticketPurchase'] },
+        contractID: { type: 'number', description: 'Contract to add it to' },
+        fields: { type: 'object', description: 'The term\'s fields, e.g. { roleID: 29682885, contractHourlyRate: 150 } for a rate, { startDate: "2026-12-01", endDate: "2026-12-31", hours: 20, hourlyRate: 125, datePurchased: "2026-11-18" } for a block' },
+        allowDuplicate: { type: 'boolean', description: 'Add it even when a matching row exists (default false)' },
+        dryRun: { type: 'boolean', description: 'When true (DEFAULT), return the plan without writing', default: true },
+        confirm: { type: 'boolean', description: 'Required (true) for the write' }
+      },
+      required: ['kind', 'contractID', 'fields']
+    },
+    annotations: { title: 'Create contract term', readOnlyHint: false }
+  },
+  {
+    name: 'autotask_update_contract_term',
+    description: 'Change a billing term on a contract (block, blockHourFactor, rate, roleCost, retainer, ticketPurchase — exclusions cannot be updated, delete and re-add). Only fields that differ are sent; the plan shows before → after; read back afterwards. SAFE BY DEFAULT: dry run unless dryRun:false; the write needs confirm:true.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['block', 'blockHourFactor', 'rate', 'roleCost', 'exclusionBillingCode', 'exclusionRole', 'retainer', 'ticketPurchase'] },
+        contractID: { type: 'number', description: 'Contract the term belongs to' },
+        id: { type: 'number', description: 'Term id (from autotask_list_contract_terms)' },
+        fields: { type: 'object', description: 'Fields to change' },
+        dryRun: { type: 'boolean', description: 'When true (DEFAULT), return the plan without writing', default: true },
+        confirm: { type: 'boolean', description: 'Required (true) for the write' }
+      },
+      required: ['kind', 'contractID', 'id', 'fields']
+    },
+    annotations: { title: 'Update contract term', readOnlyHint: false, idempotentHint: true }
+  },
+  {
+    name: 'autotask_delete_contract_term',
+    description: 'Remove a billing term from a contract — only kinds Autotask lets you delete: blockHourFactor, rate, exclusionBillingCode, exclusionRole (blocks, role costs, retainers and ticket purchases can only be updated). The dry run shows the row. SAFE BY DEFAULT: dry run unless dryRun:false; the write needs confirm:true.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['block', 'blockHourFactor', 'rate', 'roleCost', 'exclusionBillingCode', 'exclusionRole', 'retainer', 'ticketPurchase'] },
+        contractID: { type: 'number', description: 'Contract the term belongs to' },
+        id: { type: 'number', description: 'Term id (from autotask_list_contract_terms)' },
+        dryRun: { type: 'boolean', description: 'When true (DEFAULT), show the row without deleting', default: true },
+        confirm: { type: 'boolean', description: 'Required (true) for the delete' }
+      },
+      required: ['kind', 'contractID', 'id']
+    },
+    annotations: { title: 'Delete contract term', readOnlyHint: false, destructiveHint: true }
+  },
+  {
     name: 'autotask_raw_request',
     description: 'Escape hatch for Autotask REST endpoints not yet wrapped by a typed tool. Use sparingly — typed tools are preferred for safety. The existing Content-Type, Accept, ApiIntegrationcode, UserName, Secret headers are added automatically. The path is resolved against the zone-resolved base URL (https://webservices<N>.autotask.net/ATServicesRest/v1.0). Pass queryParams as a flat object of string/number/boolean values; they will be URL-encoded and appended to the path.',
     inputSchema: {
@@ -6998,7 +7061,7 @@ export const TOOL_CATEGORIES: Record<string, { description: string; tools: strin
   },
   financial: {
     description: 'Quotes, quote items, opportunities, invoices, and contracts',
-    tools: ['autotask_get_quote', 'autotask_search_quotes', 'autotask_create_quote', 'autotask_get_quote_item', 'autotask_search_quote_items', 'autotask_create_quote_item', 'autotask_update_quote_item', 'autotask_delete_quote_item', 'autotask_get_opportunity', 'autotask_search_opportunities', 'autotask_create_opportunity', 'autotask_update_opportunity', 'autotask_close_opportunity', 'autotask_search_invoices', 'autotask_get_invoice_details', 'autotask_search_contracts', 'autotask_get_contract', 'autotask_list_expiring_contracts', 'autotask_create_contract', 'autotask_create_contracts_bulk', 'autotask_update_contract', 'autotask_create_contract_service', 'autotask_update_contract_service', 'autotask_get_contract_service', 'autotask_search_contract_services', 'autotask_get_contract_billed_units', 'autotask_report_contract_recurring_revenue', 'autotask_report_contract_labour_basis', 'autotask_get_contract_milestone', 'autotask_search_contract_milestones', 'autotask_create_contract_milestone', 'autotask_update_contract_milestone', 'autotask_report_block_hour_usage', 'autotask_report_ticket_charges', 'autotask_report_unbilled', 'autotask_report_project_pl', 'autotask_report_sla_compliance', 'autotask_generate_sla_framework', 'autotask_report_sla_coverage', 'autotask_assign_contract_sla', 'autotask_analyze_ticket_billing_gaps', 'autotask_report_ticket_billing_gaps']
+    tools: ['autotask_get_quote', 'autotask_search_quotes', 'autotask_create_quote', 'autotask_get_quote_item', 'autotask_search_quote_items', 'autotask_create_quote_item', 'autotask_update_quote_item', 'autotask_delete_quote_item', 'autotask_get_opportunity', 'autotask_search_opportunities', 'autotask_create_opportunity', 'autotask_update_opportunity', 'autotask_close_opportunity', 'autotask_search_invoices', 'autotask_get_invoice_details', 'autotask_search_contracts', 'autotask_get_contract', 'autotask_list_expiring_contracts', 'autotask_create_contract', 'autotask_create_contracts_bulk', 'autotask_update_contract', 'autotask_create_contract_service', 'autotask_update_contract_service', 'autotask_get_contract_service', 'autotask_search_contract_services', 'autotask_get_contract_billed_units', 'autotask_report_contract_recurring_revenue', 'autotask_report_contract_labour_basis', 'autotask_get_contract_milestone', 'autotask_search_contract_milestones', 'autotask_create_contract_milestone', 'autotask_update_contract_milestone', 'autotask_list_contract_terms', 'autotask_create_contract_term', 'autotask_update_contract_term', 'autotask_delete_contract_term', 'autotask_report_block_hour_usage', 'autotask_report_ticket_charges', 'autotask_report_unbilled', 'autotask_report_project_pl', 'autotask_report_sla_compliance', 'autotask_generate_sla_framework', 'autotask_report_sla_coverage', 'autotask_assign_contract_sla', 'autotask_analyze_ticket_billing_gaps', 'autotask_report_ticket_billing_gaps']
   },
   products_and_services: {
     description: 'Products, services, and service bundles catalog',

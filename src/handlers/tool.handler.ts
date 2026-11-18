@@ -18,6 +18,7 @@ import type { MaterialLine } from '../utils/ticket-materials.js';
 import { internalTextProblem } from '../utils/invoice-text.js';
 import type { ServiceWriteResult } from '../utils/service-catalog.js';
 import { defaultWorkDate, formatChoices, localDayWindow, matchPicklist, matchPicklistExact, TimeGap } from '../utils/staff-tools.js';
+import { isContractTermKind } from '../utils/contract-terms.js';
 import { getShadowRuntime } from '../db/shadow-runtime.js';
 import { collectAuditEvents, type CollectOptions } from '../db/audit-collector.js';
 import { BACKFILL_SOURCES, BackfillJobs, MAX_RANGE_DAYS, runBackfillStep, type BackfillSource } from '../db/history-backfill.js';
@@ -58,6 +59,9 @@ const DRY_RUN_FIRST_TOOLS = new Set<string>([
   'autotask_create_service',
   'autotask_update_service',
   'autotask_close_opportunity',
+  'autotask_create_contract_term',
+  'autotask_update_contract_term',
+  'autotask_delete_contract_term',
 ]);
 import { applyBillingTreatment } from '../utils/billing-treatment.js';
 import { defaultTimeZone, durationHours, normalizeTimestamp, validTimeZone } from '../utils/timezone.js';
@@ -2975,6 +2979,25 @@ export class AutotaskToolHandler {
         const { id, ...rest } = a;
         await s.updateContractMilestone(id, rest); return { result: undefined, message: `Successfully updated contract milestone ${id}` };
       }],
+
+      ['autotask_list_contract_terms', async (a) => {
+        const kinds = Array.isArray(a.kinds) ? a.kinds.filter(isContractTermKind) : undefined;
+        const r = await s.listContractTerms(Number(a.contractID), kinds);
+        if (r.status === 'not_found') return { result: r, message: `Contract ${a.contractID} not found` };
+        const parts = Object.entries(r.counts as Record<string, number>).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k}`);
+        return { result: r, message: `Contract ${a.contractID} (${r.contract.contractTypeLabel ?? 'type ' + r.contract.contractType}): ${parts.length ? parts.join(', ') : 'no terms'}${r.errors ? ` — ${r.errors.length} kind(s) could not be read` : ''}` };
+      }],
+      ...(['create', 'update', 'delete'] as const).map((op) => [`autotask_${op}_contract_term`, async (a: any) => {
+        const r = await s.writeContractTerm({ op, kind: a.kind, contractID: a.contractID, id: a.id, fields: a.fields, dryRun: a.dryRun, allowDuplicate: a.allowDuplicate === true });
+        const what = `${a.kind}${r.id != null ? ' ' + r.id : ''} on contract ${a.contractID}`;
+        const msg =
+          r.status === 'validation_failed' ? `Not ${op}d — ${r.step}: ${r.detail}. Nothing written.`
+          : r.status === 'duplicate' ? `Not created — ${r.note}`
+          : r.status === 'dry_run' ? `Dry run OK — would ${op} ${what}${r.changes ? `: ${Object.entries(r.changes as Record<string, any>).map(([k, c]) => `${k} ${c.before} → ${c.after}`).join(', ')}` : ''}; nothing written. Call again with dryRun:false and confirm:true.`
+          : r.status === 'unchanged' ? `No change — ${what} already has those values`
+          : `${r.status[0]!.toUpperCase()}${r.status.slice(1)} ${what}${r.verified ? ' (verified)' : r.notApplied ? ` — NOT applied by Autotask: ${(r.notApplied as string[]).join(', ')}` : ' (not verified by read-back)'}`;
+        return { result: r, message: msg };
+      }] as [string, H]),
 
       // Raw REST passthrough (escape hatch)
       ['autotask_raw_request', async (a) => {
