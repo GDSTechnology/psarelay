@@ -19,6 +19,7 @@ import {
 } from '../utils/reference.resolver';
 import { checkProtectedCompanyMutation, isUnsafeCompanyName } from '../utils/company-guard';
 import { resolveActionType } from '../utils/company-todo';
+import { pickSalesActionType, resolveFollowupDue } from '../utils/sales-followup';
 import { buildContactSearchFilter, normalizeContactNote } from '../utils/contact';
 import { resolveCompanyOwnerResourceID } from '../utils/company-owner';
 import { computeBlockHourUsage } from '../utils/block-hours';
@@ -1920,28 +1921,44 @@ export class AutotaskService {
     chargeID: number; ticketID: number; before: Record<string, unknown>; after: Record<string, unknown> | null;
     changes: Record<string, { from: unknown; to: unknown }>; notApplied: string[];
   }> {
+    const { parentID, ...r } = await this.updateChildCharge({ entity: 'TicketCharges', parent: 'Tickets', parentField: 'ticketID', label: 'Ticket charge' }, id, updates);
+    return { ...r, ticketID: parentID };
+  }
+
+  /**
+   * Shared charge update through the parent's child route (PATCH /{Parent}/{id}/Charges): only the fields
+   * given are sent, the charge is read live before and after, and each field is compared.
+   */
+  private async updateChildCharge(
+    kind: { entity: 'TicketCharges' | 'ProjectCharges'; parent: 'Tickets' | 'Projects'; parentField: 'ticketID' | 'projectID'; label: string },
+    id: number,
+    updates: Record<string, any>
+  ): Promise<{
+    chargeID: number; parentID: number; before: Record<string, unknown>; after: Record<string, unknown> | null;
+    changes: Record<string, { from: unknown; to: unknown }>; notApplied: string[];
+  }> {
     const http = await this.ensureClient();
-    const readLive = async (): Promise<AutotaskTicketCharge | null> =>
-      (await http.query<AutotaskTicketCharge>('TicketCharges', [{ op: 'eq', field: 'id', value: id }], { maxRecords: 1, noCache: true }))[0] ?? null;
+    const readLive = async (): Promise<Record<string, any> | null> =>
+      (await http.query<Record<string, any>>(kind.entity, [{ op: 'eq', field: 'id', value: id }], { maxRecords: 1, noCache: true }))[0] ?? null;
     const before = await readLive();
-    if (!before) throw new Error(`Ticket charge ${id} not found — nothing written.`);
-    const ticketID = Number(before.ticketID);
-    if (!Number.isInteger(ticketID) || ticketID <= 0) throw new Error(`Ticket charge ${id} has no ticketID — cannot update it through its ticket. Nothing written.`);
+    if (!before) throw new Error(`${kind.label} ${id} not found — nothing written.`);
+    const parentID = Number(before[kind.parentField]);
+    if (!Number.isInteger(parentID) || parentID <= 0) throw new Error(`${kind.label} ${id} has no ${kind.parentField} — cannot update it through its parent. Nothing written.`);
     const body: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(updates)) if (v !== undefined && k !== 'id' && k !== 'ticketID') body[k] = v;
+    for (const [k, v] of Object.entries(updates)) if (v !== undefined && k !== 'id' && k !== kind.parentField) body[k] = v;
     if (!Object.keys(body).length) throw new Error('No fields to update were given — nothing written.');
-    this.logger.debug(`Updating ticket charge ${id} on ticket ${ticketID}:`, body);
-    await http.childUpdate('Tickets', ticketID, 'Charges', id, body);
+    this.logger.debug(`Updating ${kind.label.toLowerCase()} ${id} on ${kind.parent} ${parentID}:`, body);
+    await http.childUpdate(kind.parent, parentID, 'Charges', id, body);
     const after = await readLive().catch(() => null);
-    const same = (a: unknown, b: unknown) => (typeof a === 'number' || typeof b === 'number' ? Number(a) === Number(b) : String(a ?? '') === String(b ?? ''));
+    const same = (x: unknown, y: unknown) => (typeof x === 'number' || typeof y === 'number' ? Number(x) === Number(y) : String(x ?? '') === String(y ?? ''));
     const changes: Record<string, { from: unknown; to: unknown }> = {};
     const notApplied: string[] = [];
     for (const [k, v] of Object.entries(body)) {
       if (after && !same(after[k], v)) notApplied.push(k);
       else if (!same(before[k], v)) changes[k] = { from: before[k] ?? null, to: after ? after[k] : v };
     }
-    this.logger.info(`Ticket charge ${id} updated (${Object.keys(changes).join(', ') || 'no change'})`);
-    return { chargeID: id, ticketID, before: before as Record<string, unknown>, after: after as Record<string, unknown> | null, changes, notApplied };
+    this.logger.info(`${kind.label} ${id} updated (${Object.keys(changes).join(', ') || 'no change'})`);
+    return { chargeID: id, parentID, before, after, changes, notApplied };
   }
 
   async deleteTicketCharge(ticketId: number, chargeId: number): Promise<void> {
@@ -1954,6 +1971,137 @@ export class AutotaskService {
       this.logger.error(`Failed to delete ticket charge ${chargeId}:`, error);
       throw error;
     }
+  }
+
+  // =====================================================
+  // Project Charges (child of Projects: POST / PATCH /Projects/{id}/Charges)
+  // Same shape as ticket charges, on a project instead of a ticket.
+  // =====================================================
+
+  async getProjectCharge(id: number): Promise<Record<string, any> | null> {
+    const http = await this.ensureClient();
+    return http.get<Record<string, any>>('ProjectCharges', id);
+  }
+
+  async searchProjectCharges(options: AutotaskQueryOptionsExtended & { projectId?: number; projectIds?: number[]; isBilled?: boolean; purchasedAfter?: string } = {}): Promise<Record<string, any>[]> {
+    const filters: QueryFilter[] = [];
+    if (options.projectId != null) filters.push({ op: 'eq', field: 'projectID', value: options.projectId });
+    const ids = Array.isArray(options.projectIds) ? [...new Set(options.projectIds.map(Number).filter((n) => Number.isInteger(n) && n > 0))].slice(0, 500) : [];
+    if (ids.length) filters.push({ op: 'in', field: 'projectID', value: ids });
+    if (typeof options.isBilled === 'boolean') filters.push({ op: 'eq', field: 'isBilled', value: options.isBilled });
+    if (options.purchasedAfter) filters.push({ op: 'gte', field: 'datePurchased', value: options.purchasedAfter });
+    const pageSize = options.pageSize || (filters.length > 0 ? (ids.length ? 500 : 25) : 10);
+    // queryPaged: served from the Postgres shadow when it mirrors ProjectCharges and is fresh.
+    const r = await this.queryPaged<Record<string, any>>('ProjectCharges', filters.length > 0 ? filters : MATCH_ALL, { pageSize }, { defaultPageSize: 25, maxPageSize: 500 });
+    return r.items;
+  }
+
+  async createProjectCharge(charge: Record<string, any>): Promise<number> {
+    const projectID = Number(charge.projectID);
+    if (!Number.isInteger(projectID) || projectID <= 0) throw new Error('projectID is required to create a project charge');
+    const http = await this.ensureClient();
+    const id = await http.childCreate('Projects', projectID, 'Charges', charge);
+    this.logger.info(`Project charge created with ID: ${id}`);
+    return id;
+  }
+
+  /** PATCH /Projects/{projectID}/Charges with only the fields given; read back and compared (see updateChildCharge). */
+  async updateProjectCharge(id: number, updates: Record<string, any>): Promise<{
+    chargeID: number; projectID: number; before: Record<string, unknown>; after: Record<string, unknown> | null;
+    changes: Record<string, { from: unknown; to: unknown }>; notApplied: string[];
+  }> {
+    const { parentID, ...r } = await this.updateChildCharge({ entity: 'ProjectCharges', parent: 'Projects', parentField: 'projectID', label: 'Project charge' }, id, updates);
+    return { ...r, projectID: parentID };
+  }
+
+  /** Reads the charge first (so the reply says what was removed), then DELETE /Projects/{id}/Charges/{chargeId}. */
+  async deleteProjectCharge(chargeId: number, projectId?: number): Promise<Record<string, any>> {
+    const http = await this.ensureClient();
+    const before = (await http.query<Record<string, any>>('ProjectCharges', [{ op: 'eq', field: 'id', value: chargeId }], { maxRecords: 1, noCache: true }))[0] ?? null;
+    if (!before) return { status: 'not_found', chargeID: chargeId };
+    const projectID = Number(before.projectID);
+    if (projectId != null && Number(projectId) !== projectID) return { status: 'invalid', chargeID: chargeId, error: `Charge ${chargeId} belongs to project ${projectID}, not ${projectId}. Nothing deleted.` };
+    if (before.isBilled === true) return { status: 'invalid', chargeID: chargeId, error: `Charge ${chargeId} is already billed (on an invoice) — Autotask won't delete it. Nothing deleted.` };
+    await http.childDelete('Projects', projectID, 'Charges', chargeId);
+    this.logger.info(`Project charge ${chargeId} deleted from project ${projectID}`);
+    return { status: 'deleted', chargeID: chargeId, projectID, deleted: before };
+  }
+
+  // =====================================================
+  // Company Locations (child of Companies: POST / PATCH /Companies/{id}/Locations)
+  // Company 0 is the tenant's own company — never truthiness-check companyID.
+  // There is no delete: a location is retired with isActive:false.
+  // =====================================================
+
+  static readonly COMPANY_LOCATION_FIELDS = [
+    'name', 'description', 'address1', 'address2', 'city', 'state', 'postalCode', 'countryID', 'phone', 'alternatePhone1',
+    'alternatePhone2', 'fax', 'isActive', 'isPrimary', 'isTaxExempt', 'overrideCompanyTaxSettings', 'taxRegionID', 'roundtripDistance',
+  ] as const;
+
+  private pickLocationFields(src: Record<string, any>): Record<string, any> {
+    const out: Record<string, any> = {};
+    for (const k of AutotaskService.COMPANY_LOCATION_FIELDS) if (src[k] !== undefined) out[k] = src[k];
+    return out;
+  }
+
+  async getCompanyLocation(id: number): Promise<AutotaskCompanyLocation | null> {
+    const http = await this.ensureClient();
+    return http.get<AutotaskCompanyLocation>('CompanyLocations', id);
+  }
+
+  async searchCompanyLocationRecords(o: { companyId?: number | undefined; name?: string | undefined; city?: string | undefined; includeInactive?: boolean | undefined; pageSize?: number | undefined } = {}): Promise<AutotaskCompanyLocation[]> {
+    const http = await this.ensureClient();
+    const filters: QueryFilter[] = [];
+    if (o.companyId != null && String(o.companyId) !== '') filters.push({ op: 'eq', field: 'companyID', value: Number(o.companyId) });
+    if (o.name) filters.push({ op: 'contains', field: 'name', value: String(o.name) });
+    if (o.city) filters.push({ op: 'contains', field: 'city', value: String(o.city) });
+    if (o.includeInactive !== true) filters.push({ op: 'eq', field: 'isActive', value: true });
+    const max = Math.min(Math.max(Number(o.pageSize) || 100, 1), 500);
+    return http.query<AutotaskCompanyLocation>('CompanyLocations', filters.length ? filters : MATCH_ALL, { maxRecords: max });
+  }
+
+  /** Create a location on a company. An active location with the same name on that company is returned instead (rerun-safe). */
+  async createCompanyLocation(o: Record<string, any>): Promise<Record<string, any>> {
+    if (o.companyID == null || String(o.companyID) === '' || !Number.isInteger(Number(o.companyID)) || Number(o.companyID) < 0) return { status: 'invalid', error: 'companyID is required.' };
+    const companyID = Number(o.companyID);
+    const name = String(o.name ?? '').trim();
+    if (!name) return { status: 'invalid', error: 'name is required.' };
+    const body = { ...this.pickLocationFields(o), name };
+    const existing = (await this.searchCompanyLocationRecords({ companyId: companyID, pageSize: 500 }))
+      .find((l) => String(l.name ?? '').trim().toLowerCase() === name.toLowerCase());
+    if (existing) return { status: 'exists', locationID: existing.id, location: existing, message: `Company ${companyID} already has an active location named "${existing.name}" (${existing.id}) — nothing written.` };
+    if (o.dryRun === true) return { status: 'planned', location: { companyID, ...body } };
+    const http = await this.ensureClient();
+    const id = await http.childCreate('Companies', companyID, 'Locations', body);
+    this.logger.info(`Company location created with ID: ${id}`);
+    const back = await http.get<AutotaskCompanyLocation>('CompanyLocations', id).catch(() => null);
+    return { status: 'created', locationID: id, location: back ?? { id, companyID, ...body }, verified: !!back };
+  }
+
+  /** PATCH /Companies/{companyID}/Locations with only the fields that change; read back and compared. */
+  async updateCompanyLocation(id: number, updates: Record<string, any>): Promise<Record<string, any>> {
+    const http = await this.ensureClient();
+    const readLive = async () => (await http.query<AutotaskCompanyLocation>('CompanyLocations', [{ op: 'eq', field: 'id', value: id }], { maxRecords: 1, noCache: true }))[0] ?? null;
+    const before = await readLive();
+    if (!before) return { status: 'not_found', locationID: id };
+    if (before.companyID == null) return { status: 'invalid', locationID: id, error: `Location ${id} has no companyID — cannot update it through its company.` };
+    const companyID = Number(before.companyID);
+    const same = (x: unknown, y: unknown) => (typeof x === 'number' || typeof y === 'number' ? Number(x) === Number(y) : typeof x === 'boolean' || typeof y === 'boolean' ? Boolean(x) === Boolean(y) : String(x ?? '') === String(y ?? ''));
+    const body: Record<string, any> = {};
+    for (const [k, v] of Object.entries(this.pickLocationFields(updates))) if (!same(before[k], v)) body[k] = v;
+    if (!Object.keys(body).length) return { status: 'unchanged', locationID: id, location: before, message: 'Nothing to change — it already has these values.' };
+    if (body.isActive === false && before.isPrimary === true) return { status: 'invalid', locationID: id, error: `Location ${id} is the company's primary location — make another location primary first. Nothing written.` };
+    if (updates.dryRun === true) return { status: 'planned', locationID: id, before, changes: Object.fromEntries(Object.entries(body).map(([k, v]) => [k, { from: before[k] ?? null, to: v }])) };
+    await http.childUpdate('Companies', companyID, 'Locations', id, body);
+    const after = await readLive().catch(() => null);
+    const changes: Record<string, { from: unknown; to: unknown }> = {};
+    const notApplied: string[] = [];
+    for (const [k, v] of Object.entries(body)) {
+      if (after && !same(after[k], v)) notApplied.push(k);
+      else changes[k] = { from: before[k] ?? null, to: after ? after[k] : v };
+    }
+    this.logger.info(`Company location ${id} updated (${Object.keys(changes).join(', ') || 'no change'})`);
+    return { status: 'updated', locationID: id, companyID, before, after, changes, notApplied };
   }
 
   // =====================================================
@@ -9368,6 +9516,70 @@ export class AutotaskService {
       this.logger.error('Failed to create Company To-Do:', error);
       throw error;
     }
+  }
+
+  /**
+   * Sales follow-up (#21 §9): a Company To-Do for the salesperson, linked to the company and, when given, the
+   * contact and opportunity (the company is taken from them). Due time: `when` (local or offset ISO, or a
+   * date → 09:00 local), `inDays` business days, or by default the next business day at 09:00 in the
+   * salesperson's timezone. Action type "Sales" (or the closest label). The same open follow-up (company,
+   * person, day, text, opportunity) is returned instead of a second one.
+   */
+  async createSalesFollowup(o: {
+    assignedToResourceID?: number | undefined; companyID?: number | undefined; contactID?: number | undefined; opportunityID?: number | undefined;
+    note?: string | undefined; when?: string | undefined; inDays?: number | undefined; durationMinutes?: number | undefined; timeZone?: string | undefined;
+    actionTypeName?: string | undefined; dryRun?: boolean | undefined;
+  }): Promise<Record<string, any>> {
+    const given = (v: unknown) => v != null && String(v) !== '';
+    if (!given(o.assignedToResourceID)) return { status: 'invalid', error: 'Could not determine whose follow-up this is. Provide assignedToResourceID, or call as an identified user (currentUser).' };
+    const resourceID = Number(o.assignedToResourceID);
+    const note = String(o.note ?? '').trim();
+    if (!note) return { status: 'invalid', error: 'note is required: what to follow up on.' };
+    const http = await this.ensureClient();
+    let companyID = given(o.companyID) ? Number(o.companyID) : undefined;
+    let contactID = given(o.contactID) ? Number(o.contactID) : undefined;
+    const opportunityID = given(o.opportunityID) ? Number(o.opportunityID) : undefined;
+    const context: Record<string, any> = {};
+    if (opportunityID != null) {
+      const opp = await http.get<Record<string, any>>('Opportunities', opportunityID);
+      if (!opp) return { status: 'not_found', error: `Opportunity ${opportunityID} not found. Nothing written.` };
+      if (companyID != null && Number(opp.companyID) !== companyID) return { status: 'invalid', error: `Opportunity ${opportunityID} belongs to company ${opp.companyID}, not ${companyID}. Nothing written.` };
+      companyID = Number(opp.companyID);
+      if (contactID == null && given(opp.contactID)) contactID = Number(opp.contactID);
+      context.opportunity = { id: opportunityID, title: opp.title ?? null, stage: opp.stage ?? null, status: opp.status ?? null };
+    }
+    if (contactID != null) {
+      const c = await http.get<Record<string, any>>('Contacts', contactID);
+      if (!c) return { status: 'not_found', error: `Contact ${contactID} not found. Nothing written.` };
+      if (companyID != null && Number(c.companyID) !== companyID) return { status: 'invalid', error: `Contact ${contactID} belongs to company ${c.companyID}, not ${companyID}. Nothing written.` };
+      companyID = Number(c.companyID);
+      context.contact = { id: contactID, name: [c.firstName, c.lastName].filter(Boolean).join(' ') || null };
+    }
+    if (companyID == null || !Number.isInteger(companyID) || companyID < 0) return { status: 'invalid', error: 'Give companyID, contactID or opportunityID — the follow-up needs a company.' };
+    const tz = await this.appointmentZone(o.timeZone, resourceID);
+    const due = resolveFollowupDue({ when: o.when, inDays: o.inDays, durationMinutes: o.durationMinutes, timeZone: tz });
+    if (!due.ok) return { status: 'invalid', error: due.error };
+    const pick = pickSalesActionType(await this.getCompanyToDoActionTypes(), o.actionTypeName);
+    if (!pick.ok) return { status: 'invalid', error: pick.error, choices: pick.choices };
+    const body: Record<string, any> = {
+      companyID, assignedToResourceID: resourceID, actionType: pick.value, activityDescription: note,
+      startDateTime: due.start, endDateTime: due.end,
+      ...(contactID != null ? { contactID } : {}), ...(opportunityID != null ? { opportunityID } : {}),
+    };
+    const followup = { ...body, actionTypeLabel: pick.label, startLocal: localWallClock(due.start, tz), endLocal: localWallClock(due.end, tz), timeZone: tz, ...context };
+    const day = localDayWindow(due.day, tz);
+    const sameDay = await http.query<AutotaskCompanyToDo>('CompanyToDos', [
+      { op: 'eq', field: 'companyID', value: companyID },
+      { op: 'eq', field: 'assignedToResourceID', value: resourceID },
+      { op: 'gte', field: 'startDateTime', value: day.start },
+      { op: 'lte', field: 'startDateTime', value: day.end },
+    ], { maxRecords: 100, noCache: true });
+    const dup = sameDay.find((t) => t.completedDate == null && String(t.activityDescription ?? '').trim() === note && (opportunityID == null || Number(t.opportunityID) === opportunityID));
+    if (dup) return { status: 'exists', todoID: dup.id, followup: { ...followup, id: dup.id }, message: `An open follow-up with this text is already on that day (To-Do ${dup.id}) — nothing written.` };
+    if (o.dryRun === true) return { status: 'planned', followup };
+    const id = await http.childCreate('Companies', companyID, 'ToDos', body);
+    this.logger.info(`Sales follow-up To-Do created with ID: ${id}`);
+    return { status: 'created', todoID: id, followup: { ...followup, id } };
   }
 
   /** Resolve the parent companyID for a To-Do write, reading the record if needed. */

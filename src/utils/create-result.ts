@@ -101,6 +101,7 @@ export const CREATE_TOOL_META: Record<string, CreateToolMeta> = {
   autotask_create_opportunity: { entityType: 'Opportunities' },
   autotask_create_quote_item: { entityType: 'QuoteItems', parentType: 'Quotes', parentIdArgs: ['quoteId', 'quoteID'] },
   autotask_create_company_todo: { entityType: 'CompanyToDos', parentType: 'Companies', parentIdArgs: ['companyID', 'companyId'] },
+  autotask_create_project_charge: { entityType: 'ProjectCharges', parentType: 'Projects', parentIdArgs: ['projectID', 'projectId'] },
 };
 
 /**

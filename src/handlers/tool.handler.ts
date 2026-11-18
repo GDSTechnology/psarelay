@@ -1796,6 +1796,74 @@ export class AutotaskToolHandler {
         return { result: a.chargeId, message: `Successfully deleted ticket charge ${a.chargeId}` };
       }],
 
+      // Project Charges
+      ['autotask_get_project_charge', async (a) => {
+        const r = await s.getProjectCharge(a.chargeId);
+        if (!r) return { result: null, message: `No project charge found with ID ${a.chargeId}` };
+        return { result: r, message: 'Project charge retrieved successfully' };
+      }],
+      ['autotask_search_project_charges', async (a) => {
+        const r = await s.searchProjectCharges(a);
+        return { result: r, message: `Found ${r.length} project charges` };
+      }],
+      ['autotask_create_project_charge', async (a) => {
+        const { allowInternalText, confirm: _confirm, ...charge } = a;
+        const internal = allowInternalText === true ? null : internalTextProblem(charge);
+        if (internal) return { result: { status: 'internal_text' }, message: `NOTHING WRITTEN — ${internal}` };
+        const id = await s.createProjectCharge(charge);
+        return { result: id, message: `Created project charge ${id} on project ${charge.projectID}` };
+      }],
+      ['autotask_update_project_charge', async (a) => {
+        const { chargeId, allowInternalText, confirm: _confirm, ...updates } = a;
+        const id = Number(chargeId);
+        if (!Number.isInteger(id) || id <= 0) return { result: null, message: 'chargeId (a positive integer) is required. Nothing written.' };
+        const internal = allowInternalText === true ? null : internalTextProblem(updates);
+        if (internal) return { result: { status: 'internal_text', chargeID: id }, message: `NOTHING WRITTEN — ${internal}` };
+        const r = await s.updateProjectCharge(id, updates);
+        const fmt = (v: unknown) => (v === null || v === undefined || v === '' ? '(empty)' : typeof v === 'string' ? `"${v}"` : String(v));
+        const changed = Object.entries(r.changes).map(([k, c]) => `${k}: ${fmt(c.from)} → ${fmt(c.to)}`);
+        const warn = r.notApplied.length ? ` WARNING: Autotask did not apply ${r.notApplied.join(', ')} (read back unchanged).` : '';
+        return { result: r, message: `Updated project charge ${id} on project ${r.projectID} (${r.after ? 'verified by reading it back' : 'could not be read back yet'}). ${changed.length ? changed.join('; ') : 'No field changed — it already had these values.'}${warn}` };
+      }],
+      ['autotask_delete_project_charge', async (a) => {
+        const r = await s.deleteProjectCharge(a.chargeId, a.projectId);
+        const msg: Record<string, string> = {
+          deleted: `Deleted project charge ${a.chargeId} ("${r.deleted?.name ?? ''}", ${r.deleted?.unitQuantity ?? '?'} × ${r.deleted?.unitPrice ?? '?'}) from project ${r.projectID}`,
+          not_found: `Project charge ${a.chargeId} not found — nothing deleted`, invalid: r.error,
+        };
+        return { result: r, message: msg[r.status] ?? r.status };
+      }],
+
+      // Company Locations
+      ['autotask_get_company_location', async (a) => {
+        const r = await s.getCompanyLocation(a.locationId);
+        if (!r) return { result: null, message: `No company location found with ID ${a.locationId}` };
+        return { result: r, message: `Location ${r.id}: ${r.name ?? ''} (company ${r.companyID})` };
+      }],
+      ['autotask_search_company_locations', async (a) => {
+        const r = await s.searchCompanyLocationRecords(a);
+        return { result: r, message: `Found ${r.length} company location(s)` };
+      }],
+      ['autotask_create_company_location', async (a) => {
+        const r = await s.createCompanyLocation(a);
+        const msg: Record<string, string> = {
+          created: `Created location ${r.locationID} "${r.location?.name}" on company ${a.companyID}${r.verified ? '' : ' (not yet readable)'}`,
+          exists: r.message, planned: `Plan only (dryRun): location "${r.location?.name}" on company ${a.companyID}`, invalid: `Not created: ${r.error}`,
+        };
+        return { result: r, message: msg[r.status] ?? r.status };
+      }],
+      ['autotask_update_company_location', async (a) => {
+        const { locationId, ...updates } = a;
+        const r = await s.updateCompanyLocation(Number(locationId), updates);
+        const fmt = (v: unknown) => (v === null || v === undefined || v === '' ? '(empty)' : typeof v === 'string' ? `"${v}"` : String(v));
+        const changed = Object.entries((r.changes ?? {}) as Record<string, { from: unknown; to: unknown }>).map(([k, c]) => `${k}: ${fmt(c.from)} → ${fmt(c.to)}`).join('; ');
+        const msg: Record<string, string> = {
+          updated: `Updated location ${locationId}: ${changed}${r.notApplied?.length ? ` WARNING: Autotask did not apply ${r.notApplied.join(', ')} (read back unchanged).` : ''}`,
+          planned: `Plan only (dryRun): ${changed}`, unchanged: r.message, not_found: `Company location ${locationId} not found — nothing changed`, invalid: `Not changed: ${r.error}`,
+        };
+        return { result: r, message: msg[r.status] ?? r.status };
+      }],
+
       // Ticket History (read-only audit trail)
       ['autotask_get_ticket_history', async (a) => {
         const r = await s.getTicketHistory(a.historyId);
@@ -2034,6 +2102,16 @@ export class AutotaskToolHandler {
       ['autotask_create_company_todo', async (a) => {
         const id = await s.createCompanyToDo(a);
         return { result: id, message: `Successfully created Company To-Do with ID: ${id}` };
+      }],
+      ['autotask_create_sales_followup', async (a) => {
+        const r = await s.createSalesFollowup(a);
+        const f = r.followup ?? {};
+        const what = `${f.actionTypeLabel ?? ''} follow-up "${f.activityDescription ?? ''}" ${f.startLocal ?? ''} (${f.timeZone ?? ''})${f.opportunity ? ` on opportunity ${f.opportunity.id}${f.opportunity.title ? ` "${f.opportunity.title}"` : ''}` : ''}${f.contact?.name ? ` with ${f.contact.name}` : ''}`;
+        const msg: Record<string, string> = {
+          created: `Scheduled ${what} — To-Do ${r.todoID}`, planned: `Plan only (dryRun): ${what}`, exists: r.message,
+          invalid: `Not scheduled: ${r.error}${r.choices ? ` Action types: ${r.choices.join(', ')}.` : ''}`, not_found: `Not scheduled: ${r.error}`,
+        };
+        return { result: r, message: msg[r.status] ?? r.status };
       }],
       ['autotask_update_company_todo', async (a) => {
         const { id, companyID, ...updates } = a;
