@@ -2574,7 +2574,7 @@ export const TOOL_DEFINITIONS: McpTool[] = [
   },
   {
     name: 'autotask_build_project_from_plan',
-    description: "Build engine: realize a validated project build plan as a real Autotask project — project → phases (parent-first) → tasks → task dependencies. SAFE BY DEFAULT: unless you pass dryRun:false, NOTHING is written and the tool returns the planned mutation counts for review. Idempotent + resumable: it tags the project with a build key and, on a re-run (same buildKey, or same company+name), reuses the existing project and creates only the phases/tasks/dependencies still missing (matched by title), so a retry after a partial failure never duplicates. Returns the shared write-plan envelope (status: dry_run | built | built_with_errors | validation_failed) with the Autotask projectId, a per-ref → id map, and a created/reused summary. Produce the plan with the SOW→project pipeline (or autotask_calculate_project_schedule for dates); this tool only builds an approved plan.",
+    description: "Build engine: realize a validated project build plan as a real Autotask project — project → phases (parent-first) → tasks → task dependencies. SAFE BY DEFAULT: unless you pass dryRun:false, NOTHING is written and the tool returns the planned mutation counts for review. Tasks can carry their resource (assignedResourceID; role defaults to the resource's default role) and dates (startDate / endDate, e.g. from autotask_calculate_project_schedule); the plan can carry project notes. Idempotent + resumable: it tags the project with a build key and, on a re-run (same buildKey, or same company+name), reuses the existing project and creates only what is still missing — phases matched by title under the same parent, tasks by title within the same phase (so the same task title in two phases stays two tasks) — and fills in a reused task's missing resource or dates, so a retry after a partial failure never duplicates. The dry run of a resume says what is still missing. A new project needs type, status and dates: missing ones default to type 5 (Client), status 1 (New), the first task start / today, and the last task end / start + 30 days (listed in defaultsApplied). Returns the shared write-plan envelope (status: dry_run | built | built_with_errors | validation_failed) with the Autotask projectId, a per-ref → id map, and a created/reused summary. Produce the plan with the SOW→project pipeline (or autotask_calculate_project_schedule for dates); this tool only builds an approved plan.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -2612,10 +2612,19 @@ export const TOOL_DEFINITIONS: McpTool[] = [
                   predecessors: { type: 'array', items: { type: 'string' }, description: 'Refs of tasks that must finish before this one starts' },
                   lagDays: { type: 'number' },
                   taskType: { type: 'number' },
-                  description: { type: 'string' }
+                  description: { type: 'string' },
+                  assignedResourceID: { type: 'number', description: 'Resource to assign' },
+                  assignedResourceRoleID: { type: 'number', description: "Role for the assignment (default the resource's default role)" },
+                  startDate: { type: 'string', description: 'Task start YYYY-MM-DD (or ISO)' },
+                  endDate: { type: 'string', description: 'Task end YYYY-MM-DD (or ISO)' }
                 },
                 required: ['ref', 'title', 'estimatedHours']
               }
+            },
+            notes: {
+              type: 'array',
+              description: 'Project notes to write after the tasks (optional). Each: { title, description }. A note whose title the project already has is not written again.',
+              items: { type: 'object', properties: { title: { type: 'string' }, description: { type: 'string' } }, required: ['title', 'description'] }
             }
           },
           required: ['name', 'tasks']
@@ -2641,8 +2650,27 @@ export const TOOL_DEFINITIONS: McpTool[] = [
     annotations: { title: 'Build project from plan' }
   },
   {
+    name: 'autotask_clone_project',
+    description: "Clone an existing project into a new one, for the same or another company: its phases (nested), tasks, estimated hours, task types, descriptions and task dependencies. Task dates move with the new startDate (default today) by the source project's offset; resource assignments and the project lead are copied only with includeResources. Notes, time, charges and attachments are NOT copied. Built by the same engine as autotask_build_project_from_plan, so it is SAFE BY DEFAULT (dryRun unless dryRun:false), idempotent and resumable: re-running the same clone (same source, company and name) finishes a partial clone instead of starting another. Returns the build result plus clonedFrom (counts, shiftDays).",
+    annotations: { title: 'Clone project', readOnlyHint: false, idempotentHint: true },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sourceProjectID: { type: 'number', description: 'Project to copy' },
+        companyID: { type: 'number', description: 'Company the new project belongs to (0 = your own company)' },
+        projectName: { type: 'string', description: 'Name of the new project (default the source name)' },
+        startDate: { type: 'string', description: 'Start of the new project YYYY-MM-DD (default today); task dates shift by the same offset' },
+        includeResources: { type: 'boolean', description: 'Copy task resource assignments and the project lead (default false)' },
+        includeTaskDates: { type: 'boolean', description: 'Copy (shifted) task dates (default true)' },
+        buildKey: { type: 'string', description: 'Idempotency key (default "clone:<source>:<company>:<name>")' },
+        dryRun: { type: 'boolean', description: 'When true (DEFAULT), return the plan without writing. Pass false to create the clone.', default: true }
+      },
+      required: ['sourceProjectID', 'companyID']
+    }
+  },
+  {
     name: 'autotask_extend_project',
-    description: "Project extension (#46 §2.4): add phases / tasks / dependencies to an EXISTING project by id — a change order, an added phase, a recurring month, a new site, or extra tasks. SAFE BY DEFAULT: unless you pass dryRun:false, NOTHING is written and it returns what WOULD be added (the phases/tasks not already present by title). IDEMPOTENT MERGE: phases and tasks already in the project (matched by title) are reused, never duplicated, so re-running is safe and resumable. Same normalized plan shape and build engine as autotask_build_project_from_plan, but targets a known projectID instead of creating/finding a project. Returns the shared write-plan envelope (status: dry_run | validation_failed | extended | extended_with_errors) with a created/reused summary. Produce the `plan` with the SOW→project pipeline (extract_project_scope → calculate_bom_labor → calculate_project_schedule).",
+    description: "Project extension (#46 §2.4): add phases / tasks / dependencies to an EXISTING project by id — a change order, an added phase, a recurring month, a new site, or extra tasks. SAFE BY DEFAULT: unless you pass dryRun:false, NOTHING is written and it returns what WOULD be added (the phases/tasks not already present by title). IDEMPOTENT MERGE: phases and tasks already in the project (same title under the same parent phase) are reused, never duplicated, and notes by title, so re-running is safe and resumable. Same normalized plan shape and build engine as autotask_build_project_from_plan, but targets a known projectID instead of creating/finding a project. Returns the shared write-plan envelope (status: dry_run | validation_failed | extended | extended_with_errors) with a created/reused summary. Produce the `plan` with the SOW→project pipeline (extract_project_scope → calculate_bom_labor → calculate_project_schedule).",
     inputSchema: {
       type: 'object',
       properties: {
@@ -2653,7 +2681,12 @@ export const TOOL_DEFINITIONS: McpTool[] = [
           properties: {
             name: { type: 'string', description: 'Label for the plan fragment (not used to find the project — projectID is authoritative)' },
             phases: { type: 'array', items: { type: 'object', properties: { ref: { type: 'string' }, title: { type: 'string' }, parentRef: { type: 'string' }, description: { type: 'string' } }, required: ['ref', 'title'] } },
-            tasks: { type: 'array', items: { type: 'object', properties: { ref: { type: 'string' }, title: { type: 'string' }, estimatedHours: { type: 'number' }, phaseRef: { type: 'string' }, predecessors: { type: 'array', items: { type: 'string' } }, lagDays: { type: 'number' }, taskType: { type: 'number' }, description: { type: 'string' } }, required: ['ref', 'title'] } }
+            tasks: { type: 'array', items: { type: 'object', properties: { ref: { type: 'string' }, title: { type: 'string' }, estimatedHours: { type: 'number' }, phaseRef: { type: 'string' }, predecessors: { type: 'array', items: { type: 'string' } }, lagDays: { type: 'number' }, taskType: { type: 'number' }, description: { type: 'string' }, assignedResourceID: { type: 'number' }, assignedResourceRoleID: { type: 'number' }, startDate: { type: 'string' }, endDate: { type: 'string' } }, required: ['ref', 'title'] } },
+            notes: {
+              type: 'array',
+              description: 'Project notes to write after the tasks (optional). Each: { title, description }. A note whose title the project already has is not written again.',
+              items: { type: 'object', properties: { title: { type: 'string' }, description: { type: 'string' } }, required: ['title', 'description'] }
+            }
           },
           required: ['name', 'tasks']
         },
@@ -6957,7 +6990,7 @@ export const TOOL_CATEGORIES: Record<string, { description: string; tools: strin
   },
   projects: {
     description: 'Search and create projects, tasks, phases, project notes and project charges',
-    tools: ['autotask_get_project_charge', 'autotask_search_project_charges', 'autotask_create_project_charge', 'autotask_update_project_charge', 'autotask_delete_project_charge', 'autotask_search_projects', 'autotask_get_project', 'autotask_update_project', 'autotask_get_project_structure', 'autotask_get_complete_project_context', 'autotask_get_project_labor_summary', 'autotask_export_project_blueprint', 'autotask_calculate_project_schedule', 'autotask_extract_project_scope', 'autotask_classify_project', 'autotask_calculate_bom_labor', 'autotask_generate_project_labor_plan', 'autotask_build_project_from_plan', 'autotask_extend_project', 'autotask_create_project', 'autotask_link_project_commercial', 'autotask_search_tasks', 'autotask_get_task', 'autotask_get_task_by_number', 'autotask_create_task', 'autotask_update_task', 'autotask_complete_task', 'autotask_delete_task', 'autotask_delete_task_with_time', 'autotask_verify_task_time_entries', 'autotask_close_meeting_task', 'autotask_list_task_resources', 'autotask_add_task_resource', 'autotask_remove_task_resource', 'autotask_list_task_predecessors', 'autotask_add_task_predecessor', 'autotask_remove_task_predecessor', 'autotask_get_task_predecessor', 'autotask_search_task_predecessors', 'autotask_update_task_predecessor', 'autotask_list_phases', 'autotask_create_phase', 'autotask_get_phase', 'autotask_update_phase', 'autotask_get_project_note', 'autotask_search_project_notes', 'autotask_create_project_note', 'autotask_get_task_note', 'autotask_search_task_notes', 'autotask_create_task_note', 'autotask_search_project_attachments', 'autotask_search_task_attachments', 'autotask_get_project_attachment', 'autotask_create_project_attachment', 'autotask_get_task_attachment', 'autotask_create_task_attachment']
+    tools: ['autotask_get_project_charge', 'autotask_search_project_charges', 'autotask_create_project_charge', 'autotask_update_project_charge', 'autotask_delete_project_charge', 'autotask_search_projects', 'autotask_get_project', 'autotask_update_project', 'autotask_get_project_structure', 'autotask_get_complete_project_context', 'autotask_get_project_labor_summary', 'autotask_export_project_blueprint', 'autotask_calculate_project_schedule', 'autotask_extract_project_scope', 'autotask_classify_project', 'autotask_calculate_bom_labor', 'autotask_generate_project_labor_plan', 'autotask_build_project_from_plan', 'autotask_clone_project', 'autotask_extend_project', 'autotask_create_project', 'autotask_link_project_commercial', 'autotask_search_tasks', 'autotask_get_task', 'autotask_get_task_by_number', 'autotask_create_task', 'autotask_update_task', 'autotask_complete_task', 'autotask_delete_task', 'autotask_delete_task_with_time', 'autotask_verify_task_time_entries', 'autotask_close_meeting_task', 'autotask_list_task_resources', 'autotask_add_task_resource', 'autotask_remove_task_resource', 'autotask_list_task_predecessors', 'autotask_add_task_predecessor', 'autotask_remove_task_predecessor', 'autotask_get_task_predecessor', 'autotask_search_task_predecessors', 'autotask_update_task_predecessor', 'autotask_list_phases', 'autotask_create_phase', 'autotask_get_phase', 'autotask_update_phase', 'autotask_get_project_note', 'autotask_search_project_notes', 'autotask_create_project_note', 'autotask_get_task_note', 'autotask_search_task_notes', 'autotask_create_task_note', 'autotask_search_project_attachments', 'autotask_search_task_attachments', 'autotask_get_project_attachment', 'autotask_create_project_attachment', 'autotask_get_task_attachment', 'autotask_create_task_attachment']
   },
   time_and_billing: {
     description: 'Time entries, billing items, and expense management',

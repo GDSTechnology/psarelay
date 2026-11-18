@@ -7,7 +7,7 @@
 // client-side `ref`s to real Autotask ids as it creates records, and uses the
 // build marker below to find a prior partial build and resume it idempotently.
 
-import { PlanPhase, PlanTask, ProjectBuildPlan } from './project-plan.js';
+import { PlanNote, PlanPhase, PlanTask, ProjectBuildPlan } from './project-plan.js';
 
 export interface DependencyEdge {
   /** task that must wait */
@@ -24,7 +24,9 @@ export interface BuildBlueprint {
   tasks: PlanTask[];
   /** Flattened predecessor edges across all tasks. */
   dependencies: DependencyEdge[];
-  counts: { phases: number; tasks: number; dependencies: number };
+  /** Project notes, written after the tasks. */
+  notes: PlanNote[];
+  counts: { phases: number; tasks: number; dependencies: number; notes: number };
 }
 
 /**
@@ -65,11 +67,13 @@ export function planProjectBuild(plan: ProjectBuildPlan): BuildBlueprint {
       dependencies.push({ taskRef: t.ref, predecessorRef: pre, lagDays: t.lagDays ?? 0 });
     }
   }
+  const notes = Array.isArray(plan.notes) ? plan.notes.filter((n) => n && String(n.title ?? '').trim()) : [];
   return {
     orderedPhases,
     tasks,
     dependencies,
-    counts: { phases: orderedPhases.length, tasks: tasks.length, dependencies: dependencies.length },
+    notes,
+    counts: { phases: orderedPhases.length, tasks: tasks.length, dependencies: dependencies.length, notes: notes.length },
   };
 }
 

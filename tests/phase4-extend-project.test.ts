@@ -40,8 +40,7 @@ describe('extendProject', () => {
   test('dry run (default): reports only the NEW phases/tasks, writes nothing', async () => {
     const s = svc();
     jest.spyOn(s, 'getProject').mockResolvedValue({ id: 500, projectName: 'Site A' } as any);
-    jest.spyOn(s, 'searchPhases').mockResolvedValue({ items: [{ id: 601, title: 'Plan' }] } as any);
-    jest.spyOn(s, 'searchTasks').mockResolvedValue({ items: [{ id: 701, title: 'Survey' }] } as any);
+    jest.spyOn(s, 'getProjectBuildState').mockResolvedValue({ phases: [{ id: 601, title: 'Plan' }], tasks: [{ id: 701, title: 'Survey' }], noteTitles: [] } as any);
     const createPhase = jest.spyOn(s, 'createPhase').mockResolvedValue(602);
     const createTask = jest.spyOn(s, 'createTask').mockResolvedValue(702);
     const r = await s.extendProject({ projectID: 500, plan }); // dryRun defaults true
@@ -55,8 +54,7 @@ describe('extendProject', () => {
   test('execute: adds only missing phase/task + dependency; reuses existing', async () => {
     const s = svc();
     jest.spyOn(s, 'getProject').mockResolvedValue({ id: 500, projectName: 'Site A' } as any);
-    jest.spyOn(s, 'searchPhases').mockResolvedValue({ items: [{ id: 601, title: 'Plan' }] } as any);
-    jest.spyOn(s, 'searchTasks').mockResolvedValue({ items: [{ id: 701, title: 'Survey' }] } as any);
+    jest.spyOn(s, 'getProjectBuildState').mockResolvedValue({ phases: [{ id: 601, title: 'Plan' }], tasks: [{ id: 701, title: 'Survey' }], noteTitles: [] } as any);
     jest.spyOn(s, 'listTaskPredecessors').mockResolvedValue([]);
     const createPhase = jest.spyOn(s, 'createPhase').mockResolvedValue(602);
     const createTask = jest.spyOn(s, 'createTask').mockResolvedValue(702);
@@ -76,8 +74,7 @@ describe('extendProject', () => {
   test('execute: an existing dependency is not re-added', async () => {
     const s = svc();
     jest.spyOn(s, 'getProject').mockResolvedValue({ id: 500 } as any);
-    jest.spyOn(s, 'searchPhases').mockResolvedValue({ items: [{ id: 601, title: 'Plan' }, { id: 602, title: 'Exec' }] } as any);
-    jest.spyOn(s, 'searchTasks').mockResolvedValue({ items: [{ id: 701, title: 'Survey' }, { id: 702, title: 'Install' }] } as any);
+    jest.spyOn(s, 'getProjectBuildState').mockResolvedValue({ phases: [{ id: 601, title: 'Plan' }, { id: 602, title: 'Exec', parentPhaseID: 601 }], tasks: [{ id: 701, title: 'Survey' }, { id: 702, title: 'Install' }], noteTitles: [] } as any);
     jest.spyOn(s, 'listTaskPredecessors').mockResolvedValue([{ predecessorTaskID: 701 } as any]);
     const addPred = jest.spyOn(s, 'addTaskPredecessor').mockResolvedValue(9);
 

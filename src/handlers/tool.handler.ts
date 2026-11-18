@@ -36,6 +36,19 @@ import { classifyTimeEntryWriteError } from '../utils/time-entry-errors.js';
 /** Tested n8n receiver (signature check) for webhooks this MCP creates. */
 const N8N_RECEIVER_GUIDE = 'https://github.com/GDSTechnology/psarelay/blob/main/docs/N8N_WEBHOOKS.md';
 
+/** "+2 phase(s), +5 task(s) (3 reused), …" for build / clone / extend replies. */
+function buildCounts(sm: Record<string, number> | undefined): string {
+  if (!sm) return '';
+  const part = (label: string, created: number | undefined, reused: number | undefined) =>
+    `+${created ?? 0} ${label}${reused ? ` (${reused} reused)` : ''}`;
+  return [
+    part('phase(s)', sm.phasesCreated, sm.phasesReused), part('task(s)', sm.tasksCreated, sm.tasksReused),
+    part('dependency link(s)', sm.dependenciesCreated, sm.dependenciesReused),
+    ...(sm.notesCreated || sm.notesReused ? [part('note(s)', sm.notesCreated, sm.notesReused)] : []),
+    ...(sm.tasksUpdated ? [`${sm.tasksUpdated} reused task(s) given their resource / dates`] : []),
+  ].join(', ');
+}
+
 const DRY_RUN_FIRST_TOOLS = new Set<string>([
   'autotask_delete_time_entry',
   'autotask_delete_task',
@@ -2654,9 +2667,25 @@ export class AutotaskToolHandler {
         const msg =
           r.status === 'dry_run' ? `Dry run OK — would create ${r.plannedPhases} phase(s), ${r.plannedTasks} task(s), ${r.plannedDependencies} dependency link(s)${r.existingProjectId ? ` (resuming project ${r.existingProjectId})` : ''}; nothing written`
           : r.status === 'validation_failed' ? `Validation failed at step "${r.step}": ${typeof r.detail === 'string' ? r.detail : JSON.stringify(r.detail)}`
-          : r.status === 'built' ? `Built project ${r.projectId}: +${sm?.phasesCreated} phase(s), +${sm?.tasksCreated} task(s), +${sm?.dependenciesCreated} dependency link(s)${r.resumed ? ' (resumed)' : ''}`
-          : r.status === 'built_with_errors' ? `Built project ${r.projectId} with ${(r.errors as any[])?.length} error(s): +${sm?.tasksCreated} task(s), +${sm?.phasesCreated} phase(s) — re-run to complete`
+          : r.status === 'built' ? `Built project ${r.projectId}: ${buildCounts(sm)}${r.resumed ? ' (resumed)' : ''}`
+          : r.status === 'built_with_errors' ? `Built project ${r.projectId} with ${(r.errors as any[])?.length} error(s): ${buildCounts(sm)} — re-run to complete`
           : `Build result: ${r.status}`;
+        return { result: r, message: msg };
+      }],
+      ['autotask_clone_project', async (a) => {
+        const r = await s.cloneProject({
+          sourceProjectID: Number(a.sourceProjectID), companyID: a.companyID, projectName: a.projectName, startDate: a.startDate,
+          includeResources: a.includeResources === true, includeTaskDates: a.includeTaskDates, buildKey: a.buildKey, dryRun: a.dryRun,
+        });
+        const c = r.clonedFrom ?? {};
+        const sm = r.summary as Record<string, number> | undefined;
+        const what = `project ${c.projectID} "${c.projectName ?? ''}" (${c.phases} phase(s), ${c.tasks} task(s), ${c.dependencies} dependency link(s)${c.shiftDays != null ? `, dates shifted ${c.shiftDays} day(s)` : ', no task dates'}${c.resourcesCopied ? ', with resources' : ''})`;
+        const msg =
+          r.status === 'dry_run' ? `Dry run OK — would clone ${what}${r.existingProjectId ? ` into existing project ${r.existingProjectId} (resume${r.stillMissing ? `: ${r.stillMissing.tasks} task(s) and ${r.stillMissing.phases} phase(s) still missing` : ''})` : ''}${r.defaultsApplied?.length ? `; defaults: ${r.defaultsApplied.join(', ')}` : ''}; nothing written. Call again with dryRun:false to create it.`
+          : r.status === 'validation_failed' ? `Not cloned — ${r.step}: ${typeof r.detail === 'string' ? r.detail : JSON.stringify(r.detail)}`
+          : r.status === 'built' ? `Cloned ${what} as project ${r.projectId}: ${buildCounts(sm)}${r.resumed ? ' (resumed)' : ''}`
+          : r.status === 'built_with_errors' ? `Cloned ${what} as project ${r.projectId} with ${(r.errors as any[])?.length} error(s): ${buildCounts(sm)} — re-run the same clone to complete`
+          : `Clone result: ${r.status}`;
         return { result: r, message: msg };
       }],
       ['autotask_extend_project', async (a) => {

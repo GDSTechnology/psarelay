@@ -37,6 +37,7 @@ import { toProjectBlueprint } from '../utils/project-blueprint';
 import { WritePlan, WritePlanResult } from '../utils/write-plan';
 import { ProjectBuildPlan, validateBuildPlan } from '../utils/project-plan';
 import { planProjectBuild, buildMarker, hasBuildMarker } from '../utils/project-build';
+import { dayOffset, ExistingPhase, ExistingTask, matchPhases, matchTasks, normalizeProjectDefaults, planDateTime, shiftDay } from '../utils/project-build-match';
 import { reconcileServiceCall as reconcileServiceCallPure, SCReconResult } from '../utils/service-call-reconciliation';
 import { analyzeTicketBillingGaps as analyzeTicketBillingGapsPure, TBGResult, TBGTimeEntry, COMPLETE_TICKET_STATUS } from '../utils/ticket-billing-gaps';
 import {
@@ -3728,15 +3729,18 @@ export class AutotaskService {
 
   /**
    * Build engine (#46, §14): realize a validated ProjectBuildPlan as a real
-   * Autotask project — project → phases (parent-first) → tasks → dependencies —
-   * with the shared write-plan envelope. Safe by construction:
+   * Autotask project — project → phases (parent-first) → tasks (with their
+   * resource and dates) → dependencies → project notes — with the shared
+   * write-plan envelope. Safe by construction:
    *
    *  - dryRun defaults ON: unless `dryRun === false`, nothing is written; the
-   *    planned mutation counts are returned for review.
+   *    planned mutation counts (and, when resuming, what is still missing) are
+   *    returned for review.
    *  - idempotent + resumable: a re-run finds the prior project by build marker
-   *    (or name) and creates only the phases/tasks/dependencies still missing
-   *    (matched by title within the project), so a retry after a partial failure
-   *    never duplicates.
+   *    (or name) and creates only what is still missing — phases matched by
+   *    (parent, title), tasks by (phase, title), so repeated titles in different
+   *    phases stay separate (project-build-match). A reused task missing its
+   *    planned resource or dates gets them filled in.
    *  - partial-failure reporting: per-entity errors are collected and returned;
    *    the created ids stay authoritative so a follow-up run completes the rest.
    */
@@ -3752,9 +3756,9 @@ export class AutotaskService {
     // 1. Structural validation of the plan (pure).
     const v = validateBuildPlan(params.plan);
     if (!v.valid) return wp.fail('plan', { errors: v.errors, warnings: v.warnings });
-    wp.ok('plan', { phases: (params.plan.phases ?? []).length, tasks: (params.plan.tasks ?? []).length, warnings: v.warnings });
+    wp.ok('plan', { phases: (params.plan.phases ?? []).length, tasks: (params.plan.tasks ?? []).length, notes: (params.plan.notes ?? []).length, warnings: v.warnings });
 
-    // 2. Company must exist (the project's owner).
+    // 2. Company must exist (the project's owner). Company 0 is the tenant's own company.
     if (params.companyID == null) return wp.fail('company', 'companyID is required');
     const company = await this.getCompany(params.companyID);
     if (!company) return wp.fail('company', `Company ${params.companyID} not found`);
@@ -3767,15 +3771,34 @@ export class AutotaskService {
     const existing = await this.findProjectByBuildKey(params.companyID, buildKey, params.plan.name);
     wp.ok('idempotency', existing ? { existingProjectId: existing.id, resume: true } : { willCreateProject: true });
 
+    // Project fields for a new project: the documented names (projectType, startDate, endDate) mapped to
+    // Autotask's, and the fields Autotask requires filled in (type Client, status New, dates).
+    const { fields: projectFields, defaultsApplied } = this.projectCreateFields(params.projectDefaults, bp.tasks);
+
     // 4. Dry run (default) — report the plan; write nothing.
     if (params.dryRun !== false) {
+      let stillMissing: Record<string, number> | undefined;
+      if (existing?.id != null) {
+        const state = await this.getProjectBuildState(existing.id, bp.notes.length > 0).catch(() => null);
+        if (state) {
+          const ph = matchPhases(bp.orderedPhases, state.phases);
+          const tk = matchTasks(bp.tasks, ph, state.tasks);
+          const titles = new Set(state.noteTitles);
+          stillMissing = { phases: bp.orderedPhases.length - ph.size, tasks: bp.tasks.length - tk.size, notes: bp.notes.filter((n) => !titles.has(n.title.trim())).length };
+        }
+      }
       return wp.dryRun({
         buildKey,
         existingProjectId: existing?.id ?? null,
-        plannedProject: { projectName: params.plan.name, companyID: params.companyID, ...(params.projectDefaults ?? {}) },
+        plannedProject: existing?.id != null ? null : { projectName: params.plan.name, companyID: params.companyID, ...projectFields },
+        ...(existing?.id == null && defaultsApplied.length ? { defaultsApplied } : {}),
         plannedPhases: bp.counts.phases,
         plannedTasks: bp.counts.tasks,
         plannedDependencies: bp.counts.dependencies,
+        plannedNotes: bp.counts.notes,
+        plannedAssignments: bp.tasks.filter((t) => t.assignedResourceID != null).length,
+        plannedDatedTasks: bp.tasks.filter((t) => t.startDate || t.endDate).length,
+        ...(stillMissing ? { stillMissing } : {}),
       });
     }
 
@@ -3793,16 +3816,17 @@ export class AutotaskService {
         projectName: params.plan.name,
         companyID: params.companyID,
         description,
-        ...(params.projectDefaults ?? {}),
+        ...projectFields,
       } as Partial<AutotaskProject>);
     }
 
-    // 5b–5e: materialize phases/tasks/dependencies (idempotent, title-matched).
+    // 5b–5f: phases / tasks / resources / dates / dependencies / notes (idempotent).
     const applied = await this.applyPlanToProject(projectId, bp, existing?.id != null, errors);
     return wp.done(applied.errors.length > 0 ? 'built_with_errors' : 'built', {
       projectId,
       buildKey,
       resumed: existing?.id != null,
+      ...(existing?.id == null && defaultsApplied.length ? { defaultsApplied } : {}),
       summary: applied.summary,
       phases: applied.phaseResults,
       tasks: applied.taskResults,
@@ -3810,11 +3834,46 @@ export class AutotaskService {
     });
   }
 
+  /** Autotask fields for a new project from projectDefaults, with the required ones defaulted (and listed). */
+  private projectCreateFields(defaults: Record<string, any> | undefined, tasks: Array<{ startDate?: string | undefined; endDate?: string | undefined }>): { fields: Record<string, any>; defaultsApplied: string[] } {
+    const fields = normalizeProjectDefaults(defaults);
+    const defaultsApplied: string[] = [];
+    if (fields.type == null) { fields.type = 5; defaultsApplied.push('type 5 (Client)'); }
+    if (fields.status == null) { fields.status = 1; defaultsApplied.push('status 1 (New)'); }
+    if (fields.startDateTime == null) {
+      const first = tasks.map((t) => planDateTime(t.startDate)).filter((x): x is string => !!x).sort()[0];
+      fields.startDateTime = first ?? `${dayIn(new Date(), defaultTimeZone())}T00:00:00Z`;
+      defaultsApplied.push(`start ${fields.startDateTime.slice(0, 10)}`);
+    }
+    if (fields.endDateTime == null) {
+      const last = tasks.map((t) => planDateTime(t.endDate)).filter((x): x is string => !!x).sort().pop();
+      const floor = `${addDays(String(fields.startDateTime).slice(0, 10), 30)}T00:00:00Z`;
+      fields.endDateTime = last && last > String(fields.startDateTime) ? last : floor;
+      defaultsApplied.push(`end ${fields.endDateTime.slice(0, 10)}`);
+    }
+    return { fields, defaultsApplied };
+  }
+
   /**
-   * Shared build-engine step: create the plan's phases (parent-first), tasks, and
-   * dependencies inside `projectId`, idempotently (title-matched → reuse). Used by
-   * both buildProjectFromPlan (§14) and extendProject (§2.4). When `loadExisting`
-   * is true it pre-loads the project's current phases/tasks so nothing duplicates.
+   * The target project's phases, tasks (with resource + dates) and note titles for resume matching. Direct
+   * reads: searchTasks pages at 100, which made a resume on a bigger project re-create tasks 101+.
+   */
+  async getProjectBuildState(projectId: number, withNotes = false): Promise<{ phases: ExistingPhase[]; tasks: ExistingTask[]; noteTitles: string[] }> {
+    const http = await this.ensureClient();
+    const byProject = [{ op: 'eq' as const, field: 'projectID', value: projectId }];
+    const [phases, tasks, notes] = await Promise.all([
+      http.query<ExistingPhase>('Phases', byProject, { includeFields: ['id', 'title', 'parentPhaseID'], maxRecords: 2000, noCache: true }),
+      http.query<ExistingTask>('Tasks', byProject, { includeFields: ['id', 'title', 'phaseID', 'assignedResourceID', 'assignedResourceRoleID', 'startDateTime', 'endDateTime'], maxRecords: 5000, noCache: true }),
+      withNotes ? http.query<{ id: number; title?: string }>('ProjectNotes', byProject, { includeFields: ['id', 'title'], maxRecords: 2000, noCache: true }) : Promise.resolve([]),
+    ]);
+    return { phases, tasks, noteTitles: notes.map((n) => String(n.title ?? '').trim()).filter(Boolean) };
+  }
+
+  /**
+   * Shared build-engine step: create the plan's phases (parent-first), tasks (with resource and dates),
+   * dependencies and project notes inside `projectId`, idempotently. Used by buildProjectFromPlan (§14),
+   * extendProject (§2.4) and cloneProject. When `loadExisting` is true it reads the project first and reuses
+   * what is already there; if that read fails NOTHING is created (it would duplicate the project's content).
    * Never throws past a single record — per-entity errors accumulate in `errors`.
    */
   private async applyPlanToProject(
@@ -3826,36 +3885,32 @@ export class AutotaskService {
     summary: Record<string, number>;
     errors: Array<{ step: string; ref?: string; detail: string }>;
     phaseResults: Array<{ ref: string; id: number | null; reused: boolean }>;
-    taskResults: Array<{ ref: string; id: number | null; reused: boolean }>;
+    taskResults: Array<{ ref: string; id: number | null; reused: boolean; filled?: string[] }>;
   }> {
-    const phaseTitleToId = new Map<string, number>();
-    const taskTitleToId = new Map<string, number>();
+    const phaseResults: Array<{ ref: string; id: number | null; reused: boolean }> = [];
+    const taskResults: Array<{ ref: string; id: number | null; reused: boolean; filled?: string[] }> = [];
+    let state: { phases: ExistingPhase[]; tasks: ExistingTask[]; noteTitles: string[] } = { phases: [], tasks: [], noteTitles: [] };
     if (loadExisting) {
       try {
-        const [ph, tk] = await Promise.all([
-          this.searchPhases(projectId, { pageSize: 500 }),
-          this.searchTasks({ projectID: projectId, pageSize: 500 } as AutotaskQueryOptions),
-        ]);
-        for (const p of ph.items) if (p.title && p.id != null) phaseTitleToId.set(p.title, p.id);
-        for (const t of tk.items) if (t.title && t.id != null) taskTitleToId.set(t.title, t.id);
+        state = await this.getProjectBuildState(projectId, bp.notes.length > 0);
       } catch (e) {
-        errors.push({ step: 'load-existing', detail: (e as Error).message });
+        errors.push({ step: 'load-existing', detail: `Could not read project ${projectId}: ${(e as Error).message} — nothing created (it would duplicate what is there). Re-run.` });
+        return { summary: { phasesCreated: 0, phasesReused: 0, tasksCreated: 0, tasksReused: 0, tasksUpdated: 0, dependenciesCreated: 0, dependenciesReused: 0, notesCreated: 0, notesReused: 0 }, errors, phaseResults, taskResults };
       }
     }
 
     // Phases (parent-first). refs → real ids.
+    const phaseMatch = matchPhases(bp.orderedPhases, state.phases);
     const phaseRefToId = new Map<string, number>();
-    const phaseResults: Array<{ ref: string; id: number | null; reused: boolean }> = [];
     for (const p of bp.orderedPhases) {
       try {
-        let id = phaseTitleToId.get(p.title);
+        let id = phaseMatch.get(p.ref);
         const reused = id != null;
         if (id == null) {
           const payload: Record<string, any> = { projectID: projectId, title: p.title };
           if (p.description) payload.description = p.description;
           if (p.parentRef && phaseRefToId.has(p.parentRef)) payload.parentPhaseID = phaseRefToId.get(p.parentRef);
           id = await this.createPhase(payload as Partial<AutotaskPhase>);
-          phaseTitleToId.set(p.title, id);
         }
         phaseRefToId.set(p.ref, id);
         phaseResults.push({ ref: p.ref, id, reused });
@@ -3865,31 +3920,60 @@ export class AutotaskService {
       }
     }
 
-    // Tasks. refs → real ids.
+    // Tasks (+ resource, + dates). refs → real ids. A reused task gets a missing resource / date filled in.
+    const taskMatch = matchTasks(bp.tasks, phaseMatch, state.tasks);
+    const roles = new Map<number, number | null>();
+    const roleFor = async (t: { ref: string; assignedResourceID?: number | undefined; assignedResourceRoleID?: number | undefined }): Promise<number | null> => {
+      if (t.assignedResourceID == null) return null;
+      if (t.assignedResourceRoleID != null) return Number(t.assignedResourceRoleID);
+      const rid = Number(t.assignedResourceID);
+      if (!roles.has(rid)) roles.set(rid, await this.resolveResourceDefaultRole(rid));
+      const role = roles.get(rid) ?? null;
+      if (role == null) errors.push({ step: 'resource', ref: t.ref, detail: `resource ${rid} has no default role — pass assignedResourceRoleID; the task was left unassigned` });
+      return role;
+    };
     const taskRefToId = new Map<string, number>();
-    const taskResults: Array<{ ref: string; id: number | null; reused: boolean }> = [];
+    const reusedTaskIds = new Set<number>();
+    let tasksUpdated = 0;
     for (const t of bp.tasks) {
       try {
-        let id = taskTitleToId.get(t.title);
-        const reused = id != null;
-        if (id == null) {
-          const payload: Record<string, any> = { projectID: projectId, title: t.title, estimatedHours: t.estimatedHours ?? 0 };
-          if (t.description) payload.description = t.description;
-          if (t.phaseRef && phaseRefToId.has(t.phaseRef)) payload.phaseID = phaseRefToId.get(t.phaseRef);
-          if (t.taskType != null) payload.taskType = t.taskType;
-          id = await this.createTask(payload as Partial<AutotaskTask>);
-          taskTitleToId.set(t.title, id);
+        const start = planDateTime(t.startDate);
+        const end = planDateTime(t.endDate);
+        const role = await roleFor(t);
+        const assign = role != null ? { assignedResourceID: Number(t.assignedResourceID), assignedResourceRoleID: role } : {};
+        const hit = taskMatch.get(t.ref);
+        if (hit) {
+          const fill: Record<string, any> = {};
+          if (role != null && hit.assignedResourceID == null) Object.assign(fill, assign);
+          if (start && !hit.startDateTime) fill.startDateTime = start;
+          if (end && !hit.endDateTime) fill.endDateTime = end;
+          const filled = Object.keys(fill);
+          if (filled.length) {
+            try { await this.updateTask(hit.id, { projectID: projectId, ...fill } as Partial<AutotaskTask>); tasksUpdated++; }
+            catch (e) { errors.push({ step: 'task-update', ref: t.ref, detail: (e as Error).message }); }
+          }
+          taskRefToId.set(t.ref, hit.id);
+          reusedTaskIds.add(hit.id);
+          taskResults.push({ ref: t.ref, id: hit.id, reused: true, ...(filled.length ? { filled } : {}) });
+          continue;
         }
+        const payload: Record<string, any> = { projectID: projectId, title: t.title, estimatedHours: t.estimatedHours ?? 0, ...assign };
+        if (t.description) payload.description = t.description;
+        if (t.phaseRef && phaseRefToId.has(t.phaseRef)) payload.phaseID = phaseRefToId.get(t.phaseRef);
+        if (t.taskType != null) payload.taskType = t.taskType;
+        if (start) payload.startDateTime = start;
+        if (end) payload.endDateTime = end;
+        const id = await this.createTask(payload as Partial<AutotaskTask>);
         taskRefToId.set(t.ref, id);
-        taskResults.push({ ref: t.ref, id, reused });
+        taskResults.push({ ref: t.ref, id, reused: false });
       } catch (e) {
         errors.push({ step: 'task', ref: t.ref, detail: (e as Error).message });
         taskResults.push({ ref: t.ref, id: null, reused: false });
       }
     }
 
-    // Dependencies. Skip any already present (resume-safe); skip edges whose
-    // endpoints didn't get created.
+    // Dependencies. A task created in this run has none yet; a reused one is checked first (resume-safe).
+    // Edges whose endpoints didn't get created are skipped and reported.
     let depsCreated = 0;
     let depsReused = 0;
     for (const edge of bp.dependencies) {
@@ -3900,9 +3984,9 @@ export class AutotaskService {
         continue;
       }
       try {
-        if (loadExisting) {
+        if (reusedTaskIds.has(successorId)) {
           const current = await this.listTaskPredecessors(successorId);
-          if (current.some((r) => (r as Record<string, any>).predecessorTaskID === predId)) { depsReused++; continue; }
+          if (current.some((r) => Number((r as Record<string, any>).predecessorTaskID) === predId)) { depsReused++; continue; }
         }
         await this.addTaskPredecessor(successorId, predId, edge.lagDays);
         depsCreated++;
@@ -3911,25 +3995,43 @@ export class AutotaskService {
       }
     }
 
+    // Project notes, by title (never written twice).
+    let notesCreated = 0;
+    let notesReused = 0;
+    const noteTitles = new Set(state.noteTitles);
+    for (const n of bp.notes) {
+      const title = n.title.trim();
+      if (noteTitles.has(title)) { notesReused++; continue; }
+      try {
+        await this.createProjectNote(projectId, { title, description: n.description, publish: 1, isAnnouncement: false } as Partial<AutotaskProjectNote>);
+        noteTitles.add(title);
+        notesCreated++;
+      } catch (e) {
+        errors.push({ step: 'note', ref: title, detail: (e as Error).message });
+      }
+    }
+
     const summary = {
       phasesCreated: phaseResults.filter((p) => p.id != null && !p.reused).length,
       phasesReused: phaseResults.filter((p) => p.reused).length,
       tasksCreated: taskResults.filter((t) => t.id != null && !t.reused).length,
       tasksReused: taskResults.filter((t) => t.reused).length,
+      tasksUpdated,
       dependenciesCreated: depsCreated,
       dependenciesReused: depsReused,
+      notesCreated,
+      notesReused,
     };
     return { summary, errors, phaseResults, taskResults };
   }
 
   /**
-   * Project extension (#46 §2.4): add phases / tasks / dependencies to an EXISTING
+   * Project extension (#46 §2.4): add phases / tasks / dependencies / notes to an EXISTING
    * project by id — a change order, an added phase, a recurring month, a new site,
    * or extra tasks. SAFE BY DEFAULT (dryRun !== false): reports what WOULD be added
-   * and writes nothing. Idempotent: phases/tasks already present (by title) are
-   * reused, not duplicated, so it's a safe merge. Same write-plan envelope + build
-   * engine as buildProjectFromPlan, but targets a known projectID instead of
-   * creating/finding a project.
+   * and writes nothing. Idempotent: phases / tasks already present (same title under the
+   * same parent) are reused, not duplicated, so it's a safe merge. Same write-plan envelope
+   * + build engine as buildProjectFromPlan, but targets a known projectID.
    */
   async extendProject(params: { projectID: number; plan: ProjectBuildPlan; dryRun?: boolean }): Promise<WritePlanResult> {
     const wp = new WritePlan();
@@ -3944,28 +4046,27 @@ export class AutotaskService {
 
     const bp = planProjectBuild(params.plan);
 
-    // Determine which phases/tasks are genuinely NEW (title not already present).
-    let existingPhaseTitles = new Set<string>();
-    let existingTaskTitles = new Set<string>();
+    // Which phases / tasks / notes are genuinely NEW.
+    let state: { phases: ExistingPhase[]; tasks: ExistingTask[]; noteTitles: string[] };
     try {
-      const [ph, tk] = await Promise.all([
-        this.searchPhases(params.projectID, { pageSize: 500 }),
-        this.searchTasks({ projectID: params.projectID, pageSize: 500 } as AutotaskQueryOptions),
-      ]);
-      existingPhaseTitles = new Set(ph.items.map((p) => (p.title ?? '').trim()).filter(Boolean));
-      existingTaskTitles = new Set(tk.items.map((t) => (t.title ?? '').trim()).filter(Boolean));
+      state = await this.getProjectBuildState(params.projectID, bp.notes.length > 0);
     } catch (e) {
       return wp.fail('load-existing', `Could not read project ${params.projectID} structure: ${(e as Error).message}`);
     }
-    const newPhases = bp.orderedPhases.filter((p) => !existingPhaseTitles.has(p.title.trim()));
-    const newTasks = bp.tasks.filter((t) => !existingTaskTitles.has(t.title.trim()));
-    wp.ok('diff', { newPhases: newPhases.length, newTasks: newTasks.length, reusedPhases: bp.orderedPhases.length - newPhases.length, reusedTasks: bp.tasks.length - newTasks.length });
+    const phaseMatch = matchPhases(bp.orderedPhases, state.phases);
+    const taskMatch = matchTasks(bp.tasks, phaseMatch, state.tasks);
+    const newPhases = bp.orderedPhases.filter((p) => !phaseMatch.has(p.ref));
+    const newTasks = bp.tasks.filter((t) => !taskMatch.has(t.ref));
+    const noteTitles = new Set(state.noteTitles);
+    const newNotes = bp.notes.filter((n) => !noteTitles.has(n.title.trim()));
+    wp.ok('diff', { newPhases: newPhases.length, newTasks: newTasks.length, newNotes: newNotes.length, reusedPhases: bp.orderedPhases.length - newPhases.length, reusedTasks: bp.tasks.length - newTasks.length });
 
     if (params.dryRun !== false) {
       return wp.dryRun({
         projectId: params.projectID,
         wouldAddPhases: newPhases.map((p) => p.title),
         wouldAddTasks: newTasks.map((t) => ({ title: t.title, estimatedHours: t.estimatedHours ?? 0, phaseRef: t.phaseRef ?? null })),
+        wouldAddNotes: newNotes.map((n) => n.title),
         plannedDependencies: bp.dependencies.length,
       });
     }
@@ -3978,6 +4079,85 @@ export class AutotaskService {
       tasks: applied.taskResults,
       ...(applied.errors.length > 0 ? { errors: applied.errors } : {}),
     });
+  }
+
+  /**
+   * Clone a project (#20 blueprint clone): its phases (nested), tasks, estimated hours, task types,
+   * descriptions and dependencies become a build plan for `companyID`, built by buildProjectFromPlan — so
+   * the clone is dry-run first, idempotent and resumable (build key "clone:<source>:<company>:<name>").
+   * Task dates move with the new start date (default today) by the same offset as the source project's
+   * start; resource assignments and the project lead are copied only with includeResources. Project notes,
+   * time, charges and attachments are not copied.
+   */
+  async cloneProject(o: {
+    sourceProjectID: number; companyID: number; projectName?: string | undefined; startDate?: string | undefined;
+    includeResources?: boolean | undefined; includeTaskDates?: boolean | undefined; buildKey?: string | undefined; dryRun?: boolean | undefined;
+  }): Promise<Record<string, any>> {
+    const wp = new WritePlan();
+    if (o.sourceProjectID == null) return wp.fail('source', 'sourceProjectID is required');
+    if (o.companyID == null || String(o.companyID) === '') return wp.fail('company', 'companyID is required (0 = your own company)');
+    const structure = await this.getProjectStructure(Number(o.sourceProjectID));
+    const src = structure.project as Record<string, any> | null;
+    if (!src) return wp.fail('source', `Project ${o.sourceProjectID} not found`);
+    const newStart = o.startDate ? String(o.startDate).slice(0, 10) : dayIn(new Date(), defaultTimeZone());
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(newStart)) return wp.fail('startDate', `startDate must be YYYY-MM-DD (got "${o.startDate}")`);
+    const shift = src.startDateTime ? dayOffset(String(src.startDateTime), newStart) : 0;
+
+    // Flatten the nested phases (parent before child) and collect every task.
+    const phases: Array<{ ref: string; title: string; parentRef?: string; description?: string }> = [];
+    const srcTasks: Array<{ task: Record<string, any>; phaseRef?: string }> = [];
+    const walk = (p: Record<string, any>, parentRef?: string) => {
+      const ref = `p${p.id}`;
+      phases.push({ ref, title: String(p.title ?? ''), ...(parentRef ? { parentRef } : {}), ...(p.description ? { description: String(p.description) } : {}) });
+      for (const t of p.tasks ?? []) srcTasks.push({ task: t, phaseRef: ref });
+      for (const c of p.children ?? []) walk(c, ref);
+    };
+    for (const p of structure.phases ?? []) walk(p);
+    for (const t of structure.unphasedTasks ?? []) srcTasks.push({ task: t });
+
+    const ids = srcTasks.map((x) => Number(x.task.id)).filter((n) => Number.isFinite(n));
+    const preds = await this.getProjectTaskPredecessors(ids);
+    if (preds.failedChunks.length) return wp.fail('dependencies', `Could not read the source project's task dependencies: ${preds.failedChunks[0]!.error}`);
+    const inProject = new Set(ids);
+    const predsOf = new Map<number, Array<{ pred: number; lag: number }>>();
+    for (const r of preds.items) {
+      const succ = Number(r.successorTaskID); const pred = Number(r.predecessorTaskID);
+      if (!inProject.has(succ) || !inProject.has(pred)) continue;
+      (predsOf.get(succ) ?? predsOf.set(succ, []).get(succ)!).push({ pred, lag: Number(r.lagDays) || 0 });
+    }
+    const withDates = o.includeTaskDates !== false && !!src.startDateTime;
+    const tasks = srcTasks.map(({ task: t, phaseRef }) => {
+      const ps = predsOf.get(Number(t.id)) ?? [];
+      return {
+        ref: `t${t.id}`, title: String(t.title ?? ''), estimatedHours: Number(t.estimatedHours) || 0,
+        ...(phaseRef ? { phaseRef } : {}), ...(t.taskType != null ? { taskType: Number(t.taskType) } : {}),
+        ...(t.description ? { description: String(t.description) } : {}),
+        ...(ps.length ? { predecessors: ps.map((x) => `t${x.pred}`), lagDays: Math.max(...ps.map((x) => x.lag)) } : {}),
+        ...(o.includeResources && t.assignedResourceID != null ? { assignedResourceID: Number(t.assignedResourceID), ...(t.assignedResourceRoleID != null ? { assignedResourceRoleID: Number(t.assignedResourceRoleID) } : {}) } : {}),
+        ...(withDates && shiftDay(t.startDateTime, shift) ? { startDate: shiftDay(t.startDateTime, shift)! } : {}),
+        ...(withDates && shiftDay(t.endDateTime, shift) ? { endDate: shiftDay(t.endDateTime, shift)! } : {}),
+      };
+    });
+    const name = String(o.projectName ?? src.projectName ?? `Project ${o.sourceProjectID}`).trim().slice(0, 100);
+    const plan: ProjectBuildPlan = { name, source: `Cloned from project ${src.id} "${src.projectName ?? ''}"`, phases, tasks };
+    const newEnd = src.endDateTime && src.startDateTime ? shiftDay(String(src.endDateTime), shift) : undefined;
+    const projectDefaults: Record<string, any> = {
+      ...(src.type != null ? { type: Number(src.type) } : {}), status: 1, startDate: newStart,
+      ...(newEnd && newEnd >= newStart ? { endDate: newEnd } : {}),
+      ...(o.includeResources && src.projectLeadResourceID != null ? { projectLeadResourceID: Number(src.projectLeadResourceID) } : {}),
+      ...(src.department != null ? { department: Number(src.department) } : {}),
+    };
+    const r = await this.buildProjectFromPlan({
+      plan, companyID: Number(o.companyID), buildKey: o.buildKey ?? `clone:${src.id}:${o.companyID}:${name}`, projectDefaults, dryRun: o.dryRun,
+    });
+    return {
+      ...r,
+      clonedFrom: {
+        projectID: src.id, projectName: src.projectName ?? null, phases: phases.length, tasks: tasks.length,
+        dependencies: tasks.reduce((n, t) => n + ((t as { predecessors?: string[] }).predecessors?.length ?? 0), 0),
+        shiftDays: withDates ? shift : null, resourcesCopied: o.includeResources === true,
+      },
+    };
   }
 
   /**

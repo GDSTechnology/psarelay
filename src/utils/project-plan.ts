@@ -37,6 +37,18 @@ export interface PlanTask {
   /** Zero-duration schedule marker (no effort, pins a date). */
   milestone?: boolean;
   description?: string;
+  /** Resource to assign (build step "resources"). The role defaults to the resource's default role. */
+  assignedResourceID?: number;
+  assignedResourceRoleID?: number;
+  /** Task dates, YYYY-MM-DD or ISO (build step "dates"; e.g. from autotask_calculate_project_schedule). */
+  startDate?: string;
+  endDate?: string;
+}
+
+/** A project note written by the build (build step "notes"); a note with the same title is never written twice. */
+export interface PlanNote {
+  title: string;
+  description: string;
 }
 
 export interface ProjectBuildPlan {
@@ -47,6 +59,8 @@ export interface ProjectBuildPlan {
   source?: string;
   phases: PlanPhase[];
   tasks: PlanTask[];
+  /** Project notes to write after the tasks (optional). */
+  notes?: PlanNote[];
 }
 
 export interface PlanValidationResult {
@@ -114,7 +128,19 @@ export function validateBuildPlan(plan: ProjectBuildPlan): PlanValidationResult 
     }
     if ((t.estimatedHours ?? 0) < 0) errors.push(`task "${t.ref}" has negative estimatedHours`);
     if (t.crewSize != null && t.crewSize <= 0) errors.push(`task "${t.ref}" has crewSize <= 0`);
+    const okDate = (v: unknown) => v == null || v === '' || !Number.isNaN(Date.parse(String(v)));
+    if (!okDate(t.startDate)) errors.push(`task "${t.ref}" has an unparseable startDate "${t.startDate}"`);
+    if (!okDate(t.endDate)) errors.push(`task "${t.ref}" has an unparseable endDate "${t.endDate}"`);
+    if (t.startDate && t.endDate && okDate(t.startDate) && okDate(t.endDate) && Date.parse(String(t.endDate)) < Date.parse(String(t.startDate))) {
+      errors.push(`task "${t.ref}" ends before it starts`);
+    }
+    if (t.assignedResourceRoleID != null && t.assignedResourceID == null) warnings.push(`task "${t.ref}" has a role but no resource — the role is ignored`);
   }
+
+  const notes = Array.isArray(plan.notes) ? plan.notes : [];
+  notes.forEach((n, i) => {
+    if (!n || !String(n.title ?? '').trim() || !String(n.description ?? '').trim()) errors.push(`note ${i + 1} needs a title and a description`);
+  });
 
   // Dependency cycle detection over resolvable predecessors
   detectRefCycle(
