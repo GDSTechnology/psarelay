@@ -10,6 +10,24 @@ Each entry lists the merge commit and the PR number. Brief section references
 
 ---
 
+## v6.19.0 — 2026-11-17 — Project charges, company locations, sales follow-ups (#20, #21, #22)
+
+- **Project charges** (#20): `autotask_get/search/create/update/delete_project_charge(s)` — the ticket-charge tools for
+  projects. Writes go through the project (POST / PATCH /Projects/{id}/Charges); create and update are financial
+  (`confirm:true`) and refuse internal text in the invoice name / description; update PATCHes only the given fields and
+  reads back old → new (shared with `update_ticket_charge`); delete reads first and refuses a billed charge.
+- **Company locations** (#22): `autotask_get/search/create/update_company_location(s)` through
+  /Companies/{id}/Locations. Company 0 works. Create returns an active location with the same name instead of a second
+  one; update sends only fields that differ and reads back. No delete in the API: retire with `isActive:false` (the
+  primary is refused — make another primary first).
+- **`autotask_create_sales_followup`** (#21 §9, the last staff tool): a Company To-Do for the caller (or a named
+  salesperson) on an opportunity, contact or company — the company is taken from the opportunity / contact and a
+  mismatch is refused. Due `when` (local, offset ISO, or a date → 09:00), `inDays` business days, or the next business
+  day 09:00 in the salesperson's timezone; action type "Sales" (or the closest label); the same open follow-up on that
+  day is returned instead of a second one; `dryRun` previews.
+- Not yet exercised against the live tenant: ProjectCharges / CompanyLocations writes and their field lists are taken
+  from the API reference.
+
 ## v6.18.0 — 2026-11-16 — Appointment tools: book, move, cancel, and find free time (#21)
 
 - Six tools in a new `appointments` category: `autotask_get_appointment`, `autotask_search_appointments` (overlap

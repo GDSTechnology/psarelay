@@ -1466,6 +1466,91 @@ export const TOOL_DEFINITIONS: McpTool[] = [
     }
   },
 
+  // Project Charge tools (materials / costs / expenses on a project; child of Projects)
+  {
+    name: 'autotask_get_project_charge',
+    description: 'Get one project charge (a material, cost or expense on a project) by ID.',
+    annotations: { title: 'Get project charge', readOnlyHint: true },
+    inputSchema: { type: 'object', properties: { chargeId: { type: 'number', description: 'The project charge ID' } }, required: ['chargeId'] }
+  },
+  {
+    name: 'autotask_search_project_charges',
+    description: 'Search project charges (materials, costs, expenses on projects). Full rows (name, quantity, unit price / cost, billed status, billing code). Give projectId, or projectIds for many projects in ONE call. Max 10 if unfiltered. Served from the Postgres mirror when it is on.',
+    annotations: { title: 'Search project charges', readOnlyHint: true },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        projectId: { type: 'number', description: 'Filter by project ID (recommended)' },
+        projectIds: { type: 'array', items: { type: 'number' }, description: 'Charges of up to 500 projects in one call' },
+        isBilled: { type: 'boolean', description: 'true = already billed (on an invoice), false = not yet billed' },
+        purchasedAfter: { type: 'string', description: 'Only charges dated on or after this date (ISO, e.g. 2026-10-01)' },
+        pageSize: { type: 'number', description: 'Number of results (default 25 filtered / 10 unfiltered, max 500)' }
+      }
+    }
+  },
+  {
+    name: 'autotask_create_project_charge',
+    description: 'FINANCIAL — create ONE charge on a project (materials, costs, expenses) with the values given. Name and description PRINT ON THE CUSTOMER\'S INVOICE: product only — text with cost, markup, supplier / pickup or serial notes is refused. Needs confirm:true after the user approved the values.',
+    annotations: { title: 'Create project charge', readOnlyHint: false, idempotentHint: false },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        projectID: { type: 'number', description: 'Project to add the charge to' },
+        chargeType: { type: 'number', description: 'Charge type picklist ID (autotask_get_field_info, entityType "ProjectCharges")' },
+        name: { type: 'string', description: 'Charge name — prints on the invoice (product / item only)' },
+        description: { type: 'string', description: 'Invoice description — product information only, no cost / markup / supplier / pickup / serial notes' },
+        unitQuantity: { type: 'number', description: 'Quantity of units' },
+        unitPrice: { type: 'number', description: 'Price per unit' },
+        unitCost: { type: 'number', description: 'Cost per unit' },
+        datePurchased: { type: 'string', description: 'Date the charge was incurred (YYYY-MM-DD)' },
+        productID: { type: 'number', description: 'Associated product ID' },
+        billingCodeID: { type: 'number', description: 'Billing code ID' },
+        isBillableToCompany: { type: 'boolean', description: 'Billable to the customer' },
+        status: { type: 'number', description: 'Charge status picklist ID (autotask_get_field_info, entityType "ProjectCharges")' },
+        allowInternalText: { type: 'boolean', description: 'Write name / description even though they look like internal notes (cost, markup, supplier, pickup, serial). Only for a false alarm.' },
+        confirm: { type: 'boolean', description: 'Must be true to write (financial change) — after the user approved the values.' }
+      },
+      required: ['projectID', 'name', 'chargeType']
+    }
+  },
+  {
+    name: 'autotask_update_project_charge',
+    description: "FINANCIAL — correct an existing project charge in place (name / invoice description, quantity, price, cost, billable, status). Only the fields given change. Sent through the charge's project (PATCH /Projects/{id}/Charges), then read back: the reply lists each field old → new. Never delete and recreate a charge to change it. Needs confirm:true.",
+    annotations: { title: 'Update project charge', readOnlyHint: false },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        chargeId: { type: 'number', description: 'The project charge ID to update' },
+        name: { type: 'string', description: 'Charge name — prints on the invoice (product / item only)' },
+        description: { type: 'string', description: 'Invoice description — product information only, no cost / markup / supplier / pickup / serial notes' },
+        unitQuantity: { type: 'number', description: 'Quantity of units' },
+        unitPrice: { type: 'number', description: 'Price per unit' },
+        unitCost: { type: 'number', description: 'Cost per unit' },
+        datePurchased: { type: 'string', description: 'Date the charge was incurred (YYYY-MM-DD)' },
+        productID: { type: 'number', description: 'Associated product ID' },
+        billingCodeID: { type: 'number', description: 'Billing code ID' },
+        isBillableToCompany: { type: 'boolean', description: 'Billable to the customer' },
+        status: { type: 'number', description: 'Charge status picklist ID (autotask_get_field_info, entityType "ProjectCharges")' },
+        allowInternalText: { type: 'boolean', description: 'Write name / description even though they look like internal notes (cost, markup, supplier, pickup, serial). Only for a false alarm.' },
+        confirm: { type: 'boolean', description: 'Must be true to write (financial change) — after the user approved the values.' }
+      },
+      required: ['chargeId']
+    }
+  },
+  {
+    name: 'autotask_delete_project_charge',
+    description: '⚠ DESTRUCTIVE — IRREVERSIBLE. Permanently deletes a project charge. Reads it first and says what was removed; a billed charge is refused. Confirm with the user before invoking.',
+    annotations: { title: 'Delete project charge (irreversible)', readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        chargeId: { type: 'number', description: 'The project charge ID to delete' },
+        projectId: { type: 'number', description: 'The project it should belong to (optional check; resolved from the charge)' }
+      },
+      required: ['chargeId']
+    }
+  },
+
   // Ticket History tools (read-only audit trail of field changes)
   {
     name: 'autotask_get_ticket_history',
@@ -6314,6 +6399,114 @@ export const TOOL_DEFINITIONS: McpTool[] = [
     }
   },
 
+  {
+    name: 'autotask_create_sales_followup',
+    description: 'Schedule a sales follow-up for me (or a named salesperson): a Company To-Do linked to the company and, when given, the contact and opportunity — the company is taken from the opportunity or contact. Due: when (local time, offset ISO, or a date → 09:00), or inDays business days, default the next business day at 09:00 in the salesperson\'s timezone; 15 minutes. Action type "Sales" (or the closest label). The same open follow-up on that day is returned instead of a second one. Use dryRun to preview.',
+    annotations: { title: 'Create sales follow-up', readOnlyHint: false, idempotentHint: true },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        note: { type: 'string', description: 'What to follow up on (required) — becomes the To-Do description' },
+        opportunityID: { type: 'number', description: 'Opportunity to follow up on (sets the company and, if it has one, the contact)' },
+        contactID: { type: 'number', description: 'Contact to follow up with (sets the company)' },
+        companyID: { type: 'number', description: 'Company (when there is no opportunity or contact)' },
+        when: { type: 'string', description: 'Due: local wall-clock "2026-11-20T14:00", offset ISO, or a date "2026-11-20" (→ 09:00 local)' },
+        inDays: { type: 'number', description: 'Due in N business days at 09:00 (alternative to when)' },
+        durationMinutes: { type: 'number', description: 'Length (default 15)' },
+        timeZone: { type: 'string', description: "IANA timezone for local times (default the salesperson's)" },
+        actionTypeName: { type: 'string', description: 'To-Do action type label (default "Sales"; e.g. "Phone Call", "Meeting")' },
+        assignedToResourceID: { type: 'number', description: 'Salesperson (default: the caller)' },
+        currentUser: { type: 'boolean', description: 'Assign to the calling user (default when no assignedToResourceID)' },
+        dryRun: { type: 'boolean', description: 'Return the follow-up that would be created without writing' }
+      },
+      required: ['note']
+    }
+  },
+
+  // Company Location tools (sites / addresses of a company; child of Companies)
+  {
+    name: 'autotask_get_company_location',
+    description: 'Get one company location (a site / address of a company) by ID.',
+    annotations: { title: 'Get company location', readOnlyHint: true },
+    inputSchema: { type: 'object', properties: { locationId: { type: 'number', description: 'The company location ID' } }, required: ['locationId'] }
+  },
+  {
+    name: 'autotask_search_company_locations',
+    description: "Search company locations (sites / addresses). Give companyId for one company's locations (company 0 is your own company). Active locations only unless includeInactive. Use the location id for a ticket's companyLocationID or a service call.",
+    annotations: { title: 'Search company locations', readOnlyHint: true },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        companyId: { type: 'number', description: 'Company whose locations to list' },
+        name: { type: 'string', description: 'Location name contains' },
+        city: { type: 'string', description: 'City contains' },
+        includeInactive: { type: 'boolean', description: 'Include deactivated locations (default false)' },
+        pageSize: { type: 'number', description: 'Max results (default 100, max 500)' }
+      }
+    }
+  },
+  {
+    name: 'autotask_create_company_location',
+    description: 'Add a location (site / address) to a company. If the company already has an active location with the same name, that one is returned and nothing is written (rerun-safe).',
+    annotations: { title: 'Create company location', readOnlyHint: false, idempotentHint: true },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        companyID: { type: 'number', description: 'Company to add the location to (0 = your own company)' },
+        name: { type: 'string', description: 'Location name (e.g. "Main Office", "Warehouse")' },
+        description: { type: 'string', description: 'Description' },
+        address1: { type: 'string', description: 'Street address' },
+        address2: { type: 'string', description: 'Address line 2' },
+        city: { type: 'string', description: 'City' },
+        state: { type: 'string', description: 'State / province' },
+        postalCode: { type: 'string', description: 'Postal / ZIP code' },
+        countryID: { type: 'number', description: 'Country ID (Countries entity)' },
+        phone: { type: 'string', description: 'Phone' },
+        alternatePhone1: { type: 'string', description: 'Alternate phone 1' },
+        alternatePhone2: { type: 'string', description: 'Alternate phone 2' },
+        fax: { type: 'string', description: 'Fax' },
+        isPrimary: { type: 'boolean', description: 'Make this the company\'s primary location' },
+        isTaxExempt: { type: 'boolean', description: 'Tax exempt' },
+        overrideCompanyTaxSettings: { type: 'boolean', description: 'Use this location\'s tax settings instead of the company\'s' },
+        taxRegionID: { type: 'number', description: 'Tax region ID' },
+        roundtripDistance: { type: 'number', description: 'Round-trip travel distance' },
+        dryRun: { type: 'boolean', description: 'Return what would be written without writing' }
+      },
+      required: ['companyID', 'name']
+    }
+  },
+  {
+    name: 'autotask_update_company_location',
+    description: "Change a company location: only the fields that differ are sent (PATCH through the company), then read back — the reply lists each field old → new. Locations can't be deleted: retire one with isActive:false (not the primary — make another location primary first).",
+    annotations: { title: 'Update company location', readOnlyHint: false },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        locationId: { type: 'number', description: 'The company location ID' },
+        isActive: { type: 'boolean', description: 'false = retire the location' },
+        name: { type: 'string', description: 'Location name (e.g. "Main Office", "Warehouse")' },
+        description: { type: 'string', description: 'Description' },
+        address1: { type: 'string', description: 'Street address' },
+        address2: { type: 'string', description: 'Address line 2' },
+        city: { type: 'string', description: 'City' },
+        state: { type: 'string', description: 'State / province' },
+        postalCode: { type: 'string', description: 'Postal / ZIP code' },
+        countryID: { type: 'number', description: 'Country ID (Countries entity)' },
+        phone: { type: 'string', description: 'Phone' },
+        alternatePhone1: { type: 'string', description: 'Alternate phone 1' },
+        alternatePhone2: { type: 'string', description: 'Alternate phone 2' },
+        fax: { type: 'string', description: 'Fax' },
+        isPrimary: { type: 'boolean', description: 'Make this the company\'s primary location' },
+        isTaxExempt: { type: 'boolean', description: 'Tax exempt' },
+        overrideCompanyTaxSettings: { type: 'boolean', description: 'Use this location\'s tax settings instead of the company\'s' },
+        taxRegionID: { type: 'number', description: 'Tax region ID' },
+        roundtripDistance: { type: 'number', description: 'Round-trip travel distance' },
+        dryRun: { type: 'boolean', description: 'Return what would be written without writing' }
+      },
+      required: ['locationId']
+    }
+  },
+
   // Contracts (write) and ContractServices CRUD
   {
     name: 'autotask_create_contract',
@@ -6721,8 +6914,8 @@ export const TOOL_CATEGORIES: Record<string, { description: string; tools: strin
     tools: ['autotask_test_connection', 'autotask_setup_check', 'autotask_report_gap', 'autotask_get_api_usage', 'autotask_get_actor_roster', 'autotask_get_operations', 'autotask_get_backpressure', 'autotask_shadow_status', 'autotask_shadow_query', 'autotask_shadow_aggregate', 'autotask_shadow_sync', 'autotask_list_queues', 'autotask_list_ticket_statuses', 'autotask_list_ticket_priorities', 'autotask_get_field_info', 'autotask_get_picklists', 'autotask_resolve_picklist_value', 'autotask_resolve_record_reference', 'autotask_whoami']
   },
   companies: {
-    description: 'Search, create, and update companies',
-    tools: ['autotask_search_companies', 'autotask_get_company', 'autotask_find_company_contact_candidates', 'autotask_find_duplicate_companies', 'autotask_report_customer_reengagement', 'autotask_merge_discover', 'autotask_merge_dependency_inventory', 'autotask_merge_build_plan', 'autotask_merge_verify', 'autotask_bulk_inactivate', 'autotask_create_company', 'autotask_update_company', 'autotask_get_company_site_configuration', 'autotask_update_company_site_configuration']
+    description: 'Search, create, and update companies and their locations',
+    tools: ['autotask_get_company_location', 'autotask_search_company_locations', 'autotask_create_company_location', 'autotask_update_company_location', 'autotask_search_companies', 'autotask_get_company', 'autotask_find_company_contact_candidates', 'autotask_find_duplicate_companies', 'autotask_report_customer_reengagement', 'autotask_merge_discover', 'autotask_merge_dependency_inventory', 'autotask_merge_build_plan', 'autotask_merge_verify', 'autotask_bulk_inactivate', 'autotask_create_company', 'autotask_update_company', 'autotask_get_company_site_configuration', 'autotask_update_company_site_configuration']
   },
   contacts: {
     description: 'Search and create contacts',
@@ -6733,8 +6926,8 @@ export const TOOL_CATEGORIES: Record<string, { description: string; tools: strin
     tools: ['autotask_search_tickets', 'autotask_get_ticket_details', 'autotask_set_ticket_contract', 'autotask_get_ticket_by_number', 'autotask_get_ticket_change_history', 'autotask_get_ticket_email_context', 'autotask_create_ticket', 'autotask_update_ticket', 'autotask_start_work_on_ticket', 'autotask_add_ticket_update', 'autotask_move_ticket_to_company', 'autotask_find_ticket_by_external_id', 'autotask_search_ticket_configuration_items', 'autotask_add_ticket_configuration_item', 'autotask_remove_ticket_configuration_item', 'autotask_get_ticket_note', 'autotask_search_ticket_notes', 'autotask_create_ticket_note', 'autotask_get_ticket_attachment', 'autotask_search_ticket_attachments', 'autotask_create_ticket_attachment', 'autotask_get_ticket_charge', 'autotask_search_ticket_charges', 'autotask_add_ticket_materials', 'autotask_create_ticket_charge', 'autotask_update_ticket_charge', 'autotask_delete_ticket_charge', 'autotask_get_ticket_history', 'autotask_search_ticket_history', 'autotask_search_notification_history', 'autotask_report_ticket_throughput', 'autotask_report_request_segmentation', 'autotask_search_checklist_libraries', 'autotask_get_checklist_library', 'autotask_apply_checklist_library_to_ticket', 'autotask_create_maintenance_ticket', 'autotask_search_ticket_checklist_items', 'autotask_create_ticket_checklist_item', 'autotask_update_ticket_checklist_item', 'autotask_delete_ticket_checklist_item']
   },
   projects: {
-    description: 'Search and create projects, tasks, phases, and project notes',
-    tools: ['autotask_search_projects', 'autotask_get_project', 'autotask_update_project', 'autotask_get_project_structure', 'autotask_get_complete_project_context', 'autotask_get_project_labor_summary', 'autotask_export_project_blueprint', 'autotask_calculate_project_schedule', 'autotask_extract_project_scope', 'autotask_classify_project', 'autotask_calculate_bom_labor', 'autotask_generate_project_labor_plan', 'autotask_build_project_from_plan', 'autotask_extend_project', 'autotask_create_project', 'autotask_link_project_commercial', 'autotask_search_tasks', 'autotask_get_task', 'autotask_get_task_by_number', 'autotask_create_task', 'autotask_update_task', 'autotask_complete_task', 'autotask_delete_task', 'autotask_delete_task_with_time', 'autotask_verify_task_time_entries', 'autotask_close_meeting_task', 'autotask_list_task_resources', 'autotask_add_task_resource', 'autotask_remove_task_resource', 'autotask_list_task_predecessors', 'autotask_add_task_predecessor', 'autotask_remove_task_predecessor', 'autotask_get_task_predecessor', 'autotask_search_task_predecessors', 'autotask_update_task_predecessor', 'autotask_list_phases', 'autotask_create_phase', 'autotask_get_phase', 'autotask_update_phase', 'autotask_get_project_note', 'autotask_search_project_notes', 'autotask_create_project_note', 'autotask_get_task_note', 'autotask_search_task_notes', 'autotask_create_task_note', 'autotask_search_project_attachments', 'autotask_search_task_attachments', 'autotask_get_project_attachment', 'autotask_create_project_attachment', 'autotask_get_task_attachment', 'autotask_create_task_attachment']
+    description: 'Search and create projects, tasks, phases, project notes and project charges',
+    tools: ['autotask_get_project_charge', 'autotask_search_project_charges', 'autotask_create_project_charge', 'autotask_update_project_charge', 'autotask_delete_project_charge', 'autotask_search_projects', 'autotask_get_project', 'autotask_update_project', 'autotask_get_project_structure', 'autotask_get_complete_project_context', 'autotask_get_project_labor_summary', 'autotask_export_project_blueprint', 'autotask_calculate_project_schedule', 'autotask_extract_project_scope', 'autotask_classify_project', 'autotask_calculate_bom_labor', 'autotask_generate_project_labor_plan', 'autotask_build_project_from_plan', 'autotask_extend_project', 'autotask_create_project', 'autotask_link_project_commercial', 'autotask_search_tasks', 'autotask_get_task', 'autotask_get_task_by_number', 'autotask_create_task', 'autotask_update_task', 'autotask_complete_task', 'autotask_delete_task', 'autotask_delete_task_with_time', 'autotask_verify_task_time_entries', 'autotask_close_meeting_task', 'autotask_list_task_resources', 'autotask_add_task_resource', 'autotask_remove_task_resource', 'autotask_list_task_predecessors', 'autotask_add_task_predecessor', 'autotask_remove_task_predecessor', 'autotask_get_task_predecessor', 'autotask_search_task_predecessors', 'autotask_update_task_predecessor', 'autotask_list_phases', 'autotask_create_phase', 'autotask_get_phase', 'autotask_update_phase', 'autotask_get_project_note', 'autotask_search_project_notes', 'autotask_create_project_note', 'autotask_get_task_note', 'autotask_search_task_notes', 'autotask_create_task_note', 'autotask_search_project_attachments', 'autotask_search_task_attachments', 'autotask_get_project_attachment', 'autotask_create_project_attachment', 'autotask_get_task_attachment', 'autotask_create_task_attachment']
   },
   time_and_billing: {
     description: 'Time entries, billing items, and expense management',
@@ -6770,7 +6963,7 @@ export const TOOL_CATEGORIES: Record<string, { description: string; tools: strin
   },
   company_todos: {
     description: 'Company To-Dos — CRM calendar follow-ups (distinct from tasks, checklist items, time entries, appointments, and service calls)',
-    tools: ['autotask_get_company_todo', 'autotask_search_company_todos', 'autotask_create_company_todo', 'autotask_update_company_todo', 'autotask_complete_company_todo', 'autotask_delete_company_todo']
+    tools: ['autotask_get_company_todo', 'autotask_search_company_todos', 'autotask_create_company_todo', 'autotask_update_company_todo', 'autotask_complete_company_todo', 'autotask_delete_company_todo', 'autotask_create_sales_followup']
   },
   commerce: {
     description: 'Sell through Autotask: an offering catalog (recurring plans / add-ons, one-time services), quotes, and orders that set up the customer, users, contract, services, delivery ticket and charges in one approved plan, then track it to its invoice and payment',
