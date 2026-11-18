@@ -20,6 +20,7 @@ import {
 import { checkProtectedCompanyMutation, isUnsafeCompanyName } from '../utils/company-guard';
 import { resolveActionType } from '../utils/company-todo';
 import { pickSalesActionType, resolveFollowupDue } from '../utils/sales-followup';
+import { alreadyAt as oppAlreadyAt, closeDateTime, pickOutcomeStatus, type Outcome } from '../utils/opportunity-close';
 import { buildContactSearchFilter, normalizeContactNote } from '../utils/contact';
 import { resolveCompanyOwnerResourceID } from '../utils/company-owner';
 import { computeBlockHourUsage } from '../utils/block-hours';
@@ -7070,6 +7071,105 @@ export class AutotaskService {
       this.logger.error(`Failed to update opportunity ${id}:`, error);
       throw error;
     }
+  }
+
+  /**
+   * Close an opportunity as won or lost (#20 §7). Status, win / loss reason come from live picklists by label;
+   * only fields this tenant has and can write are sent (closedDate, lostDate, win/lossReason(+Detail),
+   * probability 100 / 0). Rerun-safe: an opportunity already at the outcome writes nothing. A won opportunity
+   * can also get its delivery project (type Client, status New, linked by opportunityID); a project already
+   * linked to the opportunity is reused, never duplicated. dryRun returns the plan.
+   */
+  async closeOpportunity(o: {
+    opportunityID: number; outcome: Outcome; reason?: string | number | undefined; reasonDetail?: string | undefined; status?: string | number | undefined;
+    closedDate?: string | undefined; createProject?: boolean | undefined; projectName?: string | undefined; projectStartDate?: string | undefined;
+    projectEndDate?: string | undefined; projectLeadResourceID?: number | undefined; dryRun?: boolean | undefined;
+  }): Promise<Record<string, any>> {
+    const outcome = String(o.outcome ?? '').toLowerCase() as Outcome;
+    if (outcome !== 'won' && outcome !== 'lost') return { status: 'invalid', error: 'outcome must be "won" or "lost".' };
+    if (o.createProject && outcome !== 'won') return { status: 'invalid', error: 'createProject is only for a won opportunity.' };
+    const day = o.closedDate ? String(o.closedDate).slice(0, 10) : dayIn(new Date(), defaultTimeZone());
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return { status: 'invalid', error: `closedDate must be YYYY-MM-DD (got "${o.closedDate}").` };
+    const http = await this.ensureClient();
+    const opp = await http.get<Record<string, any>>('Opportunities', Number(o.opportunityID));
+    if (!opp) return { status: 'not_found', opportunityID: o.opportunityID };
+    const id = Number(opp.id ?? o.opportunityID);
+    const fields = await this.getFieldInfo('Opportunities');
+    const field = (name: string) => fields.find((x) => x.name === name);
+    const writable = (name: string) => { const x = field(name); return !!x && !x.isReadOnly; };
+    const statusValues = field('status')?.picklistValues;
+    const st = pickOutcomeStatus(statusValues, outcome, o.status);
+    if (!st.ok) return { status: 'invalid', opportunityID: id, error: st.error, choices: st.choices };
+
+    const patch: Record<string, any> = {};
+    const notSent: string[] = [];
+    const already = oppAlreadyAt(statusValues, opp.status, outcome, st.value);
+    if (!already) {
+      patch.status = st.value;
+      if (writable('closedDate')) patch.closedDate = closeDateTime(day);
+      if (outcome === 'lost' && writable('lostDate')) patch.lostDate = closeDateTime(day);
+      if (writable('probability')) patch.probability = outcome === 'won' ? 100 : 0;
+    }
+    const reasonField = outcome === 'won' ? 'winReason' : 'lossReason';
+    if (o.reason != null && String(o.reason).trim() !== '') {
+      const rf = field(reasonField);
+      if (rf?.isPickList && !rf.isReadOnly) {
+        const m = matchPicklist(rf.picklistValues, o.reason);
+        if (!m.ok) return { status: 'invalid', opportunityID: id, error: `Unknown ${outcome === 'won' ? 'win' : 'loss'} reason "${o.reason}".`, choices: m.choices };
+        if (Number(opp[reasonField]) !== m.value) patch[reasonField] = m.value;
+      } else notSent.push(reasonField);
+    }
+    const detailField = `${reasonField}Detail`;
+    if (o.reasonDetail != null && String(o.reasonDetail).trim()) {
+      if (writable(detailField)) { if (String(opp[detailField] ?? '') !== String(o.reasonDetail)) patch[detailField] = String(o.reasonDetail); } else notSent.push(detailField);
+    }
+
+    // Delivery project (won only): reuse one already linked to this opportunity.
+    let project: Record<string, any> | undefined;
+    if (o.createProject) {
+      const linked = (await http.query<Record<string, any>>('Projects', [{ op: 'eq', field: 'opportunityID', value: id }], { includeFields: ['id', 'projectName', 'status'], maxRecords: 5, noCache: true }))[0];
+      if (linked) project = { status: 'exists', projectID: linked.id, projectName: linked.projectName ?? null };
+      else {
+        const pick = async (fieldName: string, label: string, fallback: number) => {
+          const m = matchPicklist(await this.getPicklistValues('Projects', fieldName).catch(() => [] as PicklistValue[]), label);
+          return m.ok ? m.value : fallback;
+        };
+        const start = o.projectStartDate ? String(o.projectStartDate).slice(0, 10) : day;
+        const end = o.projectEndDate ? String(o.projectEndDate).slice(0, 10) : addDays(start, 30);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || end < start) return { status: 'invalid', opportunityID: id, error: `Project dates must be YYYY-MM-DD with the end on or after the start (got ${start} → ${end}).` };
+        const lead = o.projectLeadResourceID ?? opp.ownerResourceID;
+        const body: Record<string, any> = {
+          projectName: String(o.projectName ?? opp.title ?? `Opportunity ${id}`).slice(0, 100),
+          companyID: opp.companyID, type: await pick('type', 'Client', 5), status: await pick('status', 'New', 1),
+          startDateTime: `${start}T00:00:00Z`, endDateTime: `${end}T00:00:00Z`, opportunityID: id,
+          ...(lead != null && String(lead) !== '' ? { projectLeadResourceID: Number(lead) } : {}),
+        };
+        project = { status: 'planned', body };
+      }
+    }
+
+    const summary = { opportunityID: id, title: opp.title ?? null, companyID: opp.companyID ?? null, outcome, statusLabel: st.label, closedDate: day };
+    const changes = Object.fromEntries(Object.entries(patch).map(([k, v]) => [k, { from: opp[k] ?? null, to: v }]));
+    const extras = notSent.length ? { notSent, notSentNote: `This tenant has no writable ${notSent.join(', ')} on Opportunities — not sent.` } : {};
+    if (!Object.keys(patch).length && (!project || project.status === 'exists')) {
+      return { status: 'unchanged', ...summary, ...(project ? { project } : {}), ...extras, message: `Opportunity ${id} is already ${outcome}${project ? ` and has project ${project.projectID}` : ''} — nothing written.` };
+    }
+    if (o.dryRun !== false) return { status: 'planned', ...summary, changes, ...(project ? { project } : {}), ...extras };
+
+    if (Object.keys(patch).length) await http.update('Opportunities', id, patch);
+    const after = await http.get<Record<string, any>>('Opportunities', id).catch(() => null);
+    const notApplied = after ? Object.keys(patch).filter((k) => !(k.endsWith('Date') ? String(after[k] ?? '').slice(0, 10) === String(patch[k]).slice(0, 10) : String(after[k] ?? '') === String(patch[k]))) : [];
+    if (project?.status === 'planned') {
+      try {
+        const pid = await this.createProject(project.body);
+        project = { status: 'created', projectID: pid, projectName: project.body.projectName };
+      } catch (e) {
+        return { status: 'partial', ...summary, changes, notApplied, ...extras, project: { status: 'failed', error: e instanceof Error ? e.message : String(e), body: project.body },
+          message: `Opportunity ${id} was closed as ${outcome}, but creating the delivery project failed. A re-run skips the close and retries the project.` };
+      }
+    }
+    this.logger.info(`Opportunity ${id} closed as ${outcome}${project?.projectID ? ` (project ${project.projectID})` : ''}`);
+    return { status: 'closed', ...summary, changes, notApplied, verified: !!after, ...(project ? { project } : {}), ...extras };
   }
 
   // =====================================================

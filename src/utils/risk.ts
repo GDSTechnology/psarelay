@@ -27,6 +27,7 @@ export const FINANCIAL_TOOLS = new Set<string>([
   'autotask_update_quote_item',
   'autotask_create_opportunity',
   'autotask_update_opportunity',
+  'autotask_close_opportunity', // dry-run first; the write needs confirm:true
   'autotask_create_ticket_charge',
   'autotask_add_ticket_materials', // dry-run first; the write needs confirm:true
   'autotask_update_ticket_charge',

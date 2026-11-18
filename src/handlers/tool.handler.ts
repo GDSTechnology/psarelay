@@ -44,6 +44,7 @@ const DRY_RUN_FIRST_TOOLS = new Set<string>([
   'autotask_add_ticket_materials',
   'autotask_create_service',
   'autotask_update_service',
+  'autotask_close_opportunity',
 ]);
 import { applyBillingTreatment } from '../utils/billing-treatment.js';
 import { defaultTimeZone, durationHours, normalizeTimestamp, validTimeZone } from '../utils/timezone.js';
@@ -3358,6 +3359,28 @@ export class AutotaskToolHandler {
       ['autotask_create_opportunity', async (a) => {
         const id = await s.createOpportunity({ title: a.title, companyID: a.companyId, ownerResourceID: a.ownerResourceId, status: a.status, stage: a.stage, projectedCloseDate: a.projectedCloseDate, startDate: a.startDate, probability: a.probability ?? 50, amount: a.amount ?? 0, cost: a.cost ?? 0, useQuoteTotals: a.useQuoteTotals ?? true, totalAmountMonths: a.totalAmountMonths, contactID: a.contactId, description: a.description, opportunityCategoryID: a.opportunityCategoryID });
         return { result: id, message: `Successfully created opportunity with ID: ${id}` };
+      }],
+      ['autotask_close_opportunity', async (a) => {
+        const r = await s.closeOpportunity({
+          opportunityID: Number(a.opportunityId ?? a.opportunityID), outcome: a.outcome, reason: a.reason, reasonDetail: a.reasonDetail, status: a.status,
+          closedDate: a.closedDate, createProject: a.createProject === true, projectName: a.projectName, projectStartDate: a.projectStartDate,
+          projectEndDate: a.projectEndDate, projectLeadResourceID: a.projectLeadResourceID, dryRun: a.dryRun !== false,
+        });
+        const fmt = (v: unknown) => (v === null || v === undefined || v === '' ? '(empty)' : String(v));
+        const changed = Object.entries((r.changes ?? {}) as Record<string, { from: unknown; to: unknown }>).map(([k, c]) => `${k}: ${fmt(c.from)} → ${fmt(c.to)}`).join('; ');
+        const opp = `opportunity ${r.opportunityID}${r.title ? ` "${r.title}"` : ''}`;
+        const proj = r.project ? (r.project.status === 'planned' ? ` Delivery project to create: "${r.project.body?.projectName}" (${String(r.project.body?.startDateTime).slice(0, 10)} → ${String(r.project.body?.endDateTime).slice(0, 10)}).`
+          : r.project.status === 'created' ? ` Created delivery project ${r.project.projectID} "${r.project.projectName}".`
+          : r.project.status === 'exists' ? ` Project ${r.project.projectID} is already linked to it — reused.` : '') : '';
+        const note = r.notSentNote ? ` ${r.notSentNote}` : '';
+        const choices = r.choices ? ` Choices: ${formatChoices(r.choices)}.` : '';
+        const msg: Record<string, string> = {
+          planned: `DRY RUN (nothing written) — close ${opp} as ${String(r.outcome).toUpperCase()} (status "${r.statusLabel}", ${r.closedDate}). ${changed || 'Status already set.'}${proj}${note} Show this to the user; after they approve, call again with dryRun:false and confirm:true.`,
+          closed: `Closed ${opp} as ${String(r.outcome).toUpperCase()} (${r.verified ? 'verified by reading it back' : 'could not be read back yet'}). ${changed}${proj}${r.notApplied?.length ? ` WARNING: Autotask did not apply ${r.notApplied.join(', ')}.` : ''}${note}`,
+          unchanged: `${r.message}${note}`, partial: `PARTLY WRITTEN — ${r.message} Error: ${r.project?.error}`,
+          not_found: `Opportunity ${r.opportunityID} not found — nothing written.`, invalid: `NOTHING WRITTEN — ${r.error}${choices}`,
+        };
+        return { result: r, message: msg[r.status] ?? r.status };
       }],
       ['autotask_update_opportunity', async (a) => {
         const updates: Record<string, any> = {};
