@@ -10,6 +10,21 @@ Each entry lists the merge commit and the PR number. Brief section references
 
 ---
 
+## v6.20.0 — 2026-11-17 — Close an opportunity as won or lost, with its delivery project (#20)
+
+- `autotask_close_opportunity` (financial, **dry run by default**; the write needs `dryRun:false` + `confirm:true`):
+  won → status "Closed", lost → "Lost", resolved by label from the tenant's picklist (`status` overrides a renamed
+  label). Sets the close date (default today; noon UTC so the day never shifts), lost date, probability 100 / 0 and the
+  win / loss reason + detail — only the fields this tenant has and can write; a missing one is reported (`notSent`),
+  an unknown reason label returns the choices. Already closed that way (won also counts "Implemented") → nothing written.
+- Won + `createProject:true` also creates the delivery project: type Client, status New, linked by `opportunityID`,
+  lead = the opportunity owner, start = close date, 30 days unless dates are given. A project already linked to the
+  opportunity is reused, never duplicated; a project failure after the close is reported as `partial` and a re-run
+  retries only the project. Read back after writing (`notApplied`).
+- `autotask_update_opportunity` now points to it for closing.
+- Not yet exercised against the live tenant: the win / loss reason and date field names come from the API reference
+  and are only sent when the live field list has them.
+
 ## v6.19.0 — 2026-11-17 — Project charges, company locations, sales follow-ups (#20, #21, #22)
 
 - **Project charges** (#20): `autotask_get/search/create/update/delete_project_charge(s)` — the ticket-charge tools for

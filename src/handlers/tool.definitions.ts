@@ -3793,8 +3793,8 @@ export const TOOL_DEFINITIONS: McpTool[] = [
     description:
       'Update a sales opportunity. Uses the Autotask collection PATCH convention ' +
       '(the item route does not work in the GDS zone). To close an opportunity, ' +
-      'set status (e.g. 2=Lost, 3=Closed) — confirm with the user first for an ' +
-      'ambiguous request, then read it back with autotask_get_opportunity.',
+      'prefer autotask_close_opportunity (won / lost with reason, close date and an ' +
+      'optional delivery project).',
     annotations: { title: 'Update opportunity', readOnlyHint: false },
     inputSchema: {
       type: 'object',
@@ -3812,6 +3812,36 @@ export const TOOL_DEFINITIONS: McpTool[] = [
         description: { type: 'string', description: 'Opportunity description' }
       },
       required: ['opportunityId']
+    }
+  },
+  {
+    name: 'autotask_close_opportunity',
+    description:
+      'FINANCIAL — close a sales opportunity as WON or LOST. Status, win reason and loss reason are resolved by label ' +
+      'from this tenant\'s picklists (won → "Closed", lost → "Lost"); sets the close date (default today), lost date, ' +
+      'probability 100 / 0, and the reason + detail where the tenant has those fields. For a won deal, createProject:true ' +
+      'also creates the delivery project (type Client, status New, linked to the opportunity, lead = the opportunity owner, ' +
+      '30 days unless dates are given) — a project already linked to the opportunity is reused. Already closed that way → ' +
+      'nothing written. DEFAULTS TO A DRY RUN: show the plan to the user, then call again with dryRun:false and confirm:true.',
+    annotations: { title: 'Close opportunity (won / lost)', readOnlyHint: false, idempotentHint: true },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        opportunityId: { type: 'number', description: 'Opportunity to close' },
+        outcome: { type: 'string', enum: ['won', 'lost'], description: 'won or lost' },
+        reason: { type: 'string', description: 'Win / loss reason label (or id) from the tenant picklist, e.g. "Price", "Competitor"; an unknown label returns the choices' },
+        reasonDetail: { type: 'string', description: 'Free-text detail on why it was won / lost' },
+        closedDate: { type: 'string', description: 'Close date YYYY-MM-DD (default today)' },
+        status: { type: 'string', description: 'Override the status label to set (only when the tenant renamed "Closed" / "Lost")' },
+        createProject: { type: 'boolean', description: 'Won only: also create the delivery project' },
+        projectName: { type: 'string', description: 'Delivery project name (default the opportunity title)' },
+        projectStartDate: { type: 'string', description: 'Project start YYYY-MM-DD (default the close date)' },
+        projectEndDate: { type: 'string', description: 'Project end YYYY-MM-DD (default start + 30 days)' },
+        projectLeadResourceID: { type: 'number', description: 'Project lead (default the opportunity owner)' },
+        dryRun: { type: 'boolean', description: 'Default true: return the plan without writing. false (with confirm:true) to close.' },
+        confirm: { type: 'boolean', description: 'Must be true with dryRun:false — after the user approved the plan.' }
+      },
+      required: ['opportunityId', 'outcome']
     }
   },
 
@@ -6935,7 +6965,7 @@ export const TOOL_CATEGORIES: Record<string, { description: string; tools: strin
   },
   financial: {
     description: 'Quotes, quote items, opportunities, invoices, and contracts',
-    tools: ['autotask_get_quote', 'autotask_search_quotes', 'autotask_create_quote', 'autotask_get_quote_item', 'autotask_search_quote_items', 'autotask_create_quote_item', 'autotask_update_quote_item', 'autotask_delete_quote_item', 'autotask_get_opportunity', 'autotask_search_opportunities', 'autotask_create_opportunity', 'autotask_update_opportunity', 'autotask_search_invoices', 'autotask_get_invoice_details', 'autotask_search_contracts', 'autotask_get_contract', 'autotask_list_expiring_contracts', 'autotask_create_contract', 'autotask_create_contracts_bulk', 'autotask_update_contract', 'autotask_create_contract_service', 'autotask_update_contract_service', 'autotask_get_contract_service', 'autotask_search_contract_services', 'autotask_get_contract_billed_units', 'autotask_report_contract_recurring_revenue', 'autotask_report_contract_labour_basis', 'autotask_get_contract_milestone', 'autotask_search_contract_milestones', 'autotask_create_contract_milestone', 'autotask_update_contract_milestone', 'autotask_report_block_hour_usage', 'autotask_report_ticket_charges', 'autotask_report_unbilled', 'autotask_report_project_pl', 'autotask_report_sla_compliance', 'autotask_generate_sla_framework', 'autotask_report_sla_coverage', 'autotask_assign_contract_sla', 'autotask_analyze_ticket_billing_gaps', 'autotask_report_ticket_billing_gaps']
+    tools: ['autotask_get_quote', 'autotask_search_quotes', 'autotask_create_quote', 'autotask_get_quote_item', 'autotask_search_quote_items', 'autotask_create_quote_item', 'autotask_update_quote_item', 'autotask_delete_quote_item', 'autotask_get_opportunity', 'autotask_search_opportunities', 'autotask_create_opportunity', 'autotask_update_opportunity', 'autotask_close_opportunity', 'autotask_search_invoices', 'autotask_get_invoice_details', 'autotask_search_contracts', 'autotask_get_contract', 'autotask_list_expiring_contracts', 'autotask_create_contract', 'autotask_create_contracts_bulk', 'autotask_update_contract', 'autotask_create_contract_service', 'autotask_update_contract_service', 'autotask_get_contract_service', 'autotask_search_contract_services', 'autotask_get_contract_billed_units', 'autotask_report_contract_recurring_revenue', 'autotask_report_contract_labour_basis', 'autotask_get_contract_milestone', 'autotask_search_contract_milestones', 'autotask_create_contract_milestone', 'autotask_update_contract_milestone', 'autotask_report_block_hour_usage', 'autotask_report_ticket_charges', 'autotask_report_unbilled', 'autotask_report_project_pl', 'autotask_report_sla_compliance', 'autotask_generate_sla_framework', 'autotask_report_sla_coverage', 'autotask_assign_contract_sla', 'autotask_analyze_ticket_billing_gaps', 'autotask_report_ticket_billing_gaps']
   },
   products_and_services: {
     description: 'Products, services, and service bundles catalog',
