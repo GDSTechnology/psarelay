@@ -66,7 +66,17 @@ Each entry lists the merge commit and the PR number. Brief section references
   - Tickets has no `ticketAdditionalContacts` field.
   - Both the top-level query and `GET /Tickets/{id}/AdditionalContacts` work.
   - `Contacts.primaryContact` is a queryable boolean, and `eq true` is accepted.
-- Not yet written live: no add or remove has been run against the tenant.
+- Live write test, run with the user's approval on a closed internal test ticket with an internal mailbox contact.
+  Each step returned what it should, and the ticket ended as it started, with no additional contacts:
+  - list showed 0 contacts;
+  - the add returned `added` (verified);
+  - a second add returned `already_there`;
+  - list showed 1 contact;
+  - remove without `confirm:true` returned `confirmation_required`;
+  - remove with it returned `removed` (verified);
+  - list showed 0 contacts again.
+
+  This exercised the child POST / DELETE on `/Tickets/{id}/AdditionalContacts`.
 
 ## v6.22.0 — 2026-11-18 — Contract terms: blocks, rates, exclusions, retainers, ticket purchases (#22)
 
