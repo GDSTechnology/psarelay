@@ -4829,6 +4829,21 @@ export const TOOL_DEFINITIONS: McpTool[] = [
     }
   },
   {
+    name: 'autotask_report_contract_labour',
+    description: 'Labour on one contract, month by month: hours covered by the contract vs excluded (an excluded role or work type — billed separately) vs non-billable; block hours drawn with block-hour factors applied; for block-hour contracts each month\'s allocation, remaining, overage, forfeited (use-it-or-lose-it) and burn %; totals by role and by resource (with names); up to 50 excluded entries to check; and a forecast for the current month (calendar-day pace and the trailing 3-month average vs the allocation: under / on_track / over). Draw uses hoursToBill (Autotask\'s rounded hours) when set. Read-only. Default window: the last 6 months including this one (max 24).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        contractID: { type: 'number', description: 'Contract to report on' },
+        fromMonth: { type: 'string', description: 'First month YYYY-MM (default 5 months before toMonth)' },
+        toMonth: { type: 'string', description: 'Last month YYYY-MM (default the current month)' },
+        asOf: { type: 'string', description: 'Report date YYYY-MM-DD (default today) — decides which months have ended and the forecast pace' }
+      },
+      required: ['contractID']
+    },
+    annotations: { title: 'Contract labour report', readOnlyHint: true }
+  },
+  {
     name: 'autotask_report_block_hour_usage',
     description: 'Block-hour contract usage report. For block-hour contracts (monthly, use-it-or-lose-it), returns per-month allocated vs used hours with billable overage and forfeited (expired) hours, plus contract totals and the current month in progress. Scope to one contract, one company, or all active block-hour contracts (default).',
     inputSchema: {
@@ -6902,6 +6917,7 @@ export const TOOL_DEFINITIONS: McpTool[] = [
   {
     name: 'autotask_delete_contract_term',
     description: '⚠ DESTRUCTIVE — IRREVERSIBLE. Remove a billing term from a contract — only kinds Autotask lets you delete: blockHourFactor, rate, exclusionBillingCode, exclusionRole (blocks, role costs, retainers and ticket purchases can only be updated). The dry run shows the row. SAFE BY DEFAULT: dry run unless dryRun:false; the write needs confirm:true. Confirm with the user before invoking.',
+    annotations: { title: 'Delete contract term', readOnlyHint: false, destructiveHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -6912,8 +6928,7 @@ export const TOOL_DEFINITIONS: McpTool[] = [
         confirm: { type: 'boolean', description: 'Required (true) for the delete' }
       },
       required: ['kind', 'contractID', 'id']
-    },
-    annotations: { title: 'Delete contract term', readOnlyHint: false, destructiveHint: true }
+    }
   },
   {
     name: 'autotask_raw_request',
@@ -7111,7 +7126,7 @@ export const TOOL_CATEGORIES: Record<string, { description: string; tools: strin
   },
   financial: {
     description: 'Quotes, quote items, opportunities, invoices, and contracts',
-    tools: ['autotask_get_quote', 'autotask_search_quotes', 'autotask_create_quote', 'autotask_get_quote_item', 'autotask_search_quote_items', 'autotask_create_quote_item', 'autotask_update_quote_item', 'autotask_delete_quote_item', 'autotask_get_opportunity', 'autotask_search_opportunities', 'autotask_create_opportunity', 'autotask_update_opportunity', 'autotask_close_opportunity', 'autotask_search_invoices', 'autotask_get_invoice_details', 'autotask_search_contracts', 'autotask_get_contract', 'autotask_list_expiring_contracts', 'autotask_create_contract', 'autotask_create_contracts_bulk', 'autotask_update_contract', 'autotask_create_contract_service', 'autotask_update_contract_service', 'autotask_get_contract_service', 'autotask_search_contract_services', 'autotask_get_contract_billed_units', 'autotask_report_contract_recurring_revenue', 'autotask_report_contract_labour_basis', 'autotask_get_contract_milestone', 'autotask_search_contract_milestones', 'autotask_create_contract_milestone', 'autotask_update_contract_milestone', 'autotask_list_contract_terms', 'autotask_create_contract_term', 'autotask_update_contract_term', 'autotask_delete_contract_term', 'autotask_report_block_hour_usage', 'autotask_report_ticket_charges', 'autotask_report_unbilled', 'autotask_report_project_pl', 'autotask_report_sla_compliance', 'autotask_generate_sla_framework', 'autotask_report_sla_coverage', 'autotask_assign_contract_sla', 'autotask_analyze_ticket_billing_gaps', 'autotask_report_ticket_billing_gaps']
+    tools: ['autotask_get_quote', 'autotask_search_quotes', 'autotask_create_quote', 'autotask_get_quote_item', 'autotask_search_quote_items', 'autotask_create_quote_item', 'autotask_update_quote_item', 'autotask_delete_quote_item', 'autotask_get_opportunity', 'autotask_search_opportunities', 'autotask_create_opportunity', 'autotask_update_opportunity', 'autotask_close_opportunity', 'autotask_search_invoices', 'autotask_get_invoice_details', 'autotask_search_contracts', 'autotask_get_contract', 'autotask_list_expiring_contracts', 'autotask_create_contract', 'autotask_create_contracts_bulk', 'autotask_update_contract', 'autotask_create_contract_service', 'autotask_update_contract_service', 'autotask_get_contract_service', 'autotask_search_contract_services', 'autotask_get_contract_billed_units', 'autotask_report_contract_recurring_revenue', 'autotask_report_contract_labour_basis', 'autotask_get_contract_milestone', 'autotask_search_contract_milestones', 'autotask_create_contract_milestone', 'autotask_update_contract_milestone', 'autotask_list_contract_terms', 'autotask_create_contract_term', 'autotask_update_contract_term', 'autotask_delete_contract_term', 'autotask_report_contract_labour', 'autotask_report_block_hour_usage', 'autotask_report_ticket_charges', 'autotask_report_unbilled', 'autotask_report_project_pl', 'autotask_report_sla_compliance', 'autotask_generate_sla_framework', 'autotask_report_sla_coverage', 'autotask_assign_contract_sla', 'autotask_analyze_ticket_billing_gaps', 'autotask_report_ticket_billing_gaps']
   },
   products_and_services: {
     description: 'Products, services, and service bundles catalog',

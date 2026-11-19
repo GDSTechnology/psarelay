@@ -24,6 +24,7 @@ import { alreadyAt as oppAlreadyAt, closeDateTime, pickOutcomeStatus, type Outco
 import { buildContactSearchFilter, normalizeContactNote } from '../utils/contact';
 import { resolveCompanyOwnerResourceID } from '../utils/company-owner';
 import { computeBlockHourUsage } from '../utils/block-hours';
+import { addMonths, computeContractLabour, monthRange } from '../utils/contract-labour-report';
 import { CONTRACT_TERMS, CONTRACT_TERM_KINDS, CONTRACT_TYPE_LABELS, contractTypeProblem, findSameTerm, isContractTermKind, planContractTermFields, termNotApplied, type ContractTermKind, type ContractTermOp } from '../utils/contract-terms';
 import { computeRecurringRevenue, RecurringRevenue, RecurringLine } from '../utils/recurring-revenue';
 import {
@@ -5702,6 +5703,91 @@ export class AutotaskService {
     const record = (await this.contractTermRows(kind, contractID, [{ field: 'id', op: 'eq', value: id }]).catch(() => []))[0] ?? null;
     const notApplied = termNotApplied(body, record);
     return plan.done('created', { id, record, verified: !!record && !notApplied.length, ...(notApplied.length ? { notApplied } : {}) });
+  }
+
+  /**
+   * Labour on one contract, month by month (#22 §10): covered vs excluded
+   * (role / work type) vs non-billable, block hours drawn with block-hour
+   * factors, allocation / balance / overage / forfeit per month, by role and by
+   * resource, and a forecast for the current month. Read-only. Default window:
+   * the last 6 months including the current one.
+   */
+  async reportContractLabour(opts: { contractID: number; fromMonth?: string; toMonth?: string; asOf?: string }): Promise<Record<string, any>> {
+    const contractID = Number(opts.contractID);
+    const asOf = opts.asOf ? new Date(`${String(opts.asOf).slice(0, 10)}T12:00:00Z`) : new Date();
+    if (Number.isNaN(asOf.getTime())) return { status: 'invalid', detail: `asOf "${opts.asOf}" is not a date` };
+    const month = (v: string | undefined, name: string) => {
+      if (v == null || v === '') return null;
+      const m = String(v).slice(0, 7);
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(m)) throw new Error(`${name} must be YYYY-MM`);
+      return m;
+    };
+    let toMonth: string, fromMonth: string;
+    try {
+      toMonth = month(opts.toMonth, 'toMonth') ?? asOf.toISOString().slice(0, 7);
+      fromMonth = month(opts.fromMonth, 'fromMonth') ?? addMonths(toMonth, -5);
+    } catch (e) { return { status: 'invalid', detail: (e as Error).message }; }
+    if (fromMonth > toMonth) return { status: 'invalid', detail: 'fromMonth is after toMonth' };
+    if (monthRange(fromMonth, toMonth).length > 24) return { status: 'invalid', detail: 'at most 24 months per report' };
+
+    const contract = await this.getContract(contractID) as Record<string, any> | null;
+    if (!contract) return { status: 'not_found', contractID };
+    const http = await this.ensureClient();
+    const [blocks, factors, exRoles, exCodes] = await Promise.all([
+      this.contractTermRows('block', contractID),
+      this.contractTermRows('blockHourFactor', contractID),
+      this.contractTermRows('exclusionRole', contractID),
+      this.contractTermRows('exclusionBillingCode', contractID),
+    ]);
+    const entries = await http.query<Record<string, any>>('TimeEntries', [
+      { op: 'eq', field: 'contractID', value: contractID },
+      { op: 'gte', field: 'dateWorked', value: `${fromMonth}-01T00:00:00Z` },
+      { op: 'lt', field: 'dateWorked', value: `${addMonths(toMonth, 1)}-01T00:00:00Z` },
+    ], { includeFields: ['id', 'dateWorked', 'hoursWorked', 'hoursToBill', 'isNonBillable', 'roleID', 'billingCodeID', 'resourceID', 'ticketID', 'taskID'], maxRecords: 10000 });
+    const truncated = entries.length >= 10000;
+
+    const report = computeContractLabour(entries as any, {
+      blocks: blocks.map((b) => ({ hours: Number(b.hours) || 0, startDate: String(b.startDate ?? '') })),
+      factors: factors.map((f) => ({ roleID: Number(f.roleID), blockHourMultiplier: Number(f.blockHourMultiplier) })),
+      excludedRoleIDs: exRoles.map((r) => Number(r.roleID)),
+      excludedBillingCodeIDs: exCodes.map((r) => Number(r.billingCodeID)),
+    }, { fromMonth, toMonth, asOf });
+
+    // Names, best effort.
+    const roleIds = [...new Set([...report.byRole.map((r) => r.roleID), ...exRoles.map((r) => Number(r.roleID))].filter((x): x is number => x != null))];
+    const codeIds = [...new Set(exCodes.map((r) => Number(r.billingCodeID)))];
+    const named = async (entity: string, ids: number[], field: string) => {
+      const out = new Map<number, string>();
+      if (!ids.length) return out;
+      try {
+        for (let i = 0; i < ids.length; i += 200) {
+          const rows = await http.query<Record<string, any>>(entity, [{ op: 'in', field: 'id', value: ids.slice(i, i + 200) }], { includeFields: ['id', field], maxRecords: 500 });
+          for (const r of rows) if (r[field]) out.set(Number(r.id), String(r[field]));
+        }
+      } catch { /* names are optional */ }
+      return out;
+    };
+    const [roleNames, codeNames, resourceNames] = await Promise.all([
+      named('Roles', roleIds, 'name'), named('BillingCodes', codeIds, 'name'),
+      this.getResourceNames(report.byResource.map((r) => r.resourceID)),
+    ]);
+
+    const c = contract;
+    return {
+      status: 'ok',
+      contract: { id: c.id, contractName: c.contractName, companyID: c.companyID, contractType: c.contractType, contractTypeLabel: CONTRACT_TYPE_LABELS[Number(c.contractType)] ?? null, status: c.status, startDate: c.startDate, endDate: c.endDate },
+      terms: {
+        blocks: blocks.length,
+        factors: factors.map((f) => ({ roleID: Number(f.roleID), roleName: roleNames.get(Number(f.roleID)) ?? null, blockHourMultiplier: Number(f.blockHourMultiplier) })),
+        excludedRoles: exRoles.map((r) => ({ roleID: Number(r.roleID), roleName: roleNames.get(Number(r.roleID)) ?? null })),
+        excludedWorkTypes: exCodes.map((r) => ({ billingCodeID: Number(r.billingCodeID), name: codeNames.get(Number(r.billingCodeID)) ?? null })),
+      },
+      ...report,
+      byRole: report.byRole.map((r) => ({ ...r, roleName: r.roleID != null ? roleNames.get(r.roleID) ?? null : null })),
+      byResource: report.byResource.map((r) => ({ ...r, resourceName: r.resourceID != null ? resourceNames.get(r.resourceID) ?? null : null })),
+      timeEntries: entries.length,
+      ...(truncated ? { truncated: true, note: 'over 10,000 time entries — narrow the window' } : {}),
+    };
   }
 
   /**

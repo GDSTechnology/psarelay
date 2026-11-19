@@ -2821,6 +2821,16 @@ export class AutotaskToolHandler {
         const r = await s.listExpiringContracts(a);
         return { result: r, message: `Found ${r.length} contracts with end dates within ${a.daysAhead ?? 60} days` };
       }],
+      ['autotask_report_contract_labour', async (a) => {
+        const r = await s.reportContractLabour({ contractID: a.contractID, fromMonth: a.fromMonth, toMonth: a.toMonth, asOf: a.asOf });
+        if (r.status === 'not_found') return { result: r, message: `Contract ${a.contractID} not found` };
+        if (r.status === 'invalid') return { result: r, message: `Not run — ${r.detail}` };
+        const t = r.totals, f = r.forecast;
+        const excluded = t.excludedRoleHours + t.excludedWorkTypeHours;
+        const block = t.allocated != null ? `; ${t.drawn} of ${t.allocated} block hour(s) drawn, ${t.overage} over, ${t.forfeited} forfeited` : '';
+        const fc = f && f.allocated ? `. ${f.month} forecast: ${f.projectedDrawn} of ${f.allocated} (${f.status})` : '';
+        return { result: r, message: `Contract ${a.contractID} ${r.window.from}..${r.window.to}: ${t.coveredHours} h covered, ${Math.round(excluded * 100) / 100} h excluded, ${t.nonBillableHours} h non-billable${block}${fc}${r.truncated ? ' — TRUNCATED, narrow the window' : ''}` };
+      }],
       ['autotask_report_block_hour_usage', async (a) => {
         const r = await s.getBlockHourUsage({ contractID: a.contractID, companyID: a.companyID, includeInactive: a.includeInactive });
         const over = r.filter((c) => (c.billableOverageHours ?? 0) > 0).length;
