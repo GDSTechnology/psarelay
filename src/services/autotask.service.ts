@@ -165,6 +165,11 @@ function pushEq(filters: QueryFilter[], field: string, value: unknown): void {
   }
 }
 
+/** Contacts.isActive is an INTEGER (0 / 1) in Autotask; accept a boolean too. */
+function isActiveFlag(v: unknown): boolean {
+  return v === true || v === 1 || v === '1' || String(v).toLowerCase() === 'true';
+}
+
 /**
  * Merge the `options.filter` escape hatch (array of QueryFilter or a flat
  * `field → value` object) into the in-progress filters list. Previously
@@ -799,8 +804,14 @@ export class AutotaskService {
       if (options.isActive !== undefined) {
         filters.push({ op: 'eq', field: 'isActive', value: options.isActive });
       }
+      // primaryContact is the company's primary contact flag (boolean); {companyID, primaryContact: true} → that one contact.
+      if (options.primaryContact !== undefined) {
+        filters.push({ op: 'eq', field: 'primaryContact', value: isActiveFlag(options.primaryContact) });
+      }
 
-      return await this.queryPaged<AutotaskContact>('Contacts', filters, options, { maxPageSize: 200 });
+      const r = await this.queryPaged<AutotaskContact>('Contacts', filters, options, { maxPageSize: 200 });
+      // Always a true/false primaryContact on each item (Autotask / the shadow may give 0/1 or leave it out).
+      return { ...r, items: r.items.map((c) => ({ ...c, primaryContact: isActiveFlag((c as Record<string, unknown>).primaryContact) })) };
     } catch (error) {
       this.logger.error('Failed to search contacts:', error);
       throw error;
@@ -1589,6 +1600,119 @@ export class AutotaskService {
     const http = await this.ensureClient();
     await http.delete('TicketAdditionalConfigurationItems', associationID);
     this.logger.info(`Removed ticket additional-CI association ${associationID}`);
+  }
+
+  // =====================================================
+  // TicketAdditionalContacts (#266) — contacts on a ticket besides the Ticket
+  // Contact (Tickets.contactID). Child of Tickets: {id, ticketID, contactID};
+  // create / query / delete, no update (Autotask REST reference). Rules from the
+  // same reference: the contact must belong to the ticket's company; at most 30
+  // per ticket; the Ticket Contact can't also be an additional contact (adding
+  // it CLEARS the Ticket Contact field — so it is refused here).
+  // Writes go through /Tickets/{id}/AdditionalContacts like the other ticket
+  // children (Charges, ChecklistItems); reads use the top-level query.
+  // =====================================================
+
+  /** Raw association rows on a ticket, optionally for one contact. */
+  private async ticketAdditionalContactRows(ticketID: number, contactID?: number): Promise<Array<{ id: number; ticketID: number; contactID: number }>> {
+    const http = await this.ensureClient();
+    const filters: QueryFilter[] = [{ op: 'eq', field: 'ticketID', value: ticketID }];
+    pushEq(filters, 'contactID', contactID);
+    return http.query('TicketAdditionalContacts', filters, { maxRecords: 500, noCache: true });
+  }
+
+  /** The ticket's additional contacts with name / e-mail / active flag. */
+  async listTicketAdditionalContacts(ticketID: number): Promise<Record<string, any>> {
+    const http = await this.ensureClient();
+    const ticket = await http.get<Record<string, any>>('Tickets', ticketID);
+    if (!ticket) return { status: 'not_found', ticketID };
+    const rows = await this.ticketAdditionalContactRows(ticketID);
+    const ids = [...new Set(rows.map((r) => Number(r.contactID)))];
+    const people = ids.length
+      ? await http.query<Record<string, any>>('Contacts', [{ op: 'in', field: 'id', value: ids }], { includeFields: ['id', 'firstName', 'lastName', 'emailAddress', 'isActive', 'companyID'], maxRecords: 500 })
+      : [];
+    const byId = new Map(people.map((p) => [Number(p.id), p]));
+    const contacts = rows.map((r) => {
+      const p = byId.get(Number(r.contactID));
+      return {
+        associationID: r.id,
+        contactID: Number(r.contactID),
+        name: p ? [p.firstName, p.lastName].filter(Boolean).join(' ') || null : null,
+        email: p?.emailAddress || null,
+        isActive: p ? isActiveFlag(p.isActive) : null,
+      };
+    });
+    return {
+      status: 'ok',
+      ticketID,
+      ticketNumber: ticket.ticketNumber ?? null,
+      companyID: ticket.companyID ?? null,
+      ticketContactID: ticket.contactID ?? null,
+      count: contacts.length,
+      contacts,
+    };
+  }
+
+  /**
+   * Add a contact to a ticket's additional contacts. Idempotent: already there →
+   * nothing written. Refuses another company's contact, an inactive contact, the
+   * Ticket Contact itself, and a 31st contact. Reads the link back afterwards;
+   * a create that errors but landed is reported as added, never posted twice.
+   */
+  async addTicketAdditionalContact(ticketID: number, contactID: number): Promise<Record<string, any>> {
+    const http = await this.ensureClient();
+    const ticket = await http.get<Record<string, any>>('Tickets', ticketID);
+    if (!ticket) return { status: 'not_found', ticketID, detail: `Ticket ${ticketID} not found` };
+    const contact = await http.get<Record<string, any>>('Contacts', contactID);
+    if (!contact) return { status: 'contact_not_found', ticketID, contactID, detail: `Contact ${contactID} not found` };
+    const base = { ticketID, ticketNumber: ticket.ticketNumber ?? null, contactID, contactName: [contact.firstName, contact.lastName].filter(Boolean).join(' ') || null, email: contact.emailAddress || null };
+    // Company 0 is the tenant's own company — compare with != null, never truthiness.
+    if (ticket.companyID == null || contact.companyID == null || Number(contact.companyID) !== Number(ticket.companyID)) {
+      return { ...base, status: 'refused', reason: 'company_mismatch', ticketCompanyID: ticket.companyID ?? null, contactCompanyID: contact.companyID ?? null, detail: `Contact ${contactID} belongs to company ${contact.companyID ?? '?'}, the ticket to company ${ticket.companyID ?? '?'} — Autotask only allows the ticket's own company's contacts. Nothing written.` };
+    }
+    if (!isActiveFlag(contact.isActive)) {
+      return { ...base, status: 'refused', reason: 'inactive', detail: `Contact ${contactID} is inactive. Nothing written.` };
+    }
+    if (ticket.contactID != null && Number(ticket.contactID) === contactID) {
+      return { ...base, status: 'already_ticket_contact', detail: `Contact ${contactID} is already the ticket's contact — adding it as an additional contact would clear the Ticket Contact field. Nothing written.` };
+    }
+    const rows = await this.ticketAdditionalContactRows(ticketID);
+    const existing = rows.find((r) => Number(r.contactID) === contactID);
+    if (existing) return { ...base, status: 'already_there', associationID: existing.id, detail: `Contact ${contactID} is already on the ticket. Nothing written.` };
+    if (rows.length >= 30) {
+      return { ...base, status: 'refused', reason: 'limit', count: rows.length, detail: `The ticket already has ${rows.length} additional contacts (Autotask allows 30). Nothing written.` };
+    }
+    let associationID: number | null = null;
+    let createError: unknown = null;
+    try {
+      associationID = await http.childCreate('Tickets', ticketID, 'AdditionalContacts', { ticketID, contactID });
+    } catch (err) {
+      createError = err;
+    }
+    // Read back — also tells a failed create from one that landed anyway.
+    let after: Array<{ id: number }> | null;
+    try { after = await this.ticketAdditionalContactRows(ticketID, contactID); } catch { after = null; }
+    if (createError) {
+      if (after?.length) {
+        this.logger.warn(`TicketAdditionalContacts create on ticket ${ticketID} errored but the link exists (association ${after[0]!.id})`);
+        return { ...base, status: 'added', associationID: after[0]!.id, verified: true, note: 'The create answered an error but the link is on the ticket.' };
+      }
+      throw createError;
+    }
+    this.logger.info(`Added contact ${contactID} to ticket ${ticketID} additional contacts (association ${associationID})`);
+    return { ...base, status: 'added', associationID: after?.[0]?.id ?? associationID, verified: after ? after.length > 0 : null };
+  }
+
+  /** Remove a contact from a ticket's additional contacts (the link only, never the contact). */
+  async removeTicketAdditionalContact(ticketID: number, contactID: number): Promise<Record<string, any>> {
+    const http = await this.ensureClient();
+    const rows = await this.ticketAdditionalContactRows(ticketID, contactID);
+    if (!rows.length) return { status: 'not_there', ticketID, contactID, detail: `Contact ${contactID} is not an additional contact on ticket ${ticketID}. Nothing written.` };
+    for (const r of rows) await http.childDelete('Tickets', ticketID, 'AdditionalContacts', r.id);
+    let after: unknown[] | null;
+    try { after = await this.ticketAdditionalContactRows(ticketID, contactID); } catch { after = null; }
+    this.logger.info(`Removed contact ${contactID} from ticket ${ticketID} additional contacts`);
+    return { status: 'removed', ticketID, contactID, associationIDs: rows.map((r) => r.id), verified: after ? after.length === 0 : null };
   }
 
   /**

@@ -10,6 +10,32 @@ Each entry lists the merge commit and the PR number. Brief section references
 
 ---
 
+## Unreleased — 2026-11-19 — Ticket additional contacts (#266)
+
+- **`autotask_list_ticket_additional_contacts {ticketID}`**: the contacts on a ticket besides its Ticket Contact
+  (TicketAdditionalContacts), each with contactID, name, e-mail and active flag, plus the ticket's company and
+  Ticket Contact.
+- **`autotask_add_ticket_additional_contact {ticketID, contactID}`**: safe to repeat — a contact already on the
+  ticket answers `already_there` and nothing is written. Refuses, writing nothing:
+  - a contact from another company than the ticket's (company 0 safe);
+  - an inactive contact (`isActive` 0 / 1);
+  - the ticket's own Ticket Contact (`already_ticket_contact`), because Autotask would clear the Ticket Contact field;
+  - a 31st contact (Autotask's limit is 30).
+
+  Writes through `/Tickets/{id}/AdditionalContacts` and reads the link back. A create that errors but landed is
+  reported as added.
+- **`autotask_remove_ticket_additional_contact {ticketID, contactID}`**: removes the link only, never the contact,
+  and needs `confirm:true`. A contact not on the ticket answers `not_there`.
+- **Fix:** `ticketAdditionalContacts` on `autotask_create_ticket` / `autotask_update_ticket` was copied into the
+  Tickets payload, but Tickets has no such field (it is a child entity). Those ids are now added after the ticket
+  write through the guarded add, and each one's outcome is in the result.
+- **`autotask_search_contacts` (plain mode)**:
+  - every item now carries **`primaryContact`**, always `true` / `false` (Autotask may send 0 / 1 or leave it out);
+  - a new optional `primaryContact` boolean filter: `{companyID, primaryContact: true}` returns the account's primary
+    contact in one call. Before, the flag was only on `get_contact`, one read per contact.
+- Use case: Nexus reboot reminders e-mail one ticket note to the device contact and the account's primary contact.
+- Not yet exercised against the live tenant. The URL shape and rules follow the Autotask REST reference.
+
 ## v6.22.0 — 2026-11-18 — Contract terms: blocks, rates, exclusions, retainers, ticket purchases (#22)
 
 - **`autotask_list_contract_terms`**: every billing term on a contract in one read — prepaid hour blocks,

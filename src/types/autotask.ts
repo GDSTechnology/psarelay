@@ -658,6 +658,8 @@ export interface AutotaskQueryOptions {
   searchTerm?: string;
   companyID?: number;
   isActive?: boolean | number;
+  /** Contacts only: the company's primary contact flag. */
+  primaryContact?: boolean;
 }
 
 // Extended query options for more advanced queries

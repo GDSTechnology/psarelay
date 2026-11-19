@@ -4,6 +4,14 @@ Task management: Task Master (`task-master` CLI; config in `.taskmaster/`).
 Workflow defaults (commits, changelog, memory) come from the global `~/.claude/CLAUDE.md`.
 
 ## Learnings
+## Learnings - 2026-11-19
+
+- **`TicketAdditionalContacts` is a child entity of Tickets** (`id`, `ticketID`, `contactID`; create / query /
+  delete, no update) — Tickets has NO `ticketAdditionalContacts` field, so create/update_ticket used to send a
+  field Autotask doesn't have. Per the REST reference: contact must be on the ticket's company; max 30; the
+  Ticket Contact can't also be one — **adding it clears `Tickets.contactID`** (the add tool refuses it). Child
+  URL `/Tickets/{id}/AdditionalContacts` not yet verified live (#266).
+
 ## Learnings - 2026-10-26
 
 - **Microsoft 365 Copilot's MCP connector registers by DCR but refuses a registration without a `client_secret`**
