@@ -28,6 +28,7 @@ by service name (`http://psarelay:8080`). From outside the private network the k
 | `GET /api/v1` | What the key may read and write, its caps and use, how fresh each entity's copy is |
 | `POST /api/v1/{Entity}/query` | Autotask's query body (`filter`, `MaxRecords`, `IncludeFields`); rows in id order, page with `id > last` |
 | `GET /api/v1/{Entity}/{id}` | One record (`{ item }`, `null` when missing) |
+| `GET /api/v1/{Entity}/entityInformation/fields` | Autotask's field list with picklist values and labels |
 | `POST /api/v1/{Entity}` | Create (send an `Idempotency-Key`) |
 | `PATCH /api/v1/{Entity}` | Update `{ id, …only the fields to change }`. PUT is refused: Autotask blanks every field left out |
 | `DELETE /api/v1/{Entity}/{id}` | Delete, when the key may delete |
@@ -41,6 +42,10 @@ Content-Type: application/json
 { "filter": [ { "op": "exist", "field": "PortalUserId", "udf": true } ],
   "IncludeFields": ["id", "companyID", "isActive", "lastModifiedDate", "userDefinedFields"] }
 ```
+
+**Labels for ids.** Add `"PicklistLabels": true` to a query (or `?picklistLabels=true` to a by-id read) and each row
+gets `picklistLabels` with the tenant's label for every picklist field it carries — e.g. a company's
+`companyType: 1` comes with `picklistLabels.companyType: "Customer"` (Lead, Prospect, Vendor, Partner …).
 
 ## Good to know
 

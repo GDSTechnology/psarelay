@@ -32,6 +32,7 @@ The API listens on the MCP port (8080), next to `/mcp`. Every call sends `Author
 | `GET /api/v1` | What this key may read, its caps and this hour's use, and how fresh each entity's copy is |
 | `POST /api/v1/{Entity}/query` | `{ items, pageDetails, hasMore }`. The body is Autotask's: `{ filter, MaxRecords?, IncludeFields? }` |
 | `GET /api/v1/{Entity}/{id}` | `{ item }`. `item` is `null` when the record is not there, as Autotask answers |
+| `GET /api/v1/{Entity}/entityInformation/fields` | Autotask's `{ fields }`: every field with its type, read-only / required flags and picklist values with labels |
 | `POST /api/v1/{Entity}` | Create. Autotask's answer (`{ itemId }`) |
 | `PATCH /api/v1/{Entity}` | Update: `{ id, …only the fields to change }` → `{ itemId }` |
 | `DELETE /api/v1/{Entity}/{id}` | Delete, when the key may delete |
@@ -60,6 +61,27 @@ Rows come back in **ascending id order**, from the mirror and from Autotask alik
 500). While `hasMore` is true, ask again with `{ "op": "gt", "field": "id", "value": <last id> }` added.
 `pageDetails.nextPageUrl` is always `null`, because Autotask's own paging link is never passed on.
 
+### Picklist labels
+
+Picklist fields hold ids (`Companies.companyType` 1, `Tickets.status` 5 …). For a CRM or report that shows them,
+ask for the labels with the rows:
+
+- a query with `"PicklistLabels": true` in the body, or a by-id read with `?picklistLabels=true`;
+- each row then carries `picklistLabels: { field: label }` for the picklist fields in it (after `IncludeFields`). An id
+  the picklist doesn't have (an inactive or deleted value) gives `null`; the ids themselves are unchanged.
+
+```json
+{ "id": 812, "companyName": "Example Co", "companyType": 8,
+  "picklistLabels": { "companyType": "Partner", "classification": null, "territoryID": "East" } }
+```
+
+The labels come from Autotask's field list for the entity — one Autotask call per entity per hour at most (the field
+list is cached; `AUTOTASK_CACHE_TTL_FIELDS_SECONDS`). If it can't be loaded the rows still come back, without
+`picklistLabels`, and `X-PSArelay-Labels: unavailable` says so (`ok` otherwise). To keep a lookup table on your side
+instead, read `GET /api/v1/{Entity}/entityInformation/fields` (any entity the key may read or write); its
+`picklistValues` are `{ value, label, isActive, … }`. Company types are the tenant's own list: Customer, Lead, Prospect,
+Dead, Cancellation, Vendor, Partner by default, plus any the MSP added.
+
 ### Where an answer came from
 
 | Header | Meaning |
@@ -67,6 +89,7 @@ Rows come back in **ascending id order**, from the mirror and from Autotask alik
 | `X-PSArelay-Source` | `mirror` (no Autotask call) or `live` |
 | `X-PSArelay-Age` | From the mirror: how old the copy is, in seconds |
 | `X-PSArelay-Mirror-Miss` | Why the mirror couldn't answer (see below) |
+| `X-PSArelay-Labels` | With `PicklistLabels`: `ok`, or `unavailable` when the field list couldn't be loaded |
 
 ## What can be read
 

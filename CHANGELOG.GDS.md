@@ -10,7 +10,18 @@ Each entry lists the merge commit and the PR number. Brief section references
 
 ---
 
-## Unreleased — Sales-cycle correlation, checks and repair (#20 §7)
+## v6.26.0 — 2026-11-19 — Integration API: picklist labels (company type for CRM sync)
+
+- **`PicklistLabels`** on `/api/v1` reads: a query with `"PicklistLabels": true` (or a by-id read with
+  `?picklistLabels=true`) adds `picklistLabels: { field: label }` to each row, so a CRM sync shows a company's type
+  (Customer, Lead, Prospect, Vendor, Partner …) and every other picklist by the tenant's own labels. An unknown id
+  gives `null`; if the field list can't be loaded the rows still come back and `X-PSArelay-Labels: unavailable`
+  says so.
+- **`GET /api/v1/{Entity}/entityInformation/fields`**: Autotask's field list (picklist values and labels included)
+  for any entity the key may read or write, for systems that keep their own lookup table. Cached by the HTTP layer
+  (1 h), so at most one Autotask call per entity per hour.
+
+## v6.25.0 — 2026-11-19 — Sales-cycle correlation, checks and repair (#20 §7)
 
 - **`autotask_report_sales_cycle`** (read-only): each opportunity with the quotes, contracts and projects that carry
   its `opportunityID` (Autotask's own links — nothing inferred is stored), its outcome from the status label (Closed /
