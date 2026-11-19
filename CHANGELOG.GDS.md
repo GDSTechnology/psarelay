@@ -10,7 +10,18 @@ Each entry lists the merge commit and the PR number. Brief section references
 
 ---
 
-## Unreleased — 2026-11-19 — Ticket additional contacts (#266)
+## v6.24.0 — 2026-11-19 — Contract labour report: covered vs excluded, burn, forecast (#22)
+
+- **`autotask_report_contract_labour`**: one contract, month by month (default the last 6 months, max 24). Each time
+  entry is classified as covered, excluded (an excluded role or work type from the contract's terms — billed
+  separately) or non-billable. Block hours drawn apply the contract's block-hour factors to `hoursToBill` (else
+  `hoursWorked`). For block-hour contracts each month shows allocated, remaining, overage, forfeited (ended months
+  only, use-it-or-lose-it) and burn %. Totals by role and by resource with names, up to 50 excluded entries to
+  check, and a current-month forecast: calendar-day pace and the trailing 3-month average against the allocation
+  (`under` / `on_track` / `over`). Read-only; one time-entry query scoped to the contract and the window.
+- `autotask_report_block_hour_usage` is unchanged (all contracts, no factors / exclusions).
+- Not yet exercised against the live tenant.
+## v6.23.0 — 2026-11-19 — Ticket additional contacts (#266)
 
 - **`autotask_list_ticket_additional_contacts {ticketID}`**: the contacts on a ticket besides its Ticket Contact
   (TicketAdditionalContacts), each with contactID, name, e-mail and active flag, plus the ticket's company and
