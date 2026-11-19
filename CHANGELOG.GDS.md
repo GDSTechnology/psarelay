@@ -10,6 +10,21 @@ Each entry lists the merge commit and the PR number. Brief section references
 
 ---
 
+## v6.22.0 — 2026-11-18 — Contract terms: blocks, rates, exclusions, retainers, ticket purchases (#22)
+
+- **`autotask_list_contract_terms`**: every billing term on a contract in one read — prepaid hour blocks,
+  block-hour factors, role rates, role costs, excluded work types and roles, retainer purchases, ticket purchases —
+  with the contract type and counts. A kind that fails to read is reported, the rest still come back.
+- **`autotask_create_contract_term` / `update_contract_term` / `delete_contract_term`**: one family, `kind` picks the
+  entity. Writes go through `/Contracts/{id}/{Child}`; fields are checked against the live field list (unknown and
+  read-only fields refused, required ones enforced, picklists such as status / paymentType by exact label). A block
+  must be on a Block Hours contract, a retainer on a Retainer one, a ticket purchase on a Per Ticket one. A create
+  matching an existing row (same role / billing code, or same dates and quantity) is a duplicate unless
+  `allowDuplicate`; a create that errors but landed is reported, never posted twice. Only the operations Autotask
+  allows per kind (exclusions: create / delete; blocks, role costs, retainers, ticket purchases: create / update).
+  Dry run by default, `confirm:true` for the write, read back afterwards.
+- Not yet exercised against the live tenant (entity operations follow the Autotask REST reference).
+
 ## v6.21.0 — 2026-11-18 — Resumable project build with resources, dates and notes; clone a project (#46, #20)
 
 - **`autotask_clone_project`**: copy a project's phases (nested), tasks, hours, task types, descriptions and

@@ -24,6 +24,7 @@ import { alreadyAt as oppAlreadyAt, closeDateTime, pickOutcomeStatus, type Outco
 import { buildContactSearchFilter, normalizeContactNote } from '../utils/contact';
 import { resolveCompanyOwnerResourceID } from '../utils/company-owner';
 import { computeBlockHourUsage } from '../utils/block-hours';
+import { CONTRACT_TERMS, CONTRACT_TERM_KINDS, CONTRACT_TYPE_LABELS, contractTypeProblem, findSameTerm, isContractTermKind, planContractTermFields, termNotApplied, type ContractTermKind, type ContractTermOp } from '../utils/contract-terms';
 import { computeRecurringRevenue, RecurringRevenue, RecurringLine } from '../utils/recurring-revenue';
 import {
   computeReorder, computeCloseouts, computeStaleStock, classifyStaleLines, StaleBucket,
@@ -5457,6 +5458,126 @@ export class AutotaskService {
       this.logger.error(`Failed to update contract milestone ${id}:`, error);
       throw error;
     }
+  }
+
+  // =====================================================
+  // Contract terms (#22) — blocks, block-hour factors, role rates / costs,
+  // exclusions, retainers, ticket purchases. One family, `kind` picks the
+  // entity (utils/contract-terms). Writes go through /Contracts/{id}/{Child},
+  // are dry runs unless dryRun === false, and are read back afterwards.
+  // =====================================================
+
+  private async contractTermRows(kind: ContractTermKind, contractID: number, extra: QueryFilter[] = []): Promise<Array<Record<string, any>>> {
+    const http = await this.ensureClient();
+    return http.query<Record<string, any>>(CONTRACT_TERMS[kind].entity, [{ field: 'contractID', op: 'eq', value: contractID }, ...extra], { maxRecords: 500, noCache: true });
+  }
+
+  /** Every term on a contract (or the kinds asked for); a kind that fails to read is reported, not thrown. */
+  async listContractTerms(contractID: number, kinds?: ContractTermKind[]): Promise<Record<string, any>> {
+    const contract = await this.getContract(contractID);
+    if (!contract) return { status: 'not_found', contractID };
+    const want = kinds?.length ? kinds : CONTRACT_TERM_KINDS;
+    const terms: Record<string, Array<Record<string, any>>> = {};
+    const errors: Array<{ kind: string; error: string }> = [];
+    for (const kind of want) {
+      try { terms[kind] = await this.contractTermRows(kind, contractID); }
+      catch (e) { errors.push({ kind, error: e instanceof Error ? e.message : String(e) }); }
+    }
+    const c = contract as Record<string, any>;
+    const counts = Object.fromEntries(Object.entries(terms).map(([k, v]) => [k, v.length]));
+    return {
+      status: 'ok',
+      contract: { id: c.id, contractName: c.contractName, companyID: c.companyID, contractType: c.contractType, contractTypeLabel: CONTRACT_TYPE_LABELS[Number(c.contractType)] ?? null, status: c.status, startDate: c.startDate, endDate: c.endDate },
+      counts, terms, ...(errors.length ? { errors } : {}),
+    };
+  }
+
+  /**
+   * Create / update / delete one contract term. Validates the kind, operation,
+   * contract (exists, right type), the row (update / delete: belongs to the
+   * contract) and the fields against the live field list; a create that
+   * matches an existing row on the kind's identity fields is a duplicate
+   * (allowDuplicate to add it anyway). Dry run unless dryRun === false.
+   */
+  async writeContractTerm(input: {
+    op: ContractTermOp; kind: string; contractID: number; id?: number;
+    fields?: Record<string, unknown>; dryRun?: boolean; allowDuplicate?: boolean;
+  }): Promise<WritePlanResult> {
+    const plan = new WritePlan();
+    const { op, kind } = input;
+    if (!isContractTermKind(kind)) return plan.fail('kind', `unknown kind "${kind}" (one of ${CONTRACT_TERM_KINDS.join(', ')})`);
+    const spec = CONTRACT_TERMS[kind];
+    if (!spec.ops.includes(op)) return plan.fail('operation', `Autotask does not allow ${op} on ${spec.entity} (allowed: ${spec.ops.join(', ')})${op === 'update' && spec.ops.includes('delete') ? ' — delete it and create it again' : ''}${op === 'delete' && spec.ops.includes('update') ? ' — update it instead (e.g. its dates or status)' : ''}`);
+    plan.ok('kind', { kind, entity: spec.entity, op });
+
+    const contractID = Number(input.contractID);
+    if (!Number.isInteger(contractID) || contractID <= 0) return plan.fail('contract', 'contractID (a positive integer) is required');
+    const contract = await this.getContract(contractID) as Record<string, any> | null;
+    if (!contract) return plan.fail('contract', `Contract ${contractID} not found`);
+    const typeProblem = op === 'create' ? contractTypeProblem(kind, contract.contractType) : null;
+    if (typeProblem) return plan.fail('contract_type', typeProblem);
+    plan.ok('contract', { id: contractID, contractName: contract.contractName, contractType: contract.contractType });
+
+    let existing: Record<string, any> | null = null;
+    if (op !== 'create') {
+      const id = Number(input.id);
+      if (!Number.isInteger(id) || id <= 0) return plan.fail('row', 'id (a positive integer) of the term is required');
+      existing = (await this.contractTermRows(kind, contractID, [{ field: 'id', op: 'eq', value: id }]))[0] ?? null;
+      if (!existing) return plan.fail('row', `${spec.entity} ${id} not found on contract ${contractID}`);
+      plan.ok('row', { id });
+    }
+
+    const http = await this.ensureClient();
+    const path = `/Contracts/${contractID}/${spec.child}`;
+
+    if (op === 'delete') {
+      if (input.dryRun !== false) return plan.dryRun({ planned: { method: 'DELETE', path: `${path}/${existing!.id}` }, before: existing });
+      await http.childDelete('Contracts', contractID, spec.child, existing!.id);
+      const after = (await this.contractTermRows(kind, contractID, [{ field: 'id', op: 'eq', value: existing!.id }]).catch(() => null));
+      return plan.done('deleted', { id: existing!.id, before: existing, verified: after != null && after.length === 0 });
+    }
+
+    const fieldInfo = await this.getFieldInfo(spec.entity);
+    const fp = planContractTermFields(op, input.fields ?? {}, fieldInfo, existing);
+    if (!fp.ok) return plan.fail('fields', fp.errors.join('; '));
+    plan.ok('fields', { ...(fp.resolved.length ? { resolved: fp.resolved } : {}), ...(fp.warnings.length ? { warnings: fp.warnings } : {}) });
+
+    if (op === 'update') {
+      if (!Object.keys(fp.body).length) return plan.done('unchanged', { id: existing!.id, record: existing });
+      if (input.dryRun !== false) return plan.dryRun({ planned: { method: 'PATCH', path, body: { id: existing!.id, ...fp.body } }, changes: fp.changes, before: existing });
+      try {
+        await http.childUpdate('Contracts', contractID, spec.child, existing!.id, fp.body);
+      } catch (err) {
+        if ((err as { status?: number })?.status !== 404) throw err;
+        await http.update(spec.entity, existing!.id, fp.body, { putBody: { id: existing!.id, contractID, ...fullWritableRecord(fieldInfo, existing!, fp.body) } });
+      }
+      const record = (await this.contractTermRows(kind, contractID, [{ field: 'id', op: 'eq', value: existing!.id }]).catch(() => []))[0] ?? null;
+      const notApplied = termNotApplied(fp.body, record);
+      return plan.done('updated', { id: existing!.id, changes: fp.changes, record, verified: !!record && !notApplied.length, ...(notApplied.length ? { notApplied } : {}) });
+    }
+
+    // create
+    const body = { contractID, ...fp.body };
+    const rows = await this.contractTermRows(kind, contractID);
+    const same = findSameTerm(kind, body, rows);
+    if (same.length && input.allowDuplicate !== true) {
+      return plan.duplicate({ existing: same, note: `contract ${contractID} already has a ${spec.label} with the same ${spec.sameKey.join(' / ')} — update it (id ${same[0]!.id})${spec.ops.includes('update') ? '' : ' or delete it first'}, or pass allowDuplicate:true to add another` });
+    }
+    plan.ok('duplicates', { checked: spec.sameKey, existingRows: rows.length });
+    if (input.dryRun !== false) return plan.dryRun({ planned: { method: 'POST', path, body } });
+    let id: number;
+    try {
+      id = await http.childCreate('Contracts', contractID, spec.child, body);
+    } catch (error) {
+      // A timeout after Autotask committed must not turn into a second POST on retry: look again.
+      const after = await this.contractTermRows(kind, contractID).catch(() => null);
+      const landed = after ? findSameTerm(kind, body, after).filter((r) => !same.some((s) => s.id === r.id)) : [];
+      if (landed.length) return plan.done('created', { id: landed[0]!.id, record: landed[0], verified: true, note: 'the create call reported an error, but the row exists — not created again' });
+      throw error;
+    }
+    const record = (await this.contractTermRows(kind, contractID, [{ field: 'id', op: 'eq', value: id }]).catch(() => []))[0] ?? null;
+    const notApplied = termNotApplied(body, record);
+    return plan.done('created', { id, record, verified: !!record && !notApplied.length, ...(notApplied.length ? { notApplied } : {}) });
   }
 
   /**
