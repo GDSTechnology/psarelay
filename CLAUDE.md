@@ -9,8 +9,9 @@ Workflow defaults (commits, changelog, memory) come from the global `~/.claude/C
 - **`TicketAdditionalContacts` is a child entity of Tickets** (`id`, `ticketID`, `contactID`; create / query /
   delete, no update) — Tickets has NO `ticketAdditionalContacts` field, so create/update_ticket used to send a
   field Autotask doesn't have. Per the REST reference: contact must be on the ticket's company; max 30; the
-  Ticket Contact can't also be one — **adding it clears `Tickets.contactID`** (the add tool refuses it). Child
-  URL `/Tickets/{id}/AdditionalContacts` not yet verified live (#266).
+  Ticket Contact can't also be one — **adding it clears `Tickets.contactID`** (the add tool refuses it). Verified
+  live: schema, no Tickets field, and GET / POST / DELETE on `/Tickets/{id}/AdditionalContacts` (add answered an
+  itemId; #266). `Contacts.primaryContact` is a queryable boolean.
 
 ## Learnings - 2026-10-26
 
