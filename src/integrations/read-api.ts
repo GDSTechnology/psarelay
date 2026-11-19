@@ -8,6 +8,11 @@
 //   GET    /api/v1                              what this key may read / write, and how fresh each entity's copy is
 //   POST   /api/v1/{Entity}/query               { filter, MaxRecords?, IncludeFields? } → { items, pageDetails, hasMore }
 //   GET    /api/v1/{Entity}/{id}                → { item }  (item null when the record is not there)
+//   GET    /api/v1/{Entity}/entityInformation/fields   Autotask's field list, picklist values and labels included
+//
+// Picklist labels: a query with "PicklistLabels": true (or GET …/{id}?picklistLabels=true) adds to each row
+// picklistLabels: { field: label } for its picklist fields (Companies.companyType 1 → "Customer"), so a CRM shows
+// the tenant's own labels without keeping its own copy of every picklist.
 //   POST   /api/v1/{Entity}                     create → Autotask's answer ({ itemId })
 //   PATCH  /api/v1/{Entity}                     update { id, …only the fields to change } → { itemId }
 //   DELETE /api/v1/{Entity}/{id}                delete (only when the key allows deletes)
@@ -39,6 +44,8 @@ export interface LiveClient {
   rawRequest<T = unknown>(method: string, path: string, body?: unknown): Promise<T>;
   get<T>(entity: string, id: number): Promise<T | null>;
   write<T = unknown>(method: 'POST' | 'PATCH' | 'DELETE', path: string, body?: unknown): Promise<T>;
+  /** GET /{Entity}/entityInformation/fields (cached by the HTTP layer, 1 h by default). */
+  fieldInfo?(entity: string): Promise<{ fields: Array<Record<string, unknown>> }>;
 }
 export interface ReadApiDeps {
   keys: Pick<ApiKeyStore, 'verify' | 'current' | 'record' | 'claimWrite' | 'finishWrite'> | null;
@@ -147,6 +154,14 @@ export async function handleReadApi(req: IncomingMessage, res: ServerResponse, u
     const method = req.method ?? 'GET';
     if (path === API_BASE && method === 'GET') return await info(res, key, deps);
     if (method === 'PUT') throw new ApiError(405, 'PUT is not accepted: in Autotask it replaces the whole record and blanks every field left out. Use PATCH with the id and only the fields to change.', {}, { Allow: 'GET, POST, PATCH, DELETE' });
+    const fi = /^\/api\/v1\/([A-Za-z]+)\/entityInformation\/fields$/i.exec(path);
+    if (fi) {
+      if (method !== 'GET') throw new ApiError(405, 'Field information is read with GET.', {}, { Allow: 'GET' });
+      const def = shadowEntity(fi[1]!);
+      const name = def?.name ?? writableEntity(fi[1]!) ?? null;
+      if (!name || !(key.entities.includes(name) || key.writeEntities.includes(name))) throw new ApiError(403, `This key may not read "${fi[1]}". It may read: ${key.entities.join(', ')}.`);
+      return await fieldsInfo(res, key, name, deps);
+    }
     const q = /^\/api\/v1\/([A-Za-z]+)\/query$/.exec(path);
     const g = /^\/api\/v1\/([A-Za-z]+)\/(\d{1,15})$/.exec(path);
     if (q && method !== 'POST') throw new ApiError(405, 'Queries are POST, with an Autotask filter body.', {}, { Allow: 'POST' });
@@ -158,7 +173,7 @@ export async function handleReadApi(req: IncomingMessage, res: ServerResponse, u
     }
     const def = shadowEntity((q ?? g)![1]!);
     if (!def || !key.entities.includes(def.name)) throw new ApiError(403, `This key may not read "${(q ?? g)![1]}". It may read: ${key.entities.join(', ')}.`);
-    return q ? await query(req, res, key, def.name, deps) : await getOne(res, key, def.name, Number(g![2]), deps);
+    return q ? await query(req, res, key, def.name, deps) : await getOne(res, key, def.name, Number(g![2]), deps, /^(1|true|yes)$/i.test(url.searchParams.get('picklistLabels') ?? ''));
   } catch (err) {
     if (key) deps.keys?.record(key.id, 'refused');
     if (err instanceof ApiError) return send(res, err.status, { error: err.message, ...err.extra }, err.headers);
@@ -205,14 +220,16 @@ async function query(req: IncomingMessage, res: ServerResponse, key: ApiKeyAuth,
   const raw = b.MaxRecords ?? b.maxRecords;
   const limit = raw == null ? MAX_PAGE : Number(raw);
   if (!Number.isInteger(limit) || limit < 1 || limit > MAX_PAGE) throw new ApiError(400, `MaxRecords is 1–${MAX_PAGE}.`);
+  const labels = (b.PicklistLabels ?? b.picklistLabels) === true;
 
   const m = await deps.mirror.query(entity, filter, limit + 1);
   if (m.ok) {
     const hasMore = m.rows.length > limit;
     const items = project(m.rows.slice(0, limit), fields);
     deps.keys!.record(key.id, 'mirror');
+    const lh = labels ? await withLabels(entity, items, deps) : {};
     return send(res, 200, { items, pageDetails: { count: items.length, requestCount: limit, prevPageUrl: null, nextPageUrl: null }, hasMore },
-      { 'X-PSArelay-Source': 'mirror', 'X-PSArelay-Age': String(m.ageSeconds) });
+      { 'X-PSArelay-Source': 'mirror', 'X-PSArelay-Age': String(m.ageSeconds), ...lh });
   }
   mayGoLive(key, m.reason, deps);
   const http = await deps.live();
@@ -220,23 +237,79 @@ async function query(req: IncomingMessage, res: ServerResponse, key: ApiKeyAuth,
   const r = await liveCall(() => http.rawRequest<{ items?: Array<Record<string, unknown>>; pageDetails?: { nextPageUrl?: string | null } }>('POST', `/${entity}/query`,
     { filter: filter.length ? filter : [{ op: 'gte', field: 'id', value: 0 }], MaxRecords: limit, ...(fields ? { IncludeFields: fields } : {}) }));
   const items = project(r?.items ?? [], fields);
+  const lh = labels ? await withLabels(entity, items, deps) : {};
   send(res, 200, { items, pageDetails: { count: items.length, requestCount: limit, prevPageUrl: null, nextPageUrl: null }, hasMore: !!r?.pageDetails?.nextPageUrl },
-    { 'X-PSArelay-Source': 'live', 'X-PSArelay-Mirror-Miss': m.reason });
+    { 'X-PSArelay-Source': 'live', 'X-PSArelay-Mirror-Miss': m.reason, ...lh });
 }
 
-async function getOne(res: ServerResponse, key: ApiKeyAuth, entity: string, id: number, deps: ReadApiDeps): Promise<void> {
+async function getOne(res: ServerResponse, key: ApiKeyAuth, entity: string, id: number, deps: ReadApiDeps, labels = false): Promise<void> {
   const m = await deps.mirror.get(entity, id);
   // Not in the mirror: with live allowed, ask Autotask (the row may be newer than the last sync); otherwise say so.
   if (m.ok && (m.row != null || !key.allowLive)) {
     deps.keys!.record(key.id, 'mirror');
-    return send(res, 200, { item: m.row }, { 'X-PSArelay-Source': 'mirror', 'X-PSArelay-Age': String(m.ageSeconds) });
+    const lh = labels && m.row ? await withLabels(entity, [m.row as Record<string, unknown>], deps) : {};
+    return send(res, 200, { item: m.row }, { 'X-PSArelay-Source': 'mirror', 'X-PSArelay-Age': String(m.ageSeconds), ...lh });
   }
   const reason = m.ok ? 'not_in_mirror' : m.reason;
   mayGoLive(key, reason, deps);
   const http = await deps.live();
   deps.keys!.record(key.id, 'live');
   const item = await liveCall(() => http.get<Record<string, unknown>>(entity, id));
-  send(res, 200, { item: item ?? null }, { 'X-PSArelay-Source': 'live', 'X-PSArelay-Mirror-Miss': reason });
+  const lh = labels && item ? await withLabels(entity, [item], deps) : {};
+  send(res, 200, { item: item ?? null }, { 'X-PSArelay-Source': 'live', 'X-PSArelay-Mirror-Miss': reason, ...lh });
+}
+
+// ── field information / picklist labels ──
+
+/** field → (value → label) for every picklist field in an Autotask field list. */
+export function picklistLabelMap(fields: Array<Record<string, unknown>>): Map<string, Map<string, string>> {
+  const out = new Map<string, Map<string, string>>();
+  for (const f of fields ?? []) {
+    if (!f?.isPickList || !Array.isArray(f.picklistValues) || typeof f.name !== 'string') continue;
+    const m = new Map<string, string>();
+    for (const v of f.picklistValues as Array<Record<string, unknown>>) {
+      if (v?.value == null) continue;
+      m.set(String(v.value), String(v.label ?? v.name ?? v.value));
+    }
+    out.set(f.name, m);
+  }
+  return out;
+}
+
+/** Adds picklistLabels { field: label } to each row (in place) for the picklist fields it carries. */
+export function addPicklistLabels(rows: Array<Record<string, unknown>>, map: Map<string, Map<string, string>>): void {
+  for (const r of rows) {
+    const labels: Record<string, string | null> = {};
+    for (const [field, values] of map) {
+      const v = r[field];
+      if (v === undefined) continue;
+      labels[field] = v === null || v === '' ? null : values.get(String(v)) ?? null;
+    }
+    r.picklistLabels = labels;
+  }
+}
+
+async function loadFields(entity: string, deps: ReadApiDeps): Promise<Array<Record<string, unknown>>> {
+  const http = await deps.live();
+  if (!http.fieldInfo) throw new ApiError(501, 'Field information is not available on this server.');
+  return (await liveCall(() => http.fieldInfo!(entity)))?.fields ?? [];
+}
+
+/** Labels for rows; a failure to load the field list leaves the rows as they are and says so in a header. */
+async function withLabels(entity: string, rows: Array<Record<string, unknown>>, deps: ReadApiDeps): Promise<Record<string, string>> {
+  try {
+    addPicklistLabels(rows, picklistLabelMap(await loadFields(entity, deps)));
+    return { 'X-PSArelay-Labels': 'ok' };
+  } catch (e) {
+    deps.logger?.warn(`Integration API: picklist labels for ${entity} unavailable: ${e instanceof Error ? e.message : String(e)}`);
+    return { 'X-PSArelay-Labels': 'unavailable' };
+  }
+}
+
+async function fieldsInfo(res: ServerResponse, key: ApiKeyAuth, entity: string, deps: ReadApiDeps): Promise<void> {
+  const fields = await loadFields(entity, deps);
+  deps.keys!.record(key.id, 'live'); // metadata: one Autotask call per entity per cache period (1 h by default)
+  send(res, 200, { fields }, { 'X-PSArelay-Source': 'live' });
 }
 
 // ── writes ──
