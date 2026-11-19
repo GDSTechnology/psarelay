@@ -6851,7 +6851,7 @@ export const TOOL_DEFINITIONS: McpTool[] = [
   },
   {
     name: 'autotask_delete_contract_term',
-    description: 'Remove a billing term from a contract — only kinds Autotask lets you delete: blockHourFactor, rate, exclusionBillingCode, exclusionRole (blocks, role costs, retainers and ticket purchases can only be updated). The dry run shows the row. SAFE BY DEFAULT: dry run unless dryRun:false; the write needs confirm:true.',
+    description: '⚠ DESTRUCTIVE — IRREVERSIBLE. Remove a billing term from a contract — only kinds Autotask lets you delete: blockHourFactor, rate, exclusionBillingCode, exclusionRole (blocks, role costs, retainers and ticket purchases can only be updated). The dry run shows the row. SAFE BY DEFAULT: dry run unless dryRun:false; the write needs confirm:true. Confirm with the user before invoking.',
     inputSchema: {
       type: 'object',
       properties: {

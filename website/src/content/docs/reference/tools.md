@@ -287,7 +287,7 @@ Quotes, quote items, opportunities, invoices, and contracts
 | `autotask_list_contract_terms` | read-only | List the billing terms on a contract: prepaid hour blocks, block-hour factors, role rates, role costs, excluded work types and roles, retainer purchases and ticket purchases (all kinds, or the ones asked for). |
 | `autotask_create_contract_term` | writes | Add a billing term to a contract. |
 | `autotask_update_contract_term` | writes | Change a billing term on a contract (block, blockHourFactor, rate, roleCost, retainer, ticketPurchase — exclusions cannot be updated, delete and re-add). |
-| `autotask_delete_contract_term` | destructive | Remove a billing term from a contract — only kinds Autotask lets you delete: blockHourFactor, rate, exclusionBillingCode, exclusionRole (blocks, role costs, retainers and ticket purchases can only be updated). |
+| `autotask_delete_contract_term` | destructive | ⚠ DESTRUCTIVE — IRREVERSIBLE. Remove a billing term from a contract — only kinds Autotask lets you delete: blockHourFactor, rate, exclusionBillingCode, exclusionRole (blocks, role costs, retainers and ticket purchases can only be updated). |
 | `autotask_report_block_hour_usage` | read-only | Block-hour contract usage report. |
 | `autotask_report_ticket_charges` | read-only | Ticket-charge report. Charges in a recent window with a fulfillment-status breakdown, billed vs unbilled counts, total billable amount, and a per-ticket rollup. Set unbilledOnly to surface the to-bill queue (charges n… |
 | `autotask_report_unbilled` | read-only | Unbilled-work / revenue-leakage report. |
