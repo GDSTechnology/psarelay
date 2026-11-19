@@ -171,7 +171,8 @@ const TICKET_WRITABLE_FIELDS = [
   'serviceLevelAgreementID',
   'estimatedHours',
   'projectID',
-  'ticketAdditionalContacts',
+  // ticketAdditionalContacts is NOT a Tickets field (TicketAdditionalContacts is a
+  // child entity, #266) — create / update ticket add them via the guarded add.
   'resolution',
   'userDefinedFields',
   // §4.5: complete a ticket in one create call (a 2nd update retriggers
@@ -192,6 +193,25 @@ const TICKET_WRITABLE_FIELDS = [
 
 /** Tickets picklist fields update_ticket resolves by label or id (verified on the live schema). */
 const TICKET_PICKLIST_FIELDS = new Set(['status', 'priority', 'queueID', 'issueType', 'subIssueType', 'source', 'ticketType', 'ticketCategory', 'serviceLevelAgreementID']);
+
+/** Contact ids from create / update ticket's ticketAdditionalContacts (#266). */
+function additionalContactIds(args: Record<string, any>): number[] {
+  const raw = args.ticketAdditionalContacts;
+  return Array.isArray(raw) ? [...new Set(raw.map(Number).filter((n) => Number.isInteger(n) && n > 0))] : [];
+}
+
+/** One guarded add per contact; an error on one is recorded, not thrown (the ticket write already happened). */
+async function addAdditionalContacts(s: AutotaskService, ticketID: number, ids: number[]): Promise<Array<Record<string, any>>> {
+  const out: Array<Record<string, any>> = [];
+  for (const contactID of ids) {
+    try { out.push(await s.addTicketAdditionalContact(ticketID, contactID)); }
+    catch (err) { out.push({ status: 'error', ticketID, contactID, detail: err instanceof Error ? err.message : String(err) }); }
+  }
+  return out;
+}
+
+const additionalContactsSummary = (r: Array<Record<string, any>>): string =>
+  r.length ? `; additional contacts: ${r.map((x) => `${x.contactID} ${x.status}${x.reason ? ` (${x.reason})` : ''}`).join(', ')}` : '';
 
 function buildTicketPayload(args: Record<string, any>): Record<string, any> {
   const payload: Record<string, any> = {};
@@ -1647,17 +1667,23 @@ export class AutotaskToolHandler {
         const additional: number[] = Array.isArray(a.additionalConfigurationItemIDs)
           ? a.additionalConfigurationItemIDs.filter((n: unknown) => typeof n === 'number')
           : [];
+        const contactIds = additionalContactIds(a);
         if (additional.length > 0) {
           // §7 convenience: create → link additional CIs → read back → enriched.
           const r = await s.createTicketWithConfigurationItems(payload, additional);
           const linked = r.additionalConfigurationItems.length;
           const failed = r.linkErrors.length;
+          const contacts = await addAdditionalContacts(s, r.id, contactIds);
           return {
-            result: r,
-            message: `Created ticket ${r.id}; linked ${linked} additional CI(s)` + (failed ? `, ${failed} failed` : ''),
+            result: contacts.length ? { ...r, additionalContacts: contacts } : r,
+            message: `Created ticket ${r.id}; linked ${linked} additional CI(s)` + (failed ? `, ${failed} failed` : '') + additionalContactsSummary(contacts),
           };
         }
         const id = await s.createTicket(payload);
+        if (contactIds.length) {
+          const contacts = await addAdditionalContacts(s, id, contactIds);
+          return { result: { id, additionalContacts: contacts }, message: `Successfully created ticket with ID: ${id}${additionalContactsSummary(contacts)}` };
+        }
         return { result: id, message: `Successfully created ticket with ID: ${id}` };
       }],
       ['autotask_update_ticket', async (a) => {
@@ -1671,6 +1697,11 @@ export class AutotaskToolHandler {
         }
         if (rest.queueID === undefined && typeof rest.queue === 'string' && rest.queue.trim()) rest.queueID = rest.queue.trim();
         const payload = buildTicketPayload(rest);
+        const contactIds = additionalContactIds(rest);
+        if (!Object.keys(payload).length && contactIds.length) {
+          const contacts = await addAdditionalContacts(s, Number(ticketId), contactIds);
+          return { result: { ticketId, additionalContacts: contacts }, message: `Ticket ${ticketId}${additionalContactsSummary(contacts).replace(/^; /, ': ')}` };
+        }
         if (!Object.keys(payload).length) return { result: null, message: `Nothing to update on ticket ${ticketId} — no writable fields given.` };
         // Picklists by label or id: "Tier 1 Support" → its queue id; an unknown
         // label or inactive id returns the choices instead of a failed write.
@@ -1693,10 +1724,12 @@ export class AutotaskToolHandler {
         // Old values from the Postgres shadow (0 Autotask calls) when it mirrors the ticket.
         const before = await getShadowRuntime()?.store.query('Tickets', [{ op: 'eq', field: 'id', value: Number(ticketId) }], { limit: 1 }).then((r) => (r.rows[0] as Record<string, unknown>) ?? null).catch(() => null) ?? null;
         await s.updateTicket(ticketId, payload);
+        // Additional contacts are a child entity: added after the field write (contactID may have just changed).
+        const contacts = contactIds.length ? await addAdditionalContacts(s, Number(ticketId), contactIds) : [];
         // Read back: report old → new per field, and anything Autotask didn't apply.
         let after: Record<string, unknown> | null = null;
         try { after = await s.getTicket(Number(ticketId), true) as Record<string, unknown> | null; } catch { /* verification is best-effort */ }
-        if (!after) return { result: ticketId, message: `Successfully updated ticket ${ticketId}` };
+        if (!after) return { result: contacts.length ? { ticketId, additionalContacts: contacts } : ticketId, message: `Successfully updated ticket ${ticketId}${additionalContactsSummary(contacts)}` };
         if (!fields.length) { try { fields = await s.getFieldInfo('Tickets'); } catch { /* raw values */ } }
         const lbl = (k: string, v: unknown) => fields.find((f) => f.name === k)?.picklistValues?.find((p) => String(p.value) === String(v))?.label ?? v;
         const changes: Array<{ field: string; from: unknown; to: unknown; applied: boolean }> = Object.keys(payload).filter((k) => k !== 'userDefinedFields' && k !== 'ticketAdditionalContacts').map((k) => ({
@@ -1718,8 +1751,8 @@ export class AutotaskToolHandler {
         const tn = (after.ticketNumber as string) ?? `ticket ${ticketId}`;
         const desc = changes.filter((c) => c.applied).map((c) => `${c.field}${c.from !== undefined ? ` ${c.from ?? '∅'} →` : ' →'} ${c.to ?? '∅'}`).join('; ');
         return {
-          result: { ticketId, ticketNumber: after.ticketNumber ?? null, changes, verified: notApplied.length === 0 },
-          message: `Updated ${tn}${desc ? `: ${desc}` : ''}.${notApplied.length ? ` WARNING — Autotask did not apply: ${notApplied.map((c) => `${c.field} (now ${c.to ?? '∅'})`).join(', ')}.` : ''}`,
+          result: { ticketId, ticketNumber: after.ticketNumber ?? null, changes, verified: notApplied.length === 0, ...(contacts.length ? { additionalContacts: contacts } : {}) },
+          message: `Updated ${tn}${desc ? `: ${desc}` : ''}.${notApplied.length ? ` WARNING — Autotask did not apply: ${notApplied.map((c) => `${c.field} (now ${c.to ?? '∅'})`).join(', ')}.` : ''}${additionalContactsSummary(contacts)}`,
         };
       }],
       ['autotask_move_ticket_to_company', async (a) => {
@@ -1745,6 +1778,29 @@ export class AutotaskToolHandler {
       ['autotask_remove_ticket_configuration_item', async (a) => {
         await s.removeTicketConfigurationItem(a.associationID);
         return { result: a.associationID, message: `Removed ticket additional-CI association ${a.associationID}` };
+      }],
+      // TicketAdditionalContacts (#266)
+      ['autotask_list_ticket_additional_contacts', async (a) => {
+        const r = await s.listTicketAdditionalContacts(Number(a.ticketID));
+        if (r.status === 'not_found') return { result: r, message: `Ticket ${a.ticketID} not found` };
+        const list = (r.contacts as Array<Record<string, any>>).map((c) => `${c.name ?? 'contact ' + c.contactID} <${c.email ?? 'no e-mail'}>${c.isActive === false ? ' (inactive)' : ''}`);
+        return { result: r, message: `${r.ticketNumber ?? `Ticket ${a.ticketID}`}: ${r.count} additional contact(s)${list.length ? ` — ${list.join(', ')}` : ''}` };
+      }],
+      ['autotask_add_ticket_additional_contact', async (a) => {
+        const r = await s.addTicketAdditionalContact(Number(a.ticketID), Number(a.contactID));
+        const who = `${r.contactName ?? `contact ${a.contactID}`}${r.email ? ` <${r.email}>` : ''}`;
+        const msg =
+          r.status === 'added' ? `Added ${who} to ${r.ticketNumber ?? `ticket ${a.ticketID}`} as an additional contact${r.verified ? ' (verified)' : r.verified === false ? ' — WARNING: not found on read-back' : ' (not verified by read-back)'}`
+          : r.status === 'already_there' ? `${who} is already an additional contact on ${r.ticketNumber ?? `ticket ${a.ticketID}`} — nothing written`
+          : r.status === 'already_ticket_contact' ? `${who} is already the ticket's contact — nothing written (adding would clear the Ticket Contact field)`
+          : `Not added — ${r.detail}`;
+        return { result: r, message: msg };
+      }],
+      ['autotask_remove_ticket_additional_contact', async (a) => {
+        const r = await s.removeTicketAdditionalContact(Number(a.ticketID), Number(a.contactID));
+        const msg = r.status === 'not_there' ? r.detail
+          : `Removed contact ${a.contactID} from ticket ${a.ticketID}'s additional contacts${r.verified ? ' (verified)' : r.verified === false ? ' — WARNING: still there on read-back' : ' (not verified by read-back)'}`;
+        return { result: r, message: msg };
       }],
       // Ticket Charges
       ['autotask_get_ticket_charge', async (a) => {

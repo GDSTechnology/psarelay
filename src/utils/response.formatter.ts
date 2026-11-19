@@ -24,7 +24,7 @@ export interface CompactResponse {
 const SUMMARY_FIELDS: Record<EntityType, string[]> = {
   tickets: ['id', 'ticketNumber', 'title', 'status', 'statusLabel', 'priority', 'priorityLabel', 'queueLabel', 'companyID', 'assignedResourceID', 'createDate', 'dueDateTime', 'ticketUrl'],
   companies: ['id', 'companyName', 'isActive', 'phone', 'city', 'state', 'classification'],
-  contacts: ['id', 'firstName', 'lastName', 'emailAddress', 'companyID'],
+  contacts: ['id', 'firstName', 'lastName', 'emailAddress', 'companyID', 'primaryContact'],
   projects: ['id', 'projectName', 'status', 'companyID', 'projectLeadResourceID', 'startDate', 'endDate'],
   tasks: ['id', 'title', 'status', 'projectID', 'assignedResourceID', 'percentComplete'],
   resources: ['id', 'firstName', 'lastName', 'email', 'isActive'],

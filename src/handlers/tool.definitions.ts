@@ -608,7 +608,7 @@ export const TOOL_DEFINITIONS: McpTool[] = [
   // Contact tools
   {
     name: 'autotask_search_contacts',
-    description: 'Search contacts. Plain mode: searchTerm (name or email) + companyID + isActive, paged, max 200/page. IDENTITY mode (read-only, used when any of email / name / firstName / lastName / phone is given): EVERY match with evidence — email_exact across all three email fields (every exact-email duplicate is returned), name_exact / name_close (normalized, accents ignored), phone (normalized digits) — plus conflicts (inactive, different email than given) and duplicate clusters; inactive contacts included unless isActive is set. Returns id, full name, emails, phones, company id + name, active, created date.',
+    description: 'Search contacts. Plain mode: searchTerm (name or email) + companyID + isActive + primaryContact, paged, max 200/page; each item carries primaryContact true/false. IDENTITY mode (read-only, used when any of email / name / firstName / lastName / phone is given): EVERY match with evidence — email_exact across all three email fields (every exact-email duplicate is returned), name_exact / name_close (normalized, accents ignored), phone (normalized digits) — plus conflicts (inactive, different email than given) and duplicate clusters; inactive contacts included unless isActive is set. Returns id, full name, emails, phones, company id + name, active, created date.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -628,6 +628,10 @@ export const TOOL_DEFINITIONS: McpTool[] = [
         isActive: {
           type: 'number',
           description: 'Filter by active status (1=active, 0=inactive)'
+        },
+        primaryContact: {
+          type: 'boolean',
+          description: 'Plain mode: only the company\'s primary contact (true) or only the others (false). {companyID, primaryContact: true} returns the account\'s primary contact.'
         },
         page: {
           type: 'number',
@@ -1001,7 +1005,7 @@ export const TOOL_DEFINITIONS: McpTool[] = [
         ticketAdditionalContacts: {
           type: 'array',
           items: { type: 'number' },
-          description: 'Additional contact IDs to associate with the ticket (beyond the primary contactID).'
+          description: 'Additional contact IDs to add to the ticket after it is created (beyond the primary contactID). Each goes through the same checks as autotask_add_ticket_additional_contact (same company, active, not the ticket contact); the result lists each one\'s outcome.'
         },
         resolution: {
           type: 'string',
@@ -1117,6 +1121,52 @@ export const TOOL_DEFINITIONS: McpTool[] = [
         associationID: { type: 'number', description: 'The TicketAdditionalConfigurationItems association id to remove (from autotask_search_ticket_configuration_items)' }
       },
       required: ['associationID']
+    }
+  },
+  {
+    name: 'autotask_list_ticket_additional_contacts',
+    description: 'List the additional contacts on a ticket (TicketAdditionalContacts — the people besides the Ticket Contact, contactID, who are on the ticket and receive its notifications). Returns each one\'s contactID, name, e-mail and active flag, plus the ticket\'s company and Ticket Contact.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ticketID: { type: 'number', description: 'The ticket id' }
+      },
+      required: ['ticketID']
+    },
+    annotations: { title: 'List ticket additional contacts', readOnlyHint: true }
+  },
+  {
+    name: 'autotask_add_ticket_additional_contact',
+    description: 'Add a contact to a ticket\'s additional contacts. Safe to repeat: a contact already on the ticket answers "already_there" and nothing is written. Refuses (nothing written) a contact of another company than the ticket\'s, an inactive contact, the ticket\'s own Ticket Contact (Autotask would clear the Ticket Contact field — answers "already_ticket_contact"), and a 31st contact (Autotask allows 30). Reads the link back afterwards. Never creates a contact.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ticketID: { type: 'number', description: 'The ticket id' },
+        contactID: { type: 'number', description: 'The contact to add — must belong to the ticket\'s company and be active' }
+      },
+      required: ['ticketID', 'contactID']
+    },
+    annotations: { title: 'Add ticket additional contact', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true }
+  },
+  {
+    name: 'autotask_remove_ticket_additional_contact',
+    description:
+      '⚠ DESTRUCTIVE — removes a contact from a ticket\'s additional contacts (deletes the TicketAdditionalContacts link only — never the contact, and never the Ticket Contact). ' +
+      'A contact not on the ticket answers "not_there" and nothing is written. Re-add with autotask_add_ticket_additional_contact. Needs confirm:true.',
+    annotations: {
+      title: 'Remove ticket additional contact',
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ticketID: { type: 'number', description: 'The ticket id' },
+        contactID: { type: 'number', description: 'The contact to take off the ticket\'s additional contacts' }
+      },
+      required: ['ticketID', 'contactID']
     }
   },
   {
@@ -7049,7 +7099,7 @@ export const TOOL_CATEGORIES: Record<string, { description: string; tools: strin
   },
   tickets: {
     description: 'Search, create, update tickets and manage ticket notes, attachments, charges, audit history, and the notification e-mails Autotask sent',
-    tools: ['autotask_search_tickets', 'autotask_get_ticket_details', 'autotask_set_ticket_contract', 'autotask_get_ticket_by_number', 'autotask_get_ticket_change_history', 'autotask_get_ticket_email_context', 'autotask_create_ticket', 'autotask_update_ticket', 'autotask_start_work_on_ticket', 'autotask_add_ticket_update', 'autotask_move_ticket_to_company', 'autotask_find_ticket_by_external_id', 'autotask_search_ticket_configuration_items', 'autotask_add_ticket_configuration_item', 'autotask_remove_ticket_configuration_item', 'autotask_get_ticket_note', 'autotask_search_ticket_notes', 'autotask_create_ticket_note', 'autotask_get_ticket_attachment', 'autotask_search_ticket_attachments', 'autotask_create_ticket_attachment', 'autotask_get_ticket_charge', 'autotask_search_ticket_charges', 'autotask_add_ticket_materials', 'autotask_create_ticket_charge', 'autotask_update_ticket_charge', 'autotask_delete_ticket_charge', 'autotask_get_ticket_history', 'autotask_search_ticket_history', 'autotask_search_notification_history', 'autotask_report_ticket_throughput', 'autotask_report_request_segmentation', 'autotask_search_checklist_libraries', 'autotask_get_checklist_library', 'autotask_apply_checklist_library_to_ticket', 'autotask_create_maintenance_ticket', 'autotask_search_ticket_checklist_items', 'autotask_create_ticket_checklist_item', 'autotask_update_ticket_checklist_item', 'autotask_delete_ticket_checklist_item']
+    tools: ['autotask_search_tickets', 'autotask_get_ticket_details', 'autotask_set_ticket_contract', 'autotask_get_ticket_by_number', 'autotask_get_ticket_change_history', 'autotask_get_ticket_email_context', 'autotask_create_ticket', 'autotask_update_ticket', 'autotask_start_work_on_ticket', 'autotask_add_ticket_update', 'autotask_move_ticket_to_company', 'autotask_find_ticket_by_external_id', 'autotask_search_ticket_configuration_items', 'autotask_add_ticket_configuration_item', 'autotask_remove_ticket_configuration_item', 'autotask_list_ticket_additional_contacts', 'autotask_add_ticket_additional_contact', 'autotask_remove_ticket_additional_contact', 'autotask_get_ticket_note', 'autotask_search_ticket_notes', 'autotask_create_ticket_note', 'autotask_get_ticket_attachment', 'autotask_search_ticket_attachments', 'autotask_create_ticket_attachment', 'autotask_get_ticket_charge', 'autotask_search_ticket_charges', 'autotask_add_ticket_materials', 'autotask_create_ticket_charge', 'autotask_update_ticket_charge', 'autotask_delete_ticket_charge', 'autotask_get_ticket_history', 'autotask_search_ticket_history', 'autotask_search_notification_history', 'autotask_report_ticket_throughput', 'autotask_report_request_segmentation', 'autotask_search_checklist_libraries', 'autotask_get_checklist_library', 'autotask_apply_checklist_library_to_ticket', 'autotask_create_maintenance_ticket', 'autotask_search_ticket_checklist_items', 'autotask_create_ticket_checklist_item', 'autotask_update_ticket_checklist_item', 'autotask_delete_ticket_checklist_item']
   },
   projects: {
     description: 'Search and create projects, tasks, phases, project notes and project charges',
