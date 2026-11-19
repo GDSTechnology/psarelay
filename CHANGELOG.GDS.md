@@ -61,7 +61,12 @@ Each entry lists the merge commit and the PR number. Brief section references
   - a new optional `primaryContact` boolean filter: `{companyID, primaryContact: true}` returns the account's primary
     contact in one call. Before, the flag was only on `get_contact`, one read per contact.
 - Use case: Nexus reboot reminders e-mail one ticket note to the device contact and the account's primary contact.
-- Not yet exercised against the live tenant. The URL shape and rules follow the Autotask REST reference.
+- Checked read-only on the live tenant (2026-11-19):
+  - TicketAdditionalContacts is `{id, ticketID, contactID}`; create / query / delete, no update.
+  - Tickets has no `ticketAdditionalContacts` field.
+  - Both the top-level query and `GET /Tickets/{id}/AdditionalContacts` work.
+  - `Contacts.primaryContact` is a queryable boolean, and `eq true` is accepted.
+- Not yet written live: no add or remove has been run against the tenant.
 
 ## v6.22.0 — 2026-11-18 — Contract terms: blocks, rates, exclusions, retainers, ticket purchases (#22)
 
