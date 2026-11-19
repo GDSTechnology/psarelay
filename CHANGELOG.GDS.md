@@ -10,6 +10,22 @@ Each entry lists the merge commit and the PR number. Brief section references
 
 ---
 
+## Unreleased — Sales-cycle correlation, checks and repair (#20 §7)
+
+- **`autotask_report_sales_cycle`** (read-only): each opportunity with the quotes, contracts and projects that carry
+  its `opportunityID` (Autotask's own links — nothing inferred is stored), its outcome from the status label (Closed /
+  Won / Implemented = won, Lost = lost, else open) and findings: `company_mismatch` (a linked record on another
+  company), `won_no_delivery`, `lost_with_delivery`, `won_no_quote`, and `unlinked_delivery` — a contract / project
+  with no opportunity on a company whose won deal has none of that kind, starting 30 days before to a year after the
+  close. One candidate → a suggested link with a ready dry-run repair call; several → listed for the user to pick.
+  Scope by opportunity, company or `createdSince` (capped, `truncated` flag). Each entity's `opportunityID` is checked
+  against the live field list first; a tenant without it skips that entity and says so.
+- **`autotask_link_to_opportunity`** (repair, dry run by default): sets a contract's or project's `opportunityID`.
+  Same-company check, writable-field check, an existing link is replaced and reported, read back after the write;
+  already linked → nothing written. Projects go through `autotask_link_project_commercial`'s path.
+- Not yet exercised against the live tenant (whether `Contracts.opportunityID` is writable here is unverified — the
+  tool checks entityInformation and refuses if not).
+
 ## v6.24.0 — 2026-11-19 — Contract labour report: covered vs excluded, burn, forecast (#22)
 
 - **`autotask_report_contract_labour`**: one contract, month by month (default the last 6 months, max 24). Each time

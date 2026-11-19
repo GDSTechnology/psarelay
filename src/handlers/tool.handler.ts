@@ -59,6 +59,7 @@ const DRY_RUN_FIRST_TOOLS = new Set<string>([
   'autotask_create_service',
   'autotask_update_service',
   'autotask_close_opportunity',
+  'autotask_link_to_opportunity',
   'autotask_create_contract_term',
   'autotask_update_contract_term',
   'autotask_delete_contract_term',
@@ -3477,6 +3478,23 @@ export class AutotaskToolHandler {
       ['autotask_create_opportunity', async (a) => {
         const id = await s.createOpportunity({ title: a.title, companyID: a.companyId, ownerResourceID: a.ownerResourceId, status: a.status, stage: a.stage, projectedCloseDate: a.projectedCloseDate, startDate: a.startDate, probability: a.probability ?? 50, amount: a.amount ?? 0, cost: a.cost ?? 0, useQuoteTotals: a.useQuoteTotals ?? true, totalAmountMonths: a.totalAmountMonths, contactID: a.contactId, description: a.description, opportunityCategoryID: a.opportunityCategoryID });
         return { result: id, message: `Successfully created opportunity with ID: ${id}` };
+      }],
+      ['autotask_report_sales_cycle', async (a) => {
+        const r = await s.reportSalesCycle({ opportunityID: a.opportunityId ?? a.opportunityID, companyID: a.companyId ?? a.companyID, createdSince: a.createdSince, maxOpportunities: a.maxOpportunities, includeUnlinked: a.includeUnlinked });
+        if (r.status !== 'ok') return { result: r, message: r.error ?? `Opportunity ${r.opportunityID} not found.` };
+        const sm = r.summary as Record<string, number>;
+        const counts = ['company_mismatch', 'won_no_delivery', 'lost_with_delivery', 'unlinked_delivery', 'won_no_quote'].filter((k) => sm[k]).map((k) => `${k} ${sm[k]}`).join(', ');
+        return { result: r, message: `Sales cycle: ${sm.opportunities} opportunit${sm.opportunities === 1 ? 'y' : 'ies'} (${sm.won} won, ${sm.lost} lost, ${sm.open} open)${r.truncated ? ' — TRUNCATED, narrow the scope' : ''}. ${counts ? `Findings: ${counts}.` : 'No findings.'}${r.skipped ? ` Skipped: ${r.skipped.join('; ')}.` : ''}` };
+      }],
+      ['autotask_link_to_opportunity', async (a) => {
+        const r = await s.linkToOpportunity({ opportunityID: Number(a.opportunityId ?? a.opportunityID), contractID: a.contractId ?? a.contractID, projectID: a.projectId ?? a.projectID, dryRun: a.dryRun !== false });
+        const msg: Record<string, string> = {
+          dry_run: 'DRY RUN (nothing written) — show the plan to the user; after they approve, call again with dryRun:false.',
+          duplicate: 'Already linked to that opportunity — nothing written.',
+          linked: r.verified ? 'Linked and confirmed by reading it back.' : 'WARNING: written, but the read-back does not show the link.',
+          validation_failed: 'NOTHING WRITTEN — validation failed (see validation).',
+        };
+        return { result: r, message: msg[String(r.status)] ?? `Status: ${r.status}` };
       }],
       ['autotask_close_opportunity', async (a) => {
         const r = await s.closeOpportunity({
