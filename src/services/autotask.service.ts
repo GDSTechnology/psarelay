@@ -21,6 +21,7 @@ import { checkProtectedCompanyMutation, isUnsafeCompanyName } from '../utils/com
 import { resolveActionType } from '../utils/company-todo';
 import { pickSalesActionType, resolveFollowupDue } from '../utils/sales-followup';
 import { alreadyAt as oppAlreadyAt, closeDateTime, pickOutcomeStatus, type Outcome } from '../utils/opportunity-close';
+import { correlateSalesCycle, salesPhase, type SalesRecord } from '../utils/sales-cycle';
 import { buildContactSearchFilter, normalizeContactNote } from '../utils/contact';
 import { resolveCompanyOwnerResourceID } from '../utils/company-owner';
 import { computeBlockHourUsage } from '../utils/block-hours';
@@ -7681,6 +7682,108 @@ export class AutotaskService {
     }
     this.logger.info(`Opportunity ${id} closed as ${outcome}${project?.projectID ? ` (project ${project.projectID})` : ''}`);
     return { status: 'closed', ...summary, changes, notApplied, verified: !!after, ...(project ? { project } : {}), ...extras };
+  }
+
+  /**
+   * Sales-cycle report (#20 §7): each opportunity with the quotes, contracts and projects that carry its
+   * `opportunityID`, plus findings (utils/sales-cycle). Scope: one opportunity, a company, or opportunities
+   * created since a date (tenant-wide, capped). Every link field is checked against the LIVE field list first
+   * — a tenant without `opportunityID` on an entity skips it and says so (Projects.contactID lesson).
+   * Read-only.
+   */
+  async reportSalesCycle(o: { opportunityID?: number | undefined; companyID?: number | undefined; createdSince?: string | undefined; maxOpportunities?: number | undefined; includeUnlinked?: boolean | undefined }): Promise<Record<string, any>> {
+    if (o.opportunityID == null && o.companyID == null && !o.createdSince) return { status: 'invalid', error: 'Give opportunityID, companyID or createdSince (YYYY-MM-DD).' };
+    if (o.createdSince && !/^\d{4}-\d{2}-\d{2}$/.test(String(o.createdSince))) return { status: 'invalid', error: `createdSince must be YYYY-MM-DD (got "${o.createdSince}").` };
+    const cap = Math.min(Math.max(Number(o.maxOpportunities) || 100, 1), 300);
+    const http = await this.ensureClient();
+    const pick = (have: Set<string>, want: string[]) => want.filter((f) => have.has(f));
+    const oppFields = await this.getFieldInfo('Opportunities');
+    const oppHave = new Set(oppFields.map((f) => f.name));
+    const statusValues = oppFields.find((f) => f.name === 'status')?.picklistValues ?? [];
+    const label = (v: unknown) => statusValues.find((p) => Number(p.value) === Number(v))?.label ?? null;
+    const oppInclude = pick(oppHave, ['id', 'title', 'companyID', 'status', 'closedDate', 'createDate']);
+
+    const filters: any[] = [];
+    if (o.opportunityID != null) filters.push({ op: 'eq', field: 'id', value: Number(o.opportunityID) });
+    if (o.companyID != null) filters.push({ op: 'eq', field: 'companyID', value: Number(o.companyID) });
+    if (o.createdSince) filters.push({ op: 'gte', field: 'createDate', value: `${o.createdSince}T00:00:00Z` });
+    const oppsRaw = await http.query<Record<string, any>>('Opportunities', filters, { includeFields: oppInclude, maxRecords: cap + 1, noCache: true });
+    const truncated = oppsRaw.length > cap;
+    const opps = oppsRaw.slice(0, cap).map((x) => ({ id: Number(x.id), title: x.title ?? null, companyID: x.companyID ?? null, status: x.status ?? null, statusLabel: label(x.status), closedDate: x.closedDate ?? null, createDate: x.createDate ?? null }));
+    if (o.opportunityID != null && !opps.length) return { status: 'not_found', opportunityID: o.opportunityID };
+    const oppIDs = opps.map((x) => x.id);
+
+    const skipped: string[] = [];
+    const specs = [
+      { kind: 'quote', entity: 'Quotes', name: 'name', start: 'effectiveDate' },
+      { kind: 'contract', entity: 'Contracts', name: 'contractName', start: 'startDate' },
+      { kind: 'project', entity: 'Projects', name: 'projectName', start: 'startDateTime' },
+    ] as const;
+    const rows: Record<string, SalesRecord[]> = { quote: [], contract: [], project: [] };
+    const unlinked: Record<string, SalesRecord[]> = { contract: [], project: [] };
+    const shape = (s: (typeof specs)[number], x: Record<string, any>): SalesRecord => ({ id: Number(x.id), companyID: x.companyID ?? null, opportunityID: x.opportunityID ?? null, name: x[s.name] ?? null, startDate: x[s.start] ?? null, status: x.status ?? null });
+    const wonCompanies = [...new Set(opps.filter((x) => salesPhase(x.statusLabel) === 'won' && x.companyID != null).map((x) => Number(x.companyID)))];
+    for (const s of specs) {
+      const have = new Set((await this.getFieldInfo(s.entity)).map((f) => f.name));
+      if (!have.has('opportunityID')) { skipped.push(`${s.entity} has no opportunityID field in this tenant`); continue; }
+      const include = pick(have, ['id', 'companyID', 'opportunityID', s.name, s.start, 'status']);
+      for (let i = 0; i < oppIDs.length; i += 200) {
+        const chunk = oppIDs.slice(i, i + 200);
+        const got = await http.query<Record<string, any>>(s.entity, [{ op: 'in', field: 'opportunityID', value: chunk }], { includeFields: include, maxRecords: 2000, noCache: true });
+        rows[s.kind]!.push(...got.map((x) => shape(s, x)));
+      }
+      if (s.kind !== 'quote' && o.includeUnlinked !== false && wonCompanies.length) {
+        for (let i = 0; i < wonCompanies.length; i += 200) {
+          const chunk = wonCompanies.slice(i, i + 200);
+          const got = await http.query<Record<string, any>>(s.entity, [{ op: 'in', field: 'companyID', value: chunk }, { op: 'notExist', field: 'opportunityID' }], { includeFields: include, maxRecords: 1000, noCache: true });
+          unlinked[s.kind]!.push(...got.map((x) => shape(s, x)));
+        }
+      }
+    }
+    const result = correlateSalesCycle({ opportunities: opps, quotes: rows.quote!, contracts: rows.contract!, projects: rows.project!, unlinkedContracts: unlinked.contract!, unlinkedProjects: unlinked.project! });
+    return {
+      status: 'ok',
+      scope: { opportunityID: o.opportunityID ?? null, companyID: o.companyID ?? null, createdSince: o.createdSince ?? null, maxOpportunities: cap },
+      truncated,
+      ...(skipped.length ? { skipped } : {}),
+      summary: result.summary,
+      findings: result.findings,
+      chains: result.chains,
+      note: "Links are Autotask's own opportunityID fields. A suggested link is a guess from company + dates: confirm with the user, then run the repair with dryRun first.",
+    };
+  }
+
+  /**
+   * Link a contract or project to the opportunity it came from (#20 §7 repair). Projects go through
+   * linkProjectCommercial (ownership + read-back). Contracts: opportunityID must exist and be writable on
+   * Contracts in this tenant; the opportunity must be on the contract's company. Rerun-safe; dryRun plans.
+   */
+  async linkToOpportunity(o: { opportunityID: number; contractID?: number | undefined; projectID?: number | undefined; dryRun?: boolean | undefined }): Promise<WritePlanResult> {
+    const plan = new WritePlan();
+    if ((o.contractID == null) === (o.projectID == null)) return plan.fail('input', 'Give exactly one of contractID or projectID.');
+    if (o.projectID != null) return this.linkProjectCommercial({ projectID: Number(o.projectID), opportunityID: Number(o.opportunityID), ...(o.dryRun ? { dryRun: true } : {}) });
+    const contractID = Number(o.contractID);
+    const field = (await this.getFieldInfo('Contracts')).find((f) => f.name === 'opportunityID');
+    if (!field) return plan.fail('field', 'Contracts has no opportunityID field in this tenant — the link cannot be stored.');
+    if (field.isReadOnly) return plan.fail('field', 'Contracts.opportunityID is read-only in this tenant — link it in the Autotask UI.');
+    const contract = (await this.getContract(contractID)) as Record<string, any> | null;
+    if (!contract) return plan.fail('contract', `Contract ${contractID} not found`);
+    const opp = (await this.getOpportunity(Number(o.opportunityID))) as Record<string, any> | null;
+    if (!opp) return plan.fail('opportunity', `Opportunity ${o.opportunityID} not found`);
+    if (opp.companyID != null && contract.companyID != null && Number(opp.companyID) !== Number(contract.companyID)) {
+      return plan.fail('opportunity', `Opportunity ${o.opportunityID} belongs to company ${opp.companyID}, but contract ${contractID} belongs to company ${contract.companyID}`);
+    }
+    plan.ok('ownership', { companyID: contract.companyID ?? null });
+    if (contract.opportunityID != null && Number(contract.opportunityID) === Number(o.opportunityID)) {
+      return plan.duplicate({ id: contractID, entityType: 'Contracts', alreadyLinked: { opportunityID: contract.opportunityID } });
+    }
+    const current = contract.opportunityID ?? null;
+    plan.ok('change', { from: current, to: Number(o.opportunityID), ...(current != null ? { replacing: `contract was linked to opportunity ${current}` } : {}) });
+    if (o.dryRun) return plan.dryRun({ id: contractID, entityType: 'Contracts', plannedUpdate: { opportunityID: Number(o.opportunityID) }, currentValues: { opportunityID: current } });
+    await this.updateContract(contractID, { opportunityID: Number(o.opportunityID) } as any);
+    const after = (await this.getContract(contractID)) as Record<string, any> | null;
+    const verified = after != null && Number(after.opportunityID) === Number(o.opportunityID);
+    return plan.done('linked', { id: contractID, entityType: 'Contracts', applied: { opportunityID: Number(o.opportunityID) }, previous: { opportunityID: current }, verified, item: after });
   }
 
   // =====================================================

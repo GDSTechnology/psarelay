@@ -3927,6 +3927,47 @@ export const TOOL_DEFINITIONS: McpTool[] = [
       required: ['opportunityId', 'outcome']
     }
   },
+  {
+    name: 'autotask_report_sales_cycle',
+    description:
+      'Sales-cycle check (read-only): each opportunity with the quotes, contracts and projects linked to it by Autotask\'s own ' +
+      'opportunityID, its outcome (won / lost / open, from the status label) and findings — company_mismatch (a linked record ' +
+      'on another company), won_no_delivery (won, no contract or project), lost_with_delivery, unlinked_delivery (a contract / ' +
+      'project with no opportunity on a company whose won deal lacks one — the likely opportunity is suggested with a ready ' +
+      'dry-run repair call), won_no_quote. Scope by opportunityId, companyId, or createdSince (YYYY-MM-DD, capped). A suggested ' +
+      'link is a guess from company + dates: confirm with the user before running autotask_link_to_opportunity.',
+    annotations: { title: 'Sales-cycle report', readOnlyHint: true },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        opportunityId: { type: 'number', description: 'One opportunity' },
+        companyId: { type: 'number', description: 'All opportunities of one company (0 = your own company)' },
+        createdSince: { type: 'string', description: 'Opportunities created on/after YYYY-MM-DD (tenant-wide)' },
+        maxOpportunities: { type: 'number', description: 'Cap on opportunities read (default 100, max 300); truncated:true says more exist' },
+        includeUnlinked: { type: 'boolean', description: 'Default true: also look for contracts / projects with no opportunity on companies with a won deal' }
+      }
+    }
+  },
+  {
+    name: 'autotask_link_to_opportunity',
+    description:
+      'Repair a sales-cycle link: set a contract\'s or project\'s opportunityID to the opportunity it came from. Give opportunityId ' +
+      'and exactly one of contractId / projectId. Checks the opportunity is on the SAME company, that the tenant has a writable ' +
+      'opportunityID on the entity, replaces (and reports) any previous link, then reads it back. Already linked → nothing written. ' +
+      'DEFAULTS TO A DRY RUN: show the plan to the user, then call again with dryRun:false. Status: validation_failed | duplicate | ' +
+      'dry_run | linked (only "linked" wrote).',
+    annotations: { title: 'Link contract / project to opportunity', readOnlyHint: false, idempotentHint: true },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        opportunityId: { type: 'number', description: 'The opportunity the record came from' },
+        contractId: { type: 'number', description: 'Contract to link (give this or projectId)' },
+        projectId: { type: 'number', description: 'Project to link (give this or contractId)' },
+        dryRun: { type: 'boolean', description: 'Default true: validate and return the plan. false to write, after the user approved.' }
+      },
+      required: ['opportunityId']
+    }
+  },
 
   // Product tools
   {
@@ -7126,7 +7167,7 @@ export const TOOL_CATEGORIES: Record<string, { description: string; tools: strin
   },
   financial: {
     description: 'Quotes, quote items, opportunities, invoices, and contracts',
-    tools: ['autotask_get_quote', 'autotask_search_quotes', 'autotask_create_quote', 'autotask_get_quote_item', 'autotask_search_quote_items', 'autotask_create_quote_item', 'autotask_update_quote_item', 'autotask_delete_quote_item', 'autotask_get_opportunity', 'autotask_search_opportunities', 'autotask_create_opportunity', 'autotask_update_opportunity', 'autotask_close_opportunity', 'autotask_search_invoices', 'autotask_get_invoice_details', 'autotask_search_contracts', 'autotask_get_contract', 'autotask_list_expiring_contracts', 'autotask_create_contract', 'autotask_create_contracts_bulk', 'autotask_update_contract', 'autotask_create_contract_service', 'autotask_update_contract_service', 'autotask_get_contract_service', 'autotask_search_contract_services', 'autotask_get_contract_billed_units', 'autotask_report_contract_recurring_revenue', 'autotask_report_contract_labour_basis', 'autotask_get_contract_milestone', 'autotask_search_contract_milestones', 'autotask_create_contract_milestone', 'autotask_update_contract_milestone', 'autotask_list_contract_terms', 'autotask_create_contract_term', 'autotask_update_contract_term', 'autotask_delete_contract_term', 'autotask_report_contract_labour', 'autotask_report_block_hour_usage', 'autotask_report_ticket_charges', 'autotask_report_unbilled', 'autotask_report_project_pl', 'autotask_report_sla_compliance', 'autotask_generate_sla_framework', 'autotask_report_sla_coverage', 'autotask_assign_contract_sla', 'autotask_analyze_ticket_billing_gaps', 'autotask_report_ticket_billing_gaps']
+    tools: ['autotask_get_quote', 'autotask_search_quotes', 'autotask_create_quote', 'autotask_get_quote_item', 'autotask_search_quote_items', 'autotask_create_quote_item', 'autotask_update_quote_item', 'autotask_delete_quote_item', 'autotask_get_opportunity', 'autotask_search_opportunities', 'autotask_create_opportunity', 'autotask_update_opportunity', 'autotask_close_opportunity', 'autotask_report_sales_cycle', 'autotask_link_to_opportunity', 'autotask_search_invoices', 'autotask_get_invoice_details', 'autotask_search_contracts', 'autotask_get_contract', 'autotask_list_expiring_contracts', 'autotask_create_contract', 'autotask_create_contracts_bulk', 'autotask_update_contract', 'autotask_create_contract_service', 'autotask_update_contract_service', 'autotask_get_contract_service', 'autotask_search_contract_services', 'autotask_get_contract_billed_units', 'autotask_report_contract_recurring_revenue', 'autotask_report_contract_labour_basis', 'autotask_get_contract_milestone', 'autotask_search_contract_milestones', 'autotask_create_contract_milestone', 'autotask_update_contract_milestone', 'autotask_list_contract_terms', 'autotask_create_contract_term', 'autotask_update_contract_term', 'autotask_delete_contract_term', 'autotask_report_contract_labour', 'autotask_report_block_hour_usage', 'autotask_report_ticket_charges', 'autotask_report_unbilled', 'autotask_report_project_pl', 'autotask_report_sla_compliance', 'autotask_generate_sla_framework', 'autotask_report_sla_coverage', 'autotask_assign_contract_sla', 'autotask_analyze_ticket_billing_gaps', 'autotask_report_ticket_billing_gaps']
   },
   products_and_services: {
     description: 'Products, services, and service bundles catalog',

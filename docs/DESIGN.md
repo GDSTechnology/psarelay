@@ -183,7 +183,9 @@ Disabled by default. Feature flags gate each capability
 - **Phase 4 — project/sales:** project blueprint is JSON/YAML; build is checkpointed
   and resumable (never duplicates on retry). Sales-cycle correlation uses native
   fields where they exist, else a GDS UDF or the PG relationship registry, with the
-  link type labeled.
+  link type labeled. Shipped (native only): `autotask_report_sales_cycle` +
+  `autotask_link_to_opportunity` — Quotes / Contracts / Projects `opportunityID`;
+  inferred links are suggestions, never stored without a confirmed dry-run repair.
 - **Phase 5 — calendar/staff:** Appointments are first-class (never a future time
   entry); accept local time + zone, return UTC + local. `my_day` unions tickets,
   tasks, service calls, appointments, open To-Dos, and missing time entries.
