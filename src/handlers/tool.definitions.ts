@@ -1170,6 +1170,29 @@ export const TOOL_DEFINITIONS: McpTool[] = [
     }
   },
   {
+    name: 'autotask_notify_ticket',
+    description:
+      'E-mail the customer an update on a ticket: posts a client-visible note and arms the tenant\'s notification trigger, so Autotask e-mails that note to the Ticket Contact and every additional contact on the ticket. ' +
+      'Tag more people (contact id or e-mail address, or the company\'s primary contact) and they are added to the ticket first so they get it too. Use this — not create_ticket_note — whenever the customer should be TOLD, from any chat or agent. ' +
+      'DEFAULTS TO A DRY RUN: it returns who will get the e-mail; show that and the message to the user, then call again with dryRun:false. ' +
+      'Status: dry_run | sent | duplicate (idempotencyKey already used — not sent again) | validation_failed | not_configured (the trigger isn\'t set up on this server) | not_found. Nothing is written unless every tag resolves.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ticketID: { type: 'number', description: 'The ticket id' },
+        message: { type: 'string', description: 'What the customer reads (the note body). Write it for the customer.' },
+        title: { type: 'string', description: 'Note title (default "Update")' },
+        tag: { type: 'array', items: { type: 'string' }, description: "People to tag: contact ids (as strings, e.g. 123) or e-mail addresses (\"pat@example.com\", \"Pat Example <pat@example.com>\") of the ticket's company. Each is added to the ticket as an additional contact so the same e-mail reaches them; with no Ticket Contact on the ticket, the first one becomes it. One that can't be found, is inactive, is on another company or is ambiguous refuses the whole call (nothing written)." },
+        tagPrimaryContact: { type: 'boolean', description: 'Also tag the ticket company\'s primary contact' },
+        noteType: { type: 'number', description: 'TicketNotes noteType picklist id (default AUTOTASK_NOTIFY_NOTE_TYPE, 1)' },
+        idempotencyKey: { type: 'string', description: 'Stable key so a re-run never e-mails twice; a marker [MCP-ID:<key>] is added to the note (the customer sees it).' },
+        dryRun: { type: 'boolean', description: 'Default true: resolve the recipients and return the plan. false to send, after the user approved.' }
+      },
+      required: ['ticketID', 'message']
+    },
+    annotations: { title: 'E-mail a ticket update to the customer', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true }
+  },
+  {
     name: 'autotask_update_ticket',
     description: 'Update a ticket — only the fields given change. Covers status, priority, QUEUE (move between queues), assignee + role, contact, title/description, issue / sub-issue type, source, ticket type, category, SLA, due date, estimated hours, work type, resolution, location, configuration item, PO number, opportunity, problem ticket, external id. Picklist fields (status, priority, queueID, issueType, subIssueType, source, ticketType, ticketCategory, serviceLevelAgreementID) accept the id or the label ("Tier 1 Support"); an unknown value returns the choices and writes nothing. Reads the ticket back and reports each field old → new, warning if Autotask did not apply a value. Contract and company changes are NOT done here — use autotask_set_ticket_contract / autotask_move_ticket_to_company.',
     inputSchema: {
@@ -3025,7 +3048,7 @@ export const TOOL_DEFINITIONS: McpTool[] = [
   },
   {
     name: 'autotask_create_ticket_note',
-    description: 'Create a new note for a ticket',
+    description: 'Create a new note for a ticket. A note posted through the API e-mails NO ONE by itself: to tell the customer, pass notify:true (or use autotask_notify_ticket), which arms the notification trigger so Autotask e-mails the note to the ticket contact and additional contacts.',
     _meta: TICKET_CARD_META,
     inputSchema: {
       type: 'object',
@@ -3050,9 +3073,15 @@ export const TOOL_DEFINITIONS: McpTool[] = [
           type: 'number',
           description: 'Publish/visibility picklist ID. Tenant-specific and security-sensitive (controls whether the note is visible to clients). Call autotask_get_field_info with entityType "TicketNotes" and fieldName "publish" to discover the exact label-to-ID mapping before calling this tool. Never guess — the wrong value can expose internal notes to clients.'
         },
+        notify: {
+          type: 'boolean',
+          description: 'true: e-mail this note to the ticket contact and additional contacts (arms the notification trigger; publish must be the client-visible value the rule matches, or the call is refused). Sends at once — preview recipients with autotask_notify_ticket first when unsure.'
+        },
+        tag: { type: 'array', items: { type: 'string' }, description: "With notify: People to tag: contact ids (as strings, e.g. 123) or e-mail addresses (\"pat@example.com\", \"Pat Example <pat@example.com>\") of the ticket's company. Each is added to the ticket as an additional contact so the same e-mail reaches them; with no Ticket Contact on the ticket, the first one becomes it. One that can't be found, is inactive, is on another company or is ambiguous refuses the whole call (nothing written)." },
+        tagPrimaryContact: { type: 'boolean', description: 'With notify: also tag the ticket company\'s primary contact' },
         idempotencyKey: {
           type: 'string',
-          description: 'Optional dedup key so a re-run does not duplicate this note (e.g. "RPO-MTG:T20260922.0189:PARKWOOD-IPAD"). When set, a deterministic marker [MCP-ID:<key>] is appended to the note body; before creating, the ticket\'s existing notes are scanned for that marker and the prior note is returned instead of a second copy. Keep the note internal (publish) if the key should not be client-visible. Use a stable key per logical note.'
+          description: 'Optional dedup key so a re-run does not duplicate this note (e.g. "RPO-MTG:T20260922.0189:SITE-IPAD"). When set, a deterministic marker [MCP-ID:<key>] is appended to the note body; before creating, the ticket\'s existing notes are scanned for that marker and the prior note is returned instead of a second copy. Keep the note internal (publish) if the key should not be client-visible. Use a stable key per logical note.'
         }
       },
       required: ['ticketId', 'description', 'noteType', 'publish']
@@ -7155,7 +7184,7 @@ export const TOOL_CATEGORIES: Record<string, { description: string; tools: strin
   },
   tickets: {
     description: 'Search, create, update tickets and manage ticket notes, attachments, charges, audit history, and the notification e-mails Autotask sent',
-    tools: ['autotask_search_tickets', 'autotask_get_ticket_details', 'autotask_set_ticket_contract', 'autotask_get_ticket_by_number', 'autotask_get_ticket_change_history', 'autotask_get_ticket_email_context', 'autotask_create_ticket', 'autotask_update_ticket', 'autotask_start_work_on_ticket', 'autotask_add_ticket_update', 'autotask_move_ticket_to_company', 'autotask_find_ticket_by_external_id', 'autotask_search_ticket_configuration_items', 'autotask_add_ticket_configuration_item', 'autotask_remove_ticket_configuration_item', 'autotask_list_ticket_additional_contacts', 'autotask_add_ticket_additional_contact', 'autotask_remove_ticket_additional_contact', 'autotask_get_ticket_note', 'autotask_search_ticket_notes', 'autotask_create_ticket_note', 'autotask_get_ticket_attachment', 'autotask_search_ticket_attachments', 'autotask_create_ticket_attachment', 'autotask_get_ticket_charge', 'autotask_search_ticket_charges', 'autotask_add_ticket_materials', 'autotask_create_ticket_charge', 'autotask_update_ticket_charge', 'autotask_delete_ticket_charge', 'autotask_get_ticket_history', 'autotask_search_ticket_history', 'autotask_search_notification_history', 'autotask_report_ticket_throughput', 'autotask_report_request_segmentation', 'autotask_search_checklist_libraries', 'autotask_get_checklist_library', 'autotask_apply_checklist_library_to_ticket', 'autotask_create_maintenance_ticket', 'autotask_search_ticket_checklist_items', 'autotask_create_ticket_checklist_item', 'autotask_update_ticket_checklist_item', 'autotask_delete_ticket_checklist_item']
+    tools: ['autotask_search_tickets', 'autotask_get_ticket_details', 'autotask_set_ticket_contract', 'autotask_get_ticket_by_number', 'autotask_get_ticket_change_history', 'autotask_get_ticket_email_context', 'autotask_create_ticket', 'autotask_update_ticket', 'autotask_start_work_on_ticket', 'autotask_add_ticket_update', 'autotask_move_ticket_to_company', 'autotask_find_ticket_by_external_id', 'autotask_search_ticket_configuration_items', 'autotask_add_ticket_configuration_item', 'autotask_remove_ticket_configuration_item', 'autotask_list_ticket_additional_contacts', 'autotask_add_ticket_additional_contact', 'autotask_remove_ticket_additional_contact', 'autotask_notify_ticket', 'autotask_get_ticket_note', 'autotask_search_ticket_notes', 'autotask_create_ticket_note', 'autotask_get_ticket_attachment', 'autotask_search_ticket_attachments', 'autotask_create_ticket_attachment', 'autotask_get_ticket_charge', 'autotask_search_ticket_charges', 'autotask_add_ticket_materials', 'autotask_create_ticket_charge', 'autotask_update_ticket_charge', 'autotask_delete_ticket_charge', 'autotask_get_ticket_history', 'autotask_search_ticket_history', 'autotask_search_notification_history', 'autotask_report_ticket_throughput', 'autotask_report_request_segmentation', 'autotask_search_checklist_libraries', 'autotask_get_checklist_library', 'autotask_apply_checklist_library_to_ticket', 'autotask_create_maintenance_ticket', 'autotask_search_ticket_checklist_items', 'autotask_create_ticket_checklist_item', 'autotask_update_ticket_checklist_item', 'autotask_delete_ticket_checklist_item']
   },
   projects: {
     description: 'Search and create projects, tasks, phases, project notes and project charges',

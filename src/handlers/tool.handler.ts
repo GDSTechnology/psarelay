@@ -60,6 +60,7 @@ const DRY_RUN_FIRST_TOOLS = new Set<string>([
   'autotask_update_service',
   'autotask_close_opportunity',
   'autotask_link_to_opportunity',
+  'autotask_notify_ticket',
   'autotask_create_contract_term',
   'autotask_update_contract_term',
   'autotask_delete_contract_term',
@@ -1797,6 +1798,17 @@ export class AutotaskToolHandler {
           : `Not added — ${r.detail}`;
         return { result: r, message: msg };
       }],
+      ['autotask_notify_ticket', async (a) => {
+        const r = await s.notifyTicket({ ticketID: Number(a.ticketID ?? a.ticketId), description: a.message ?? a.description, title: a.title, noteType: a.noteType ?? undefined,
+          tag: a.tag, tagPrimaryContact: a.tagPrimaryContact === true, idempotencyKey: a.idempotencyKey, dryRun: a.dryRun !== false });
+        const msg: Record<string, string> = {
+          dry_run: 'DRY RUN (nothing written) — show the user the message and who gets it; after they approve, call again with dryRun:false.',
+          sent: 'Note posted and the trigger armed — Autotask e-mails it to the recipients listed.',
+          duplicate: 'Already sent with that idempotencyKey — not sent again.',
+        };
+        const who = Array.isArray(r.recipients) ? ` Recipients: ${r.recipients.map((p: any) => `${p.name ?? 'contact ' + p.contactID}${p.email ? ` <${p.email}>` : ' (no e-mail)'} — ${p.as}`).join('; ')}.` : '';
+        return { result: r, message: (msg[String(r.status)] ?? `NOT SENT (${r.status}) — ${r.detail ?? ''}`) + who };
+      }],
       ['autotask_remove_ticket_additional_contact', async (a) => {
         const r = await s.removeTicketAdditionalContact(Number(a.ticketID), Number(a.contactID));
         const msg = r.status === 'not_there' ? r.detail
@@ -3210,6 +3222,17 @@ export class AutotaskToolHandler {
         return { result: r, message: `Found ${r.length} ticket notes${hidden}` };
       }],
       ['autotask_create_ticket_note', async (a) => {
+        if (a.notify === true) {
+          const r = await s.notifyTicket({ ticketID: Number(a.ticketId ?? a.ticketID), description: a.description, title: a.title, noteType: a.noteType ?? undefined, publish: a.publish ?? undefined,
+            tag: a.tag, tagPrimaryContact: a.tagPrimaryContact === true, idempotencyKey: a.idempotencyKey, dryRun: a.dryRun === true ? true : false });
+        const msg: Record<string, string> = {
+          dry_run: 'DRY RUN (nothing written) — show the user the message and who gets it; after they approve, call again with dryRun:false.',
+          sent: 'Note posted and the trigger armed — Autotask e-mails it to the recipients listed.',
+          duplicate: 'Already sent with that idempotencyKey — not sent again.',
+        };
+        const who = Array.isArray(r.recipients) ? ` Recipients: ${r.recipients.map((p: any) => `${p.name ?? 'contact ' + p.contactID}${p.email ? ` <${p.email}>` : ' (no e-mail)'} — ${p.as}`).join('; ')}.` : '';
+          return { result: r, message: (msg[String(r.status)] ?? `NOT SENT (${r.status}) — ${r.detail ?? ''}`) + who };
+        }
         if (a.noteType === undefined || a.noteType === null) {
           throw new Error('noteType is required. Picklist values are tenant-specific — call autotask_get_field_info with entityType "TicketNotes" and fieldName "noteType" to discover the correct ID.');
         }
