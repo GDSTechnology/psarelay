@@ -29,6 +29,7 @@ export default defineConfig({
 						{ label: 'Connect your AI', slug: 'guides/connect' },
 						{ label: 'Integration API', slug: 'guides/integration-api' },
 						{ label: 'Safety model', slug: 'guides/safety' },
+						{ label: 'Customer notifications', slug: 'guides/notifications' },
 						{ label: 'Postgres mirror', slug: 'guides/mirror' },
 						{ label: 'Admin console', slug: 'guides/console' },
 						{ label: 'Merges & bulk cleanup', slug: 'guides/bulk-cleanup' },
