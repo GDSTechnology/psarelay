@@ -12,9 +12,11 @@
 //   is NOT retried here: it fails closed as AutotaskResponseError and the caller decides.) Writes are
 //   never retried (they may have landed), and neither is HTTP 500 — Autotask answers
 //   validation errors with 500, so a retry would only repeat them.
-// - Outage breaker: AUTOTASK_OUTAGE_FAILURES (5) transient failures within 60 s open the
-//   breaker for 30 s (doubling up to 5 min while failures continue): calls fail LOCALLY with a
-//   retryable AutotaskOutageError. Then one probe call goes through; success closes it.
+// - Outage breaker, PER ENDPOINT: AUTOTASK_OUTAGE_FAILURES (5) transient failures within 60 s on
+//   one endpoint (Quotes, Opportunities, …) open ITS breaker for 30 s (doubling up to 5 min while
+//   failures continue): calls to it fail LOCALLY with a retryable AutotaskOutageError, while every
+//   other module carries on. Only when the failures span TENANT_SPREAD (3) or more endpoints does the
+//   whole tenant count as down. Then one probe call goes through; success closes it.
 
 export interface Gate { active: number; waiting: Array<() => void> }
 
@@ -92,33 +94,48 @@ export class AutotaskOutageError extends Error {
   }
 }
 
-interface Breaker { failures: number[]; openUntil: number; openMs: number; probing: boolean; lastError: string }
+interface Breaker { failures: Array<{ t: number; ep: string }>; openUntil: number; openMs: number; probing: boolean; lastError: string }
 const breakers = new Map<string, Breaker>();
 const WINDOW_MS = 60_000;
 const FIRST_OPEN_MS = 30_000;
 const MAX_OPEN_MS = 5 * 60_000;
+/** Distinct endpoints failing within the window before the WHOLE tenant counts as down. */
+export const TENANT_SPREAD = 3;
+const ALL = '*';
+const keyOf = (tenant: string, ep: string) => `${tenant} ${ep || '?'}`;
+const breaker = (k: string) => breakers.get(k) ?? breakers.set(k, { failures: [], openUntil: 0, openMs: 0, probing: false, lastError: '' }).get(k)!;
 
-/** Throws while the tenant's breaker is open; lets ONE probe through once it has run out. */
-export function checkBreaker(tenant: string, now = Date.now()): void {
-  const b = breakers.get(tenant);
+function guard(k: string, label: string, now: number): void {
+  const b = breakers.get(k);
   if (!b || b.openUntil === 0) return;
   // A probe that never reported back (aborted locally) frees the next one after a minute.
   if (now < b.openUntil || (b.probing && now < b.openUntil + 60_000)) {
     const s = Math.max(1, Math.ceil((b.openUntil - now) / 1000));
     throw new AutotaskOutageError(
-      `Autotask looks unavailable (${outageFailures()} or more network errors / 5xx answers within a minute; last: ${b.lastError}). ` +
-      `This call was NOT sent. Retry after ${s}s — the MCP lets one test call through then.`, s);
+      `${label} looks unavailable (${outageFailures()} or more network errors / 5xx answers within a minute; last: ${b.lastError}). ` +
+      `This call was NOT sent. Retry after ${s}s — the MCP lets one test call through then.` +
+      (label === 'Autotask' ? '' : ' Other Autotask modules are not affected; carry on with work that does not need this one.'), s);
   }
   b.probing = true; // half-open: this call is the probe
 }
 
-/** Autotask answered (any HTTP status but 502/503/504): it is up. */
-export function recordSuccess(tenant: string): void {
-  breakers.delete(tenant);
+/**
+ * Throws while the breaker is open for the whole tenant or for this endpoint (e.g. Quotes during a
+ * module outage); lets ONE probe through once it has run out. Module outages are real (a 19-minute
+ * Quotes / Opportunities outage stalled a signed proposal), so one failing module never stops the rest.
+ */
+export function checkBreaker(tenant: string, endpoint: string, now = Date.now()): void {
+  guard(keyOf(tenant, ALL), 'Autotask', now);
+  guard(keyOf(tenant, endpoint), `Autotask's ${endpoint || 'API'} endpoint`, now);
 }
 
-export function recordTransientFailure(tenant: string, message: string, now = Date.now()): void {
-  const b = breakers.get(tenant) ?? breakers.set(tenant, { failures: [], openUntil: 0, openMs: 0, probing: false, lastError: '' }).get(tenant)!;
+/** Autotask answered on this endpoint (any HTTP status but 502/503/504): it, and the tenant, are up. */
+export function recordSuccess(tenant: string, endpoint: string): void {
+  breakers.delete(keyOf(tenant, endpoint));
+  breakers.delete(keyOf(tenant, ALL));
+}
+
+function fail(b: Breaker, message: string, now: number, ep: string, opensAt: (b: Breaker) => boolean): void {
   b.lastError = message.slice(0, 200);
   if (b.probing) {
     // The probe failed: open again, twice as long.
@@ -127,17 +144,43 @@ export function recordTransientFailure(tenant: string, message: string, now = Da
     b.openUntil = now + b.openMs;
     return;
   }
-  b.failures = [...b.failures.filter((t) => now - t < WINDOW_MS), now];
-  if (b.openUntil === 0 && b.failures.length >= outageFailures()) {
+  b.failures = [...b.failures.filter((f) => now - f.t < WINDOW_MS), { t: now, ep }];
+  if (b.openUntil === 0 && opensAt(b)) {
     b.openMs = FIRST_OPEN_MS;
     b.openUntil = now + b.openMs;
   }
 }
 
-/** Seconds left on an open breaker (0 = closed or ready for its probe). */
+export function recordTransientFailure(tenant: string, endpoint: string, message: string, now = Date.now()): void {
+  const enough = (b: Breaker) => b.failures.length >= outageFailures();
+  fail(breaker(keyOf(tenant, endpoint)), message, now, endpoint, enough);
+  // The whole tenant only when the failures span several modules — a single module's outage stays local.
+  fail(breaker(keyOf(tenant, ALL)), message, now, endpoint, (b) => enough(b) && new Set(b.failures.map((f) => f.ep)).size >= TENANT_SPREAD);
+}
+
+const secondsLeft = (b: Breaker | undefined, now: number) => (b && b.openUntil > now ? Math.ceil((b.openUntil - now) / 1000) : 0);
+
+/** Seconds left on the TENANT-wide breaker (0 = closed or ready for its probe). */
 export function outageSeconds(tenant: string, now = Date.now()): number {
-  const b = breakers.get(tenant);
-  return b && b.openUntil > now ? Math.ceil((b.openUntil - now) / 1000) : 0;
+  return secondsLeft(breakers.get(keyOf(tenant, ALL)), now);
+}
+
+/** Seconds left for this endpoint — the tenant-wide breaker included. */
+export function endpointOutageSeconds(tenant: string, endpoint: string, now = Date.now()): number {
+  return Math.max(outageSeconds(tenant, now), secondsLeft(breakers.get(keyOf(tenant, endpoint)), now));
+}
+
+/** Endpoints whose own breaker is open (module outages), for backpressure. */
+export function endpointOutages(tenant: string, now = Date.now()): Array<{ endpoint: string; seconds: number }> {
+  const out: Array<{ endpoint: string; seconds: number }> = [];
+  const prefix = `${tenant} `;
+  for (const [k, b] of breakers) {
+    const ep = k.startsWith(prefix) ? k.slice(prefix.length) : null;
+    if (ep == null || ep === ALL) continue;
+    const s = secondsLeft(b, now);
+    if (s > 0) out.push({ endpoint: ep, seconds: s });
+  }
+  return out.sort((a, b) => a.endpoint.localeCompare(b.endpoint));
 }
 
 /** Tests only. */
