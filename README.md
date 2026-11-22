@@ -107,7 +107,7 @@ The server assumes it is talking to a live production tenant and to clients that
 | **Bulk jobs** | Mass changes are prepared from the mirror, **approved by hash** by a person, run a **canary** first, then a paced worker writes — slower in business hours, nothing in **quiet hours**, backing off from 40% tenant usage and stopping at 65%. Records with history are excluded; for placeholder cleanups every email address is checked tenant-wide so real people are kept. |
 | **Read-only switch** | One console switch stops every write — tools and background jobs. |
 | **Login protection** | A rejected login pauses all calls; repeated failures hold the tenant until an administrator retries, so a bad secret can't lock the API user. |
-| **Throttling** | A 429 starts a local cooldown (no retry storms), at most 2–3 concurrent calls per endpoint, `get_backpressure` tells dispatchers ok / slow / stop. → [THROTTLING](docs/THROTTLING.md) |
+| **Throttling** | A 429 starts a local cooldown (no retry storms), at most 2–3 concurrent calls per endpoint plus per-caller and tenant caps, jittered retry of transient read failures (never writes, never HTTP 500), an outage breaker, and `get_backpressure` tells dispatchers ok / slow / stop. → [THROTTLING](docs/THROTTLING.md) |
 | **Company 0** | The tenant's own company is protected from rename, reclassification and inactivation. |
 | **Operation log** | Every write is recorded per tool call (who, what, which records), with durable idempotency keys. |
 
@@ -178,6 +178,10 @@ migrations, restarts, waits for `/health` and prints the version — and refuses
 | `MCP_ADMIN_ENABLED`, `MCP_ADMIN_PORT` | off / `8090` | Admin console → [ADMIN](docs/ADMIN.md) |
 | `MCP_BULK_SLOW_AT_PCT` / `MCP_BULK_STOP_AT_PCT` | `40` / `65` | Bulk-job back-off by tenant API usage |
 | `AUTOTASK_MAX_CONCURRENT_PER_ENDPOINT` | `2` | Concurrent calls per endpoint (Autotask allows 3) |
+| `MCP_MAX_CONCURRENT_PER_CALLER` | `4` | Calls in flight per caller (source + user); the rest queue |
+| `AUTOTASK_MAX_CONCURRENT_TOTAL` | `8` | Calls in flight for the whole tenant |
+| `AUTOTASK_READ_RETRIES` | `2` | Retries of a read after a network error / timeout / 502–504 (0 = off) |
+| `AUTOTASK_OUTAGE_FAILURES` | `5` | Transient failures in a minute that open the outage breaker |
 | `MCP_PUBLIC_URL` | — | The address AI clients use for this server; the console's Setup page shows it with connection steps |
 | `LOG_LEVEL` / `LOG_FORMAT` | `info` / `simple` | `json` for production |
 

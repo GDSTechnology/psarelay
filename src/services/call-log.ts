@@ -59,6 +59,13 @@ let nextTool = 1, nextApi = 1;
 type Scope = { tool?: ToolCallRecord; job?: string };
 const scope = new AsyncLocalStorage<Scope>();
 
+/** Who is calling, for the per-caller concurrency cap: the tool call's source + user; null for background work. */
+export function currentCaller(): string | null {
+  const t = scope.getStore()?.tool;
+  if (!t) return null;
+  return `${t.source ?? 'unknown'}|${t.user ?? t.ip ?? ''}`;
+}
+
 const push = <T>(arr: T[], v: T, max: number) => { arr.push(v); if (arr.length > max) arr.splice(0, arr.length - max); };
 const clip = (s: string | undefined | null, n = 300): string | null => (s ? (s.length > n ? `${s.slice(0, n)}…` : s) : null);
 

@@ -24,9 +24,15 @@ beforeAll(() => {
 import { _resetHttpCache } from '../src/services/http-cache';
 // Same for the auth-failure pause: a 401 in one test must not pause the next.
 import { _resetAuthBlocks } from '../src/services/autotask-http';
+// And the §24 upstream guard: no transient retries (blocked-network calls would wait out the backoff) and no
+// outage breaker carried between tests. tests/upstream-guard.test.ts turns both back on.
+import { _resetUpstreamGuard } from '../src/services/upstream-guard';
+process.env.AUTOTASK_READ_RETRIES = '0';
+process.env.AUTOTASK_OUTAGE_FAILURES = '100';
 beforeEach(() => {
   _resetHttpCache();
   _resetAuthBlocks();
+  _resetUpstreamGuard();
 });
 
 // No network in tests: a unit test must never reach Autotask (or anything else) — with real credentials in the
