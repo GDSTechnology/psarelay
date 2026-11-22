@@ -202,6 +202,11 @@ Disabled by default. Feature flags gate each capability
 - **Performance:** central request queue, per-user + global concurrency caps, retry
   with backoff + jitter, circuit breaker, metadata/picklist cache, bounded fan-out,
   stable pagination, correlation ids across ChatGPT/Hermes → MCP → PG → Autotask.
+  Shipped (`src/services/autotask-http.ts`, `upstream-guard.ts`, docs/THROTTLING.md): per-endpoint gate
+  (queue), per-caller + tenant caps (queue), jittered retry of transient READ failures (network /
+  timeout / 502–504; never writes, never 500), outage breaker + 429 cooldown + login pause, field/UDF
+  cache (1 h), `mapWithConcurrency` fan-out, id-ordered paging (`id > max`), and correlation via the
+  call log (tool call → its Autotask calls) and the operation log (`correlationId`, `decisionId`).
 - **Deployment:** live on the production host (docker-compose). Automated release
   (semantic-release → GHCR image). Pinned image / rollback per `DEPLOY.md`.
 - **Testing:** unit (resolution, ambiguity, permission intersection, risk,

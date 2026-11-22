@@ -22,6 +22,9 @@ The limit is the tenant's, not yours: one integration's burst slows every other 
 | **Mirror and cache** | Most reads never reach Autotask (see [Postgres mirror](/guides/mirror/)). |
 | **429 cooldown** | A 429 starts a local cooldown; calls fail fast with "do not retry" instead of extending the penalty. |
 | **Concurrency gate** | At most 2 (configurable up to 3) calls per endpoint; extra calls queue. |
+| **Caller and tenant caps** | At most 4 calls in flight per caller and 8 for the tenant (configurable); extra calls queue, so one chat burst can't starve the dispatchers. |
+| **Transient retry** | A read that hits a network error, timeout or 502/503/504 is retried twice with jittered backoff. Writes and HTTP 500 (Autotask's validation errors) never are. |
+| **Outage breaker** | 5 network errors / 5xx answers in a minute: calls fail locally for 30 s, then one test call decides. |
 | **Mirror sync** | Skips a run above 85% usage or during a cooldown; capped at 100 calls a run. |
 | **Bulk jobs** | Re-read tenant usage every minute while writing; half pace from 40%, stop from 65%; quiet hours. |
 | **Login protection** | A rejected login pauses everything, so retries can't lock the API user. |

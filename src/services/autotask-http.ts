@@ -13,7 +13,8 @@ import { mapWithConcurrency } from '../utils/concurrency';
 import { getImpersonationResourceId } from '../utils/request-context';
 import { Logger } from '../utils/logger';
 import { cachedRead, invalidateAfterWrite, isRead, recordRateLimited, recordUpstream } from './http-cache';
-import { startApiCall } from './call-log';
+import { currentCaller, startApiCall } from './call-log';
+import { acquireUpstream, backoffMs, checkBreaker, isTransient, outageSeconds, readRetries, recordSuccess, recordTransientFailure } from './upstream-guard';
 
 export interface QueryFilter {
   op: string;
@@ -536,11 +537,35 @@ export class AutotaskHttpClient {
     isZoneRetry = false,
     opts: { allowEmptyBody?: boolean } = {}
   ): Promise<{ value: T; bytes: number }> {
-    const release = await acquireEndpointSlot(`${this.username.toLowerCase()} ${endpointOf(path)}`);
-    try {
-      return await this.sendUngated<T>(method, path, body, isZoneRetry, opts);
-    } finally {
-      release();
+    // Spec §24 (upstream-guard.ts): tenant + per-caller caps, then the endpoint gate; a READ that
+    // fails transiently (network, timeout, 502/503/504) is retried with jittered
+    // backoff, its slots released while it waits. Writes and HTTP 500 are never retried.
+    const tenant = this.username.toLowerCase();
+    const tries = isRead(method, path) ? readRetries() : 0;
+    for (let attempt = 0; ; attempt++) {
+      const releaseUpstream = await acquireUpstream(tenant, currentCaller());
+      let err: unknown;
+      try {
+        const release = await acquireEndpointSlot(`${tenant} ${endpointOf(path)}`);
+        try {
+          const out = await this.sendUngated<T>(method, path, body, isZoneRetry, opts);
+          recordSuccess(tenant);
+          return out;
+        } finally {
+          release();
+        }
+      } catch (e) {
+        err = e;
+      } finally {
+        releaseUpstream();
+      }
+      const transient = isTransient(err);
+      if (transient) recordTransientFailure(tenant, err instanceof Error ? err.message : String(err));
+      else if (typeof (err as { status?: unknown })?.status === 'number') recordSuccess(tenant); // Autotask answered
+      if (!transient || attempt >= tries || outageSeconds(tenant) > 0) throw err;
+      const wait = backoffMs(attempt);
+      this.logger.warn(`Autotask ${method} ${path.split('?')[0]} failed transiently (${err instanceof Error ? err.message.slice(0, 120) : String(err)}); retry ${attempt + 1}/${tries} in ${wait} ms`);
+      await new Promise((r) => setTimeout(r, wait));
     }
   }
 
@@ -593,6 +618,8 @@ export class AutotaskHttpClient {
 
     const url = path.startsWith('http') ? path : `${await this.baseUrl()}${path.startsWith('/') ? '' : '/'}${path}`;
 
+    // Outage breaker: a run of network errors / 5xx answers → fail locally for a while.
+    checkBreaker(cooldownKey);
     this.logger.debug(`Autotask HTTP ${method} ${url}`);
     recordUpstream(cooldownKey, method, path);
     const logged = startApiCall(method, path);
@@ -612,7 +639,7 @@ export class AutotaskHttpClient {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logged(0, msg);
-      throw new Error(`Autotask ${method} ${url} network error: ${msg}`, { cause: err });
+      throw Object.assign(new Error(`Autotask ${method} ${url} network error: ${msg}`, { cause: err }), { transient: true });
     }
 
     if (response.status === 204) {

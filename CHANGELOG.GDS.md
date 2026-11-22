@@ -10,6 +10,21 @@ Each entry lists the merge commit and the PR number. Brief section references
 
 ---
 
+## v6.28.0 — 2026-11-22 — Upstream guard: caller caps, transient retry, outage breaker (#23 §24)
+
+- **Per-caller and tenant concurrency caps**: at most `MCP_MAX_CONCURRENT_PER_CALLER` (4) Autotask calls in flight per
+  caller (the tool call's source + user) and `AUTOTASK_MAX_CONCURRENT_TOTAL` (8) for the tenant, in front of the
+  per-endpoint gate. Extra calls queue; background work (mirror sync, bulk worker) counts toward the tenant cap only.
+- **Transient retry for reads**: a GET / query that fails with a network error, a timeout or HTTP 502 / 503 / 504 is
+  retried up to `AUTOTASK_READ_RETRIES` (2) times with exponential backoff and full jitter, its slots released while
+  it waits. Writes are never retried (they may have landed), nor HTTP 500 (Autotask's validation errors), nor a
+  truncated 2xx body (still fail-closed for the caller).
+- **Outage breaker**: `AUTOTASK_OUTAGE_FAILURES` (5) transient failures within a minute → calls fail locally for 30 s
+  with a retryable `AutotaskOutageError`; then one test call; a failed test doubles the wait (max 5 min). Backpressure
+  reports it as `stop` with `outageSeconds`; the queue depth now includes the new caps.
+- Closes the last item of #23 (spec §24); the rest of §24 (endpoint queue, field cache, bounded fan-out, id paging,
+  correlation ids) was already in place and is now listed in docs/DESIGN.md.
+
 ## v6.27.0 — 2026-11-21 — E-mail a ticket note to the customer from any chat
 
 - **`autotask_notify_ticket`**: posts a client-visible note and arms the tenant's notification trigger (a ticket UDF
