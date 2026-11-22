@@ -10,6 +10,21 @@ Each entry lists the merge commit and the PR number. Brief section references
 
 ---
 
+## v6.27.0 — 2026-11-21 — E-mail a ticket note to the customer from any chat
+
+- **`autotask_notify_ticket`**: posts a client-visible note and arms the tenant's notification trigger (a ticket UDF
+  an Autotask workflow rule watches), so Autotask e-mails the note to the Ticket Contact and every additional contact.
+  ChatGPT, Copilot, Claude and Nexus can all use it. **Tag** people by contact id or e-mail address (or the company's
+  primary contact): they're added to the ticket first so they get the same e-mail; with no Ticket Contact the first
+  one becomes it. Defaults to a dry run listing the recipients; every tag must resolve to one active contact of the
+  ticket's company or nothing is written; a failed note disarms the trigger; `idempotencyKey` stops a second send.
+- **`autotask_create_ticket_note` `notify: true`** (with `tag` / `tagPrimaryContact`; publish must be the rule's client-visible value) does the same in one call;
+  without it a note still e-mails no one, and the description now says so.
+- New settings `AUTOTASK_NOTIFY_UDF` (off when unset), `AUTOTASK_NOTIFY_VALUE`, `AUTOTASK_NOTIFY_PUBLISH`,
+  `AUTOTASK_NOTIFY_NOTE_TYPE`; set-up in docs/NOTIFICATIONS.md.
+- Checked live first (read-only, 30 days): the existing Nexus rule sent on all 22 armed tickets, to the contact and
+  all 10 additional contacts on them — the gap was only that nothing but four Nexus plans could arm it.
+
 ## v6.26.0 — 2026-11-19 — Integration API: picklist labels (company type for CRM sync)
 
 - **`PicklistLabels`** on `/api/v1` reads: a query with `"PicklistLabels": true` (or a by-id read with

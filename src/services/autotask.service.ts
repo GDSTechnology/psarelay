@@ -60,6 +60,7 @@ import {
 } from '../utils/contract-sla';
 import { computeTimeEntryCompliance, TimeEntryComplianceResult } from '../utils/time-entry-compliance';
 import { groupNotificationSends, emailDomain, NotificationRow, NotificationSend } from '../utils/notification-history';
+import { notifyConfig, parseNotifyTags, NOTIFY_NOT_CONFIGURED, type NotifyConfig } from '../utils/ticket-notify';
 import { resolveWebhookSecret, secretErrors, secretWarnings, maskSecret, buildExclusions, SecretSource, WEBHOOK_SECRET_ENV } from '../utils/webhook-safety';
 import { computeActivityWithoutTime, AwtNote, AwtCompletion, AwtEmail, AwtTimeEntry, AwtTicket, AwtResourceResult, GapConfidence } from '../utils/activity-without-time';
 import { computeTicketsNeedingScheduling, TicketsNeedingSchedulingResult, ServiceCallLite } from '../utils/tickets-needing-scheduling';
@@ -1715,6 +1716,125 @@ export class AutotaskService {
     try { after = await this.ticketAdditionalContactRows(ticketID, contactID); } catch { after = null; }
     this.logger.info(`Removed contact ${contactID} from ticket ${ticketID} additional contacts`);
     return { status: 'removed', ticketID, contactID, associationIDs: rows.map((r) => r.id), verified: after ? after.length === 0 : null };
+  }
+
+  /**
+   * E-mail a note to the ticket's contact and additional contacts (src/utils/ticket-notify.ts):
+   * tag people (contact id or e-mail on the ticket's company, or the company's primary contact)
+   * → they are added to the ticket; with no Ticket Contact the first one becomes it. Then the
+   * tenant's trigger UDF is armed and the note posted with the publish value the workflow rule
+   * matches. A dry run (the default for callers) resolves everyone and writes nothing.
+   * Everything is refused before any write when a tag can't be resolved.
+   */
+  async notifyTicket(o: {
+    ticketID: number; description: string; title?: string | undefined; noteType?: number | undefined; publish?: number | undefined;
+    tag?: unknown; tagPrimaryContact?: boolean | undefined; idempotencyKey?: string | undefined; dryRun?: boolean | undefined;
+    config?: NotifyConfig | null | undefined;
+  }): Promise<Record<string, any>> {
+    const cfg = o.config === undefined ? notifyConfig() : o.config;
+    if (!cfg) return { status: 'not_configured', ticketID: o.ticketID, detail: NOTIFY_NOT_CONFIGURED };
+    const description = String(o.description ?? '').trim();
+    if (!description) return { status: 'validation_failed', ticketID: o.ticketID, detail: 'description (the message the customer gets) is required. Nothing written.' };
+    if (o.publish != null && Number(o.publish) !== cfg.publish) return { status: 'validation_failed', ticketID: o.ticketID, detail: `An e-mailed note is published ${cfg.publish} (the value the workflow rule matches, AUTOTASK_NOTIFY_PUBLISH); publish ${o.publish} wouldn't send. Leave publish out. Nothing written.` };
+    const http = await this.ensureClient();
+    const ticket = await http.get<Record<string, any>>('Tickets', o.ticketID);
+    if (!ticket) return { status: 'not_found', ticketID: o.ticketID, detail: `Ticket ${o.ticketID} not found` };
+    const base = { ticketID: o.ticketID, ticketNumber: ticket.ticketNumber ?? null, companyID: ticket.companyID ?? null };
+    const { tags, invalid } = parseNotifyTags(o.tag);
+    if (invalid.length) return { ...base, status: 'validation_failed', invalid, detail: `Not a contact id or e-mail address: ${invalid.join(', ')}. Nothing written.` };
+
+    type Person = { contactID: number; name: string | null; email: string | null; via: string };
+    const fields = ['id', 'firstName', 'lastName', 'emailAddress', 'emailAddress2', 'emailAddress3', 'companyID', 'isActive', 'primaryContact'];
+    const person = (c: Record<string, any>, via: string): Person => ({ contactID: Number(c.id), name: [c.firstName, c.lastName].filter(Boolean).join(' ') || null, email: c.emailAddress || null, via });
+    const unresolved: string[] = [];
+    const wanted: Person[] = [];
+    // Company 0 is the tenant's own company — compare with != null, never truthiness.
+    const sameCompany = (c: Record<string, any>) => ticket.companyID != null && c.companyID != null && Number(c.companyID) === Number(ticket.companyID);
+    for (const t of tags) {
+      if ('contactID' in t) {
+        const c = await http.get<Record<string, any>>('Contacts', t.contactID);
+        if (!c) unresolved.push(`contact ${t.contactID} not found`);
+        else if (!sameCompany(c)) unresolved.push(`contact ${t.contactID} is on company ${c.companyID ?? '?'}, the ticket on ${ticket.companyID ?? '?'}`);
+        else if (!isActiveFlag(c.isActive)) unresolved.push(`contact ${t.contactID} is inactive`);
+        else wanted.push(person(c, 'tagged'));
+        continue;
+      }
+      if (ticket.companyID == null) { unresolved.push(`${t.email}: the ticket has no company`); continue; }
+      const hits: Record<string, any>[] = [];
+      for (const f of ['emailAddress', 'emailAddress2', 'emailAddress3']) {
+        for (const c of await http.query<Record<string, any>>('Contacts', [{ op: 'eq', field: 'companyID', value: ticket.companyID }, { op: 'eq', field: f, value: t.email }], { includeFields: fields, maxRecords: 10 })) {
+          if (!hits.some((h) => Number(h.id) === Number(c.id))) hits.push(c);
+        }
+      }
+      const active = hits.filter((c) => isActiveFlag(c.isActive));
+      if (!active.length) unresolved.push(`${t.email}: no active contact with that address on the ticket's company${hits.length ? ' (only inactive ones)' : ''}`);
+      else if (active.length > 1) unresolved.push(`${t.email}: ${active.length} active contacts share it (${active.map((c) => c.id).join(', ')}) — tag one by contact id`);
+      else wanted.push(person(active[0]!, 'tagged'));
+    }
+    if (o.tagPrimaryContact) {
+      const pc = ticket.companyID == null ? [] : (await http.query<Record<string, any>>('Contacts', [{ op: 'eq', field: 'companyID', value: ticket.companyID }, { op: 'eq', field: 'primaryContact', value: true }], { includeFields: fields, maxRecords: 5 })).filter((c) => isActiveFlag(c.isActive));
+      if (!pc.length) unresolved.push("the ticket's company has no active primary contact");
+      else wanted.push(person(pc[0]!, 'primary contact'));
+    }
+    if (unresolved.length) return { ...base, status: 'validation_failed', unresolved, detail: `Can't tag: ${unresolved.join('; ')}. Nothing written.` };
+
+    // Who gets it: the Ticket Contact (or the first tagged person, who becomes it), then additional contacts.
+    const uniq = wanted.filter((p, i) => wanted.findIndex((q) => q.contactID === p.contactID) === i);
+    let ticketContactID: number | null = ticket.contactID != null ? Number(ticket.contactID) : null;
+    const setContact = ticketContactID == null ? uniq[0] ?? null : null;
+    if (setContact) ticketContactID = setContact.contactID;
+    if (ticketContactID == null) return { ...base, status: 'validation_failed', reason: 'no_recipient', detail: 'The ticket has no contact and nobody was tagged — tag a contact (id or e-mail) or pass tagPrimaryContact:true. Nothing written.' };
+    const existingRows = await this.ticketAdditionalContactRows(o.ticketID);
+    const toAdd = uniq.filter((p) => p.contactID !== ticketContactID && !existingRows.some((r) => Number(r.contactID) === p.contactID));
+    if (existingRows.length + toAdd.length > 30) return { ...base, status: 'validation_failed', reason: 'limit', detail: `That would make ${existingRows.length + toAdd.length} additional contacts (Autotask allows 30). Nothing written.` };
+    const allIds = [...new Set([ticketContactID, ...existingRows.map((r) => Number(r.contactID)), ...toAdd.map((p) => p.contactID)])];
+    const known = new Map(uniq.map((p) => [p.contactID, p]));
+    const missing = allIds.filter((id) => !known.has(id));
+    if (missing.length) {
+      for (const c of await http.query<Record<string, any>>('Contacts', [{ op: 'in', field: 'id', value: missing }], { includeFields: fields, maxRecords: 500 })) known.set(Number(c.id), person(c, 'on the ticket'));
+    }
+    const recipients = allIds.map((id, i) => ({ ...(known.get(id) ?? { contactID: id, name: null, email: null, via: 'on the ticket' }), as: i === 0 ? 'ticket contact' : 'additional contact' }));
+    const noEmail = recipients.filter((r) => !r.email);
+    const plan = {
+      ...base,
+      recipients,
+      ...(setContact ? { setTicketContact: setContact.contactID } : {}),
+      addAdditionalContacts: toAdd.map((p) => p.contactID),
+      note: { title: o.title || 'Update', publish: cfg.publish, noteType: o.noteType ?? cfg.noteType },
+      trigger: { udf: cfg.udf, value: cfg.value },
+      ...(noEmail.length ? { warning: `No e-mail address on: ${noEmail.map((r) => r.name ?? r.contactID).join(', ')} — they won't get it.` } : {}),
+    };
+
+    const key = (o.idempotencyKey ?? '').trim();
+    const marker = key ? `[MCP-ID:${key}]` : '';
+    if (marker) {
+      const hit = ((await this.searchTicketNotes(o.ticketID, { pageSize: 100 })) || []).find((n) => typeof n.description === 'string' && n.description.includes(marker));
+      if (hit?.id != null) return { ...plan, status: 'duplicate', noteId: hit.id, detail: `A note with key "${key}" is already on the ticket — not sent again.` };
+    }
+    if (o.dryRun !== false) return { ...plan, status: 'dry_run' };
+
+    // Writes: people first (a failure here leaves the trigger unarmed), then arm, then the note.
+    const added: Array<Record<string, any>> = [];
+    if (setContact) await this.updateTicket(o.ticketID, { contactID: setContact.contactID } as Partial<AutotaskTicket>);
+    for (const p of toAdd) added.push(await this.addTicketAdditionalContact(o.ticketID, p.contactID));
+    const notAdded = added.filter((r) => r.status !== 'added' && r.status !== 'already_there');
+    await this.updateTicket(o.ticketID, { userDefinedFields: [{ name: cfg.udf, value: cfg.value }] } as unknown as Partial<AutotaskTicket>);
+    let noteId: number;
+    try {
+      noteId = await this.createTicketNote(o.ticketID, { title: plan.note.title, description: marker ? `${description}\n\n${marker}` : description, noteType: plan.note.noteType, publish: cfg.publish } as Partial<AutotaskTicketNote>);
+    } catch (err) {
+      // Disarm, so the rule can't fire on someone else's later note.
+      try { await this.updateTicket(o.ticketID, { userDefinedFields: [{ name: cfg.udf, value: '' }] } as unknown as Partial<AutotaskTicket>); } catch { /* the note error is what matters */ }
+      throw err;
+    }
+    this.logger.info(`Ticket ${o.ticketID}: armed ${cfg.udf} and posted note ${noteId} for ${recipients.length} recipient(s)`);
+    return {
+      ...plan,
+      status: 'sent',
+      noteId,
+      ...(notAdded.length ? { notAdded: notAdded.map((r) => ({ contactID: r.contactID, status: r.status, detail: r.detail })) } : {}),
+      check: `Autotask's workflow rule sends the e-mail within a minute or two; autotask_search_notification_history with ticketID ${o.ticketID} shows who got it.`,
+    };
   }
 
   /**

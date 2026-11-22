@@ -44,7 +44,7 @@ Claude), hardened against real tenant data.
 
 | Area | Highlights |
 |---|---|
-| **Tickets & service desk** (42) | Search, create, update (partial `PATCH` — never blanks fields), additional contacts, notes, attachments and the originating email, charges, checklists, ticket history and who-changed-what, `get_ticket_by_number`, move a ticket to another company with its routing in one write, an interactive ticket card in MCP Apps hosts. |
+| **Tickets & service desk** (43) | Search, create, update (partial `PATCH` — never blanks fields), additional contacts, notes, e-mail a note to the contact and tagged people from any chat (`notify_ticket`, [docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md)), attachments and the originating email, charges, checklists, ticket history and who-changed-what, `get_ticket_by_number`, move a ticket to another company with its routing in one write, an interactive ticket card in MCP Apps hosts. |
 | **Time & billing** (26) | Time entries (incl. bulk and "log my time"), billing items approve-and-post, expense reports, timesheet-lock aware errors, `my_day`. |
 | **Calendar & appointments** (7) | Book, move and cancel appointments in local time (stored in UTC, answered in both), overlap checks against other appointments and service calls, rerun-safe booking, free time across up to 10 people for finding a meeting slot, and "schedule a sales follow-up" on an opportunity or contact. |
 | **Projects** (57) | Projects, phases, tasks, predecessors, notes, project charges; generate a labour plan and build a project from it (resources, dates and notes included; resumable), or clone an existing project. |
