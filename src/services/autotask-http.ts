@@ -14,7 +14,7 @@ import { getImpersonationResourceId } from '../utils/request-context';
 import { Logger } from '../utils/logger';
 import { cachedRead, invalidateAfterWrite, isRead, recordRateLimited, recordUpstream } from './http-cache';
 import { currentCaller, startApiCall } from './call-log';
-import { acquireUpstream, backoffMs, checkBreaker, isTransient, outageSeconds, readRetries, recordSuccess, recordTransientFailure } from './upstream-guard';
+import { acquireUpstream, backoffMs, checkBreaker, endpointOutageSeconds, isTransient, readRetries, recordSuccess, recordTransientFailure } from './upstream-guard';
 
 export interface QueryFilter {
   op: string;
@@ -542,14 +542,15 @@ export class AutotaskHttpClient {
     // backoff, its slots released while it waits. Writes and HTTP 500 are never retried.
     const tenant = this.username.toLowerCase();
     const tries = isRead(method, path) ? readRetries() : 0;
+    const ep = endpointOf(path);
     for (let attempt = 0; ; attempt++) {
       const releaseUpstream = await acquireUpstream(tenant, currentCaller());
       let err: unknown;
       try {
-        const release = await acquireEndpointSlot(`${tenant} ${endpointOf(path)}`);
+        const release = await acquireEndpointSlot(`${tenant} ${ep}`);
         try {
           const out = await this.sendUngated<T>(method, path, body, isZoneRetry, opts);
-          recordSuccess(tenant);
+          recordSuccess(tenant, ep);
           return out;
         } finally {
           release();
@@ -560,9 +561,9 @@ export class AutotaskHttpClient {
         releaseUpstream();
       }
       const transient = isTransient(err);
-      if (transient) recordTransientFailure(tenant, err instanceof Error ? err.message : String(err));
-      else if (typeof (err as { status?: unknown })?.status === 'number') recordSuccess(tenant); // Autotask answered
-      if (!transient || attempt >= tries || outageSeconds(tenant) > 0) throw err;
+      if (transient) recordTransientFailure(tenant, ep, err instanceof Error ? err.message : String(err));
+      else if (typeof (err as { status?: unknown })?.status === 'number') recordSuccess(tenant, ep); // Autotask answered
+      if (!transient || attempt >= tries || endpointOutageSeconds(tenant, ep) > 0) throw err;
       const wait = backoffMs(attempt);
       this.logger.warn(`Autotask ${method} ${path.split('?')[0]} failed transiently (${err instanceof Error ? err.message.slice(0, 120) : String(err)}); retry ${attempt + 1}/${tries} in ${wait} ms`);
       await new Promise((r) => setTimeout(r, wait));
@@ -618,8 +619,8 @@ export class AutotaskHttpClient {
 
     const url = path.startsWith('http') ? path : `${await this.baseUrl()}${path.startsWith('/') ? '' : '/'}${path}`;
 
-    // Outage breaker: a run of network errors / 5xx answers → fail locally for a while.
-    checkBreaker(cooldownKey);
+    // Outage breaker: a run of network errors / 5xx answers → fail locally for a while (this endpoint, or all).
+    checkBreaker(cooldownKey, endpointOf(path));
     this.logger.debug(`Autotask HTTP ${method} ${url}`);
     recordUpstream(cooldownKey, method, path);
     const logged = startApiCall(method, path);

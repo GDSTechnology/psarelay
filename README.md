@@ -181,7 +181,7 @@ migrations, restarts, waits for `/health` and prints the version — and refuses
 | `MCP_MAX_CONCURRENT_PER_CALLER` | `4` | Calls in flight per caller (source + user); the rest queue |
 | `AUTOTASK_MAX_CONCURRENT_TOTAL` | `8` | Calls in flight for the whole tenant |
 | `AUTOTASK_READ_RETRIES` | `2` | Retries of a read after a network error / timeout / 502–504 (0 = off) |
-| `AUTOTASK_OUTAGE_FAILURES` | `5` | Transient failures in a minute that open the outage breaker |
+| `AUTOTASK_OUTAGE_FAILURES` | `5` | Transient failures in a minute on one endpoint that open its outage breaker (3+ endpoints failing → the whole tenant) |
 | `MCP_PUBLIC_URL` | — | The address AI clients use for this server; the console's Setup page shows it with connection steps |
 | `LOG_LEVEL` / `LOG_FORMAT` | `info` / `simple` | `json` for production |
 

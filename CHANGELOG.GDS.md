@@ -10,6 +10,17 @@ Each entry lists the merge commit and the PR number. Brief section references
 
 ---
 
+## v6.28.1 — 2026-11-22 — Outage breaker per module, not per tenant
+
+- **Fix (before v6.28.0 reaches prod):** the outage breaker counted every endpoint together, so a module-only
+  outage — Autotask's Quotes / Opportunities went down for 19 minutes recently, stalling a signed proposal — would
+  have stopped EVERY Autotask call after 5 failures. It now keeps a breaker per endpoint: Quotes failing opens
+  Quotes' breaker only (its calls fail locally, saying other modules are not affected) while tickets, companies,
+  contacts and the rest carry on. The tenant-wide breaker opens only when the failures in a minute span 3 or more
+  endpoints.
+- Backpressure reports a module outage as `slow` with `moduleOutages: [{ endpoint, seconds }]` (hold work that needs
+  it, carry on with the rest); only the tenant-wide breaker is `stop`.
+
 ## v6.28.0 — 2026-11-22 — Upstream guard: caller caps, transient retry, outage breaker (#23 §24)
 
 - **Per-caller and tenant concurrency caps**: at most `MCP_MAX_CONCURRENT_PER_CALLER` (4) Autotask calls in flight per

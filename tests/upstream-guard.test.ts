@@ -4,7 +4,7 @@
 import { AutotaskHttpClient, _resetRateLimitCooldowns } from '../src/services/autotask-http';
 import {
   AutotaskOutageError, _resetUpstreamGuard, acquireUpstream, backoffMs, checkBreaker, isTransient,
-  outageSeconds, recordSuccess, recordTransientFailure, upstreamQueueDepth,
+  endpointOutages, endpointOutageSeconds, outageSeconds, recordSuccess, recordTransientFailure, upstreamQueueDepth,
 } from '../src/services/upstream-guard';
 import { assessBackpressure } from '../src/services/backpressure';
 import { Logger } from '../src/utils/logger';
@@ -67,35 +67,61 @@ describe('retry', () => {
 });
 
 describe('outage breaker', () => {
-  test('5 transient failures in a minute open it; calls then fail LOCALLY; one probe closes it', async () => {
+  test('5 transient failures in a minute on ONE module open its breaker only; the rest carries on', async () => {
     const t = 'user@example.com';
     const T0 = Date.now();
-    for (let i = 0; i < 4; i++) recordTransientFailure(t, 'HTTP 503', T0 + i);
-    expect(outageSeconds(t, T0 + 10)).toBe(0);
-    recordTransientFailure(t, 'HTTP 503', T0 + 5);
-    expect(outageSeconds(t, T0 + 10)).toBe(30);
-    expect(() => checkBreaker(t, T0 + 1000)).toThrow(AutotaskOutageError);
+    for (let i = 0; i < 4; i++) recordTransientFailure(t, 'Quotes', 'HTTP 503', T0 + i);
+    expect(endpointOutageSeconds(t, 'Quotes', T0 + 10)).toBe(0);
+    recordTransientFailure(t, 'Quotes', 'HTTP 503', T0 + 5);
+    expect(endpointOutageSeconds(t, 'Quotes', T0 + 10)).toBe(30);
+    expect(outageSeconds(t, T0 + 10)).toBe(0); // the tenant is NOT down
+    expect(endpointOutages(t, T0 + 10)).toEqual([{ endpoint: 'Quotes', seconds: 30 }]);
+    expect(() => checkBreaker(t, 'Quotes', T0 + 1000)).toThrow(/Quotes endpoint.*Other Autotask modules are not affected/);
+    expect(() => checkBreaker(t, 'Tickets', T0 + 1000)).not.toThrow();
 
     const f = jest.spyOn(global, 'fetch' as any).mockResolvedValue(res(200, { item: { id: 5 } }) as any);
-    await expect(client().get('Tickets', 5)).rejects.toThrow('NOT sent');
+    await expect(client().get('Quotes', 5)).rejects.toThrow('NOT sent');
     expect(f).not.toHaveBeenCalled();
+    expect(await client().get('Tickets', 5)).toEqual({ id: 5 }); // another module is served
+    expect(f).toHaveBeenCalledTimes(1);
 
     // After the window: the probe goes through, succeeds, and the breaker closes.
-    checkBreaker(t, T0 + 5 + 31_000);
-    expect(() => checkBreaker(t, T0 + 5 + 31_001)).toThrow(AutotaskOutageError); // only ONE probe at a time
-    recordSuccess(t);
-    expect(() => checkBreaker(t, T0 + 5 + 31_002)).not.toThrow();
+    checkBreaker(t, 'Quotes', T0 + 5 + 31_000);
+    expect(() => checkBreaker(t, 'Quotes', T0 + 5 + 31_001)).toThrow(AutotaskOutageError); // only ONE probe at a time
+    recordSuccess(t, 'Quotes');
+    expect(() => checkBreaker(t, 'Quotes', T0 + 5 + 31_002)).not.toThrow();
+  });
+
+  test('failures across 3+ modules open the TENANT-wide breaker', () => {
+    const t = 'y';
+    for (let i = 0; i < 5; i++) recordTransientFailure(t, ['Tickets', 'Companies', 'Contacts'][i % 3]!, 'ECONNREFUSED', i);
+    expect(outageSeconds(t, 10)).toBe(30);
+    expect(() => checkBreaker(t, 'Quotes', 10)).toThrow(/^Autotask looks unavailable/);
+  });
+
+  test('5 failures on 2 modules: each counts on its own, the tenant stays up', () => {
+    const t = 'z';
+    for (let i = 0; i < 5; i++) recordTransientFailure(t, i % 2 ? 'Quotes' : 'Opportunities', 'HTTP 504', i);
+    expect(outageSeconds(t, 10)).toBe(0);
+    expect(endpointOutageSeconds(t, 'Quotes', 10)).toBe(0); // 2 of 5 on Quotes
   });
 
   test('a failed probe opens it again, twice as long', () => {
     const t = 'x';
-    for (let i = 0; i < 5; i++) recordTransientFailure(t, 'net', 0);
-    checkBreaker(t, 31_000); // probe
-    recordTransientFailure(t, 'net', 31_000);
-    expect(outageSeconds(t, 31_000)).toBe(60);
+    for (let i = 0; i < 5; i++) recordTransientFailure(t, 'Opportunities', 'net', 0);
+    checkBreaker(t, 'Opportunities', 31_000); // probe
+    recordTransientFailure(t, 'Opportunities', 'net', 31_000);
+    expect(endpointOutageSeconds(t, 'Opportunities', 31_000)).toBe(60);
   });
 
-  test('backpressure says stop while it is open', () => {
+  test('backpressure: a module outage is slow and named, not stop', () => {
+    const b = assessBackpressure({ usage: null, auth: null, cooldownSeconds: 0, queued: 0, moduleOutages: [{ endpoint: 'Quotes', seconds: 20 }] });
+    expect(b.level).toBe('slow');
+    expect(b.reasons.join(' ')).toContain('Quotes (20s)');
+    expect(b.moduleOutages).toEqual([{ endpoint: 'Quotes', seconds: 20 }]);
+  });
+
+  test('backpressure says stop while the tenant breaker is open', () => {
     const b = assessBackpressure({ usage: null, auth: null, cooldownSeconds: 0, queued: 0, outageSeconds: 25 });
     expect(b.level).toBe('stop');
     expect(b.retryAfterSeconds).toBe(25);
