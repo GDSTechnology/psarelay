@@ -10,6 +10,34 @@ Each entry lists the merge commit and the PR number. Brief section references
 
 ---
 
+## v6.29.0 — 2026-11-23 — Work types by name ("remote priority")
+
+- **Bug**: voice and chat users (Copilot, ChatGPT voice) said "priority remote" / "remote priority work" and the
+  assistant could not log the time: the time-entry tools only took a numeric `billingCodeID` and nothing listed the
+  work types, so it had no way to find the id.
+- **`workType` by name** on `create_time_entry`, `log_my_time`, `add_ticket_update` and `update_time_entry` (a
+  label sent in `billingCodeID` works too). Used directly only when sure: the id, an operator alias, the exact
+  label, or the same words in another order ("support remote"). Filler ("work", "type") is ignored and "on-site" /
+  "after hours" / "remotely" are folded, and "service" = "support" (real labels read "Remote~Priority Service";
+  people say "priority remote support"). The result names the work type used so a voice user hears what was logged.
+- **Never assumed**: anything looser writes nothing and asks. "priority remote" → `needs_confirmation`: "Did you
+  mean Remote Support - Priority?" plus a numbered list of the similar work types (sharing a word, closest first);
+  several equally good fits → that list to pick from (at most 8 offered); no fit → the similar ones, else all (the message names 8 and counts the rest). The assistant asks the
+  person and re-runs with the exact name. Inactive work types never match.
+- **`AUTOTASK_WORK_TYPE_ALIASES`**: tenant shorthand (`rush=Onsite Support - Priority; hot remote=102`, or JSON). An
+  alias to a work type the tenant doesn't have is reported, never guessed.
+- **Regional work types — `AUTOTASK_WORK_TYPE_REGIONS`**: some MSPs keep a copy of their work types per state for a
+  tax rule (e.g. "CT - Priority" marks labour taxable in that state). Which copy applies depends on the CLIENT, not on
+  what the tech says, so a prefix is mapped to the company State values it covers (`CT=CT,Connecticut; TX=TX`, or
+  JSON). The client's state comes from the ticket's company (task → project → company; `update_time_entry` from the
+  entry's ticket / task). Client in a region: only that region's work types match, prefix ignored ("priority" → "CT -
+  Priority"); a name none of them fits falls back to an ordinary work type only for confirmation, with a note.
+  Client elsewhere: other regions' work types are never offered. State unknown: a regional match is only suggested.
+  Saying the prefix ("CT priority"), an id or an alias is explicit. Not set → nothing changes. Nothing is tenant-specific
+  in the code.
+- **`autotask_list_work_types`** (read-only): the active work types with their aliases and region; `name` tests what a
+  spoken name matches without writing (add `ticketID` / `taskID` to match as for that client).
+
 ## v6.28.1 — 2026-11-22 — Outage breaker per module, not per tenant
 
 - **Fix (before v6.28.0 reaches prod):** the outage breaker counted every endpoint together, so a module-only

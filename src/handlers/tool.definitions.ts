@@ -1959,6 +1959,17 @@ export const TOOL_DEFINITIONS: McpTool[] = [
     inputSchema: { type: 'object', properties: {}, required: [] }
   },
   {
+    name: 'autotask_list_work_types',
+    description: "List the ticket/task WORK TYPES (read-only) — BillingCodes useType 1 (e.g. Remote Support, Onsite Support, priority / after-hours variants) — with any aliases set on this server (AUTOTASK_WORK_TYPE_ALIASES). Time-entry tools also take a work type by name (workType); a loose name comes back for confirmation. Use this to show the choices or check a name. Pass name to test what a spoken name matches without writing anything (add ticketID or taskID to match as for that client). With AUTOTASK_WORK_TYPE_REGIONS set, each regional work type shows its region (prefix + client states). NOT Regular Time categories (autotask_list_regular_time_categories). Returns { workTypes: [{ id, name, active, aliases }], match? }.",
+    annotations: { title: 'List work types', readOnlyHint: true },
+    inputSchema: { type: 'object', properties: {
+      name: { type: 'string', description: 'Optional: a work type as spoken ("priority remote") — returns what it matches (or the choices when ambiguous).' },
+      ticketID: { type: 'number', description: 'Optional, with name: match as for this ticket\'s client — with regional work types (AUTOTASK_WORK_TYPE_REGIONS) the client\'s state decides which apply.' },
+      taskID: { type: 'number', description: 'Optional, with name: as ticketID, for a project task (task → project → company).' },
+      includeInactive: { type: 'boolean', description: 'Also list inactive work types. Default false.' },
+    }, required: [] }
+  },
+  {
     name: 'autotask_create_time_entry',
     description: 'Create a time entry in Autotask. Three workflows: (1) TICKET time — pass ticketID (roleID auto-resolved); (2) project TASK time — pass taskID (project work is logged against a TASK, never a project directly); (3) REGULAR time — omit ticketID/taskID and pass a Regular Time category (e.g. "Internal Meeting", "Quote building") from autotask_list_regular_time_categories. Regular Time needs no ticket/task and sets timeEntryType=Activity automatically. Service-desk TICKET time requires a start+stop time — pass startDateTime/endDateTime (e.g. from the calendar event) to preserve the real span; if you give only hoursWorked, a span is derived on the work date so the create still succeeds. Task time on a COMPLETED task is rejected by Autotask (log against an open task).',
     inputSchema: {
@@ -2022,8 +2033,9 @@ export const TOOL_DEFINITIONS: McpTool[] = [
         },
         billingCodeID: {
           type: 'number',
-          description: 'Work type / billing code ID. Note: billable status also depends on contract config, so a work type alone does not guarantee the entry is billable.'
+          description: 'Work type / billing code ID. Note: billable status also depends on contract config, so a work type alone does not guarantee the entry is billable. To give the work type by name, use workType instead.'
         },
+        workType: { type: 'string', description: 'Work type BY NAME, as the person said it — e.g. "remote priority", "onsite", "Remote Support - Priority". Used directly only when sure (exact name, same words in another order, or an AUTOTASK_WORK_TYPE_ALIASES alias); the result says which work type it became. A loose or unclear name writes NOTHING and returns needs_confirmation with a suggestion and a numbered list of similar work types — ask the person which one, then re-run with that exact name. Use this OR billingCodeID; list them with autotask_list_work_types. With regional work types (AUTOTASK_WORK_TYPE_REGIONS, e.g. a "CT - " copy for a state tax rule) the client state on the ticket decides which apply: only the work types of that region for a client in it, never those of another region.' },
         offsetHours: {
           type: 'number',
           description: 'Billing offset in hours to subtract from worked time — e.g. a 30-minute lunch on an 8h ticket = 0.5. The ONLY API lever on billed time: Autotask derives hoursToBill (read-only — not an input) from hoursWorked − offsetHours, then applies the contract/work-type rounding (e.g. a 0.25h minimum), so the stored hoursToBill can exceed the difference. The result reports the stored hoursToBill.'
@@ -2257,7 +2269,8 @@ export const TOOL_DEFINITIONS: McpTool[] = [
         resourceID: { type: 'number', description: 'Log as this resource. Omit to log as the calling user (currentUser).' },
         currentUser: { type: 'boolean', description: 'Log as the calling user (default when resourceID is omitted).' },
         roleID: { type: 'number', description: 'Role for the entry. Validated against the user\'s active roles when set (invalid → returns the valid choices, nothing written); auto-filled from the default (or sole) role when omitted; multiple roles → returns choices.' },
-        billingCodeID: { type: 'number', description: 'Work type / billing code (ticket/task time)' },
+        billingCodeID: { type: 'number', description: 'Work type / billing code id (ticket/task time). By name: workType.' },
+        workType: { type: 'string', description: 'Work type BY NAME, as the person said it — e.g. "remote priority", "onsite", "Remote Support - Priority". Used directly only when sure (exact name, same words in another order, or an AUTOTASK_WORK_TYPE_ALIASES alias); the result says which work type it became. A loose or unclear name writes NOTHING and returns needs_confirmation with a suggestion and a numbered list of similar work types — ask the person which one, then re-run with that exact name. Use this OR billingCodeID; list them with autotask_list_work_types. With regional work types (AUTOTASK_WORK_TYPE_REGIONS, e.g. a "CT - " copy for a state tax rule) the client state on the ticket decides which apply: only the work types of that region for a client in it, never those of another region.' },
         offsetHours: { type: 'number', description: 'Billing offset to subtract from worked time (e.g. 0.5 for a 30m lunch). Autotask derives the read-only hoursToBill from hoursWorked − offset plus contract/work-type rounding.' },
         category: { type: 'string', description: 'Category for Regular Time (no ticket/task), e.g. "Internal Meeting" (from autotask_list_regular_time_categories)' }
       },
@@ -2301,7 +2314,8 @@ export const TOOL_DEFINITIONS: McpTool[] = [
         dateWorked: { type: 'string', description: 'Time-entry date (YYYY-MM-DD). Default: the local date of startDateTime, else today, in your local timezone.' },
         timeZone: { type: 'string', description: 'IANA ("America/New_York") or Windows ("Eastern Standard Time") timezone for the local day and for start/end given without an offset. Default: your location timezone.' },
         roleID: { type: 'number', description: 'Time-entry role. Validated against your roles; default/sole role auto-fills.' },
-        billingCodeID: { type: 'number', description: 'Time-entry work type. Validated; omit for the default.' },
+        billingCodeID: { type: 'number', description: 'Time-entry work type id. Validated; omit for the default. By name: workType.' },
+        workType: { type: 'string', description: 'Work type BY NAME, as the person said it — e.g. "remote priority", "onsite", "Remote Support - Priority". Used directly only when sure (exact name, same words in another order, or an AUTOTASK_WORK_TYPE_ALIASES alias); the result says which work type it became. A loose or unclear name writes NOTHING and returns needs_confirmation with a suggestion and a numbered list of similar work types — ask the person which one, then re-run with that exact name. Use this OR billingCodeID; list them with autotask_list_work_types. With regional work types (AUTOTASK_WORK_TYPE_REGIONS, e.g. a "CT - " copy for a state tax rule) the client state on the ticket decides which apply: only the work types of that region for a client in it, never those of another region.' },
         offsetHours: { type: 'number', description: 'Billing offset subtracted from worked time.' },
         noteType: { type: 'number', description: 'Note type id. Default "Task Summary" (the human note type).' },
         resourceID: { type: 'number', description: 'Act as this resource. Omit to act as the calling user (currentUser).' },
@@ -2343,7 +2357,8 @@ export const TOOL_DEFINITIONS: McpTool[] = [
         summaryNotes: { type: 'string', description: 'CLIENT/INVOICE-facing summary notes.' },
         internalNotes: { type: 'string', description: 'INTERNAL-only notes (not shown to client/invoice).' },
         roleID: { type: 'number', description: 'Role for the entry (ticket/task time). Validated against the entry owner\'s active roles; an invalid role returns the valid choices and writes nothing.' },
-        billingCodeID: { type: 'number', description: 'Work type / billing code ID (ticket/task time). NOTE: work type does not by itself set billability — use isNonBillable / billingTreatment.' },
+        billingCodeID: { type: 'number', description: 'Work type / billing code ID (ticket/task time). NOTE: work type does not by itself set billability — use isNonBillable / billingTreatment. By name: workType.' },
+        workType: { type: 'string', description: 'Work type BY NAME, as the person said it — e.g. "remote priority", "onsite", "Remote Support - Priority". Used directly only when sure (exact name, same words in another order, or an AUTOTASK_WORK_TYPE_ALIASES alias); the result says which work type it became. A loose or unclear name writes NOTHING and returns needs_confirmation with a suggestion and a numbered list of similar work types — ask the person which one, then re-run with that exact name. Use this OR billingCodeID; list them with autotask_list_work_types. With regional work types (AUTOTASK_WORK_TYPE_REGIONS, e.g. a "CT - " copy for a state tax rule) the client state on the ticket decides which apply: only the work types of that region for a client in it, never those of another region.' },
         internalBillingCodeID: { type: 'number', description: 'Internal (Regular Time) category id.' },
         isNonBillable: { type: 'boolean', description: 'Mark the entry non-billable. Live-test: this (with showOnInvoice=false) is what actually makes an entry non-billable — showOnInvoice=false alone does not.' },
         showOnInvoice: { type: 'boolean', description: 'Whether the entry appears on the customer invoice.' },
@@ -7192,7 +7207,7 @@ export const TOOL_CATEGORIES: Record<string, { description: string; tools: strin
   },
   time_and_billing: {
     description: 'Time entries, billing items, and expense management',
-    tools: ['autotask_create_time_entry', 'autotask_create_task_time_entries_bulk', 'autotask_log_ticket_collaboration', 'autotask_log_my_time', 'autotask_list_regular_time_categories', 'autotask_get_time_entry_targets', 'autotask_get_my_day', 'autotask_search_time_entries', 'autotask_get_time_entry', 'autotask_update_time_entry', 'autotask_delete_time_entry', 'autotask_search_billing_items', 'autotask_get_billing_item', 'autotask_search_billing_item_approval_levels', 'autotask_report_time_entry_compliance', 'autotask_report_activity_without_time', 'autotask_search_audit_activity', 'autotask_get_activity_feed', 'autotask_backfill_history', 'autotask_report_resource_activity', 'autotask_report_resource_daily_audit', 'autotask_report_unbilled_time', 'autotask_get_expense_report', 'autotask_search_expense_reports', 'autotask_create_expense_report', 'autotask_search_expense_items', 'autotask_create_expense_item']
+    tools: ['autotask_create_time_entry', 'autotask_create_task_time_entries_bulk', 'autotask_log_ticket_collaboration', 'autotask_log_my_time', 'autotask_list_regular_time_categories', 'autotask_list_work_types', 'autotask_get_time_entry_targets', 'autotask_get_my_day', 'autotask_search_time_entries', 'autotask_get_time_entry', 'autotask_update_time_entry', 'autotask_delete_time_entry', 'autotask_search_billing_items', 'autotask_get_billing_item', 'autotask_search_billing_item_approval_levels', 'autotask_report_time_entry_compliance', 'autotask_report_activity_without_time', 'autotask_search_audit_activity', 'autotask_get_activity_feed', 'autotask_backfill_history', 'autotask_report_resource_activity', 'autotask_report_resource_daily_audit', 'autotask_report_unbilled_time', 'autotask_get_expense_report', 'autotask_search_expense_reports', 'autotask_create_expense_report', 'autotask_search_expense_items', 'autotask_create_expense_item']
   },
   financial: {
     description: 'Quotes, quote items, opportunities, invoices, and contracts',

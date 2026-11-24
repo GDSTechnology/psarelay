@@ -137,6 +137,7 @@ import { TOOL_DEFINITIONS, TOOL_CATEGORIES } from './tool.definitions.js';
 import { toolBlockReason, toolListed, toolLockedReason } from '../admin/tool-gate.js';
 import { runToolCall, noteToolAudit, noteRawRequest } from '../services/call-log.js';
 import { buildTicketCard } from './card.builder.js';
+import { matchWorkType, matchWorkTypeForClient, parseWorkTypeAliases, parseWorkTypeRegions, regionOf } from '../utils/work-type-match.js';
 
 // Default concurrency for company/resource name enrichment. Autotask allows
 // only a handful of concurrent API threads per integration, so enrichment is
@@ -1182,6 +1183,78 @@ export class AutotaskToolHandler {
     // inactive / a Regular Time category) with the active choices, instead of
     // Autotask's "not an active general allocation code". Best-effort: a failed
     // lookup lets the write proceed (Autotask still enforces it).
+    //
+    // A work type may also be NAMED — `workType: "priority remote"`, or a label
+    // sent in billingCodeID — matched by utils/work-type-match (aliases from
+    // AUTOTASK_WORK_TYPE_ALIASES, any word order). The match is written back to
+    // target.billingCodeID; `matched` says which work type it became, so the
+    // caller can confirm it ("logged as Remote Support - Priority").
+    type WorkTypeCheck = { stop: { result: unknown; message: string } } | { matched: { id: number; name: string; via: string; requested: string } | null };
+    // The client's State, for regional work types (AUTOTASK_WORK_TYPE_REGIONS) —
+    // ticket → company, or task → project → company. null = unknown (lookup failed
+    // or no state): a regional work type is then only suggested, never used.
+    const clientState = async (ref: { ticketID?: unknown; taskID?: unknown }): Promise<string | null> => {
+      try {
+        let companyID: number | null = null;
+        if (ref.ticketID != null && String(ref.ticketID).trim() !== '') companyID = (await s.getTicket(Number(ref.ticketID)))?.companyID ?? null;
+        else if (ref.taskID != null && String(ref.taskID).trim() !== '') {
+          const projectID = (await s.getTask(Number(ref.taskID)))?.projectID;
+          if (projectID != null) companyID = (await s.getProject(projectID))?.companyID ?? null;
+        }
+        if (companyID == null) return null; // company 0 (own company) is a real company
+        const st = (await s.getCompany(companyID))?.state;
+        return st != null && String(st).trim() !== '' ? String(st).trim() : null;
+      } catch { return null; }
+    };
+    const resolveWorkType = async (target: Record<string, any>, scope?: () => Promise<{ ticketID?: unknown; taskID?: unknown } | null>): Promise<WorkTypeCheck> => {
+      const named = typeof target.billingCodeID === 'string' && !/^\s*\d+\s*$/.test(target.billingCodeID) ? target.billingCodeID : null;
+      const spoken = target.workType != null && String(target.workType).trim() !== '' ? String(target.workType) : named;
+      delete target.workType;
+      if (named) delete target.billingCodeID;
+      else if (typeof target.billingCodeID === 'string') target.billingCodeID = Number(target.billingCodeID);
+      let matched: { id: number; name: string; via: string; requested: string } | null = null;
+      if (spoken != null) {
+        const regions = parseWorkTypeRegions(process.env.AUTOTASK_WORK_TYPE_REGIONS);
+        let place: string | null = null;
+        if (regions.length) {
+          const ref = scope ? await scope() : { ticketID: target.ticketID, taskID: target.taskID };
+          place = ref ? await clientState(ref) : null;
+        }
+        const m = matchWorkTypeForClient(await s.getWorkTypes(), spoken, parseWorkTypeAliases(process.env.AUTOTASK_WORK_TYPE_ALIASES), regions, place);
+        if (!m.ok) {
+          // Never assume a loose match: the person picks, then the caller re-runs with the exact name / id.
+          // A spoken answer must stay short: at most 8 named, the rest counted (all are in result.choices).
+          const list = m.choices.slice(0, 8).map((w, i) => `${i + 1}. ${w.name} (${w.id})`).join('; ')
+            + (m.choices.length > 8 ? `; and ${m.choices.length - 8} more (autotask_list_work_types lists them all)` : '');
+          const label = m.similar ? 'Similar work types' : 'Work types';
+          const rerun = 'Ask the person which one they mean, then re-run with workType set to that exact name (or its billingCodeID).';
+          const why = m.reason === 'confirm' ? `is not an exact work type name. Did you mean "${m.suggested!.name}" (${m.suggested!.id})? ${label}: ${list}. Confirm with the person before using it — re-run with workType "${m.suggested!.name}" once they agree, or the one they pick.`
+            : m.reason === 'ambiguous' ? `could be more than one work type: ${list}. ${rerun}`
+            : m.reason === 'inactive' ? `is an inactive work type. ${label}: ${list}. ${rerun}`
+            : m.badAlias ? `is an alias for "${m.badAlias}", which is not an active work type here — fix AUTOTASK_WORK_TYPE_ALIASES. ${label}: ${list}. ${rerun}`
+            : `does not match a work type. ${label}: ${list}. ${rerun}`;
+          return {
+            stop: {
+              result: {
+                status: m.reason === 'confirm' || m.reason === 'ambiguous' ? 'needs_confirmation' : 'invalid_work_type',
+                workType: spoken, reason: m.reason, ...(m.suggested ? { suggested: m.suggested } : {}),
+                choices: m.choices, similar: m.similar,
+                ...(m.regionNote ? { regionNote: m.regionNote, clientState: place } : {}),
+              },
+              message: `Work type "${spoken}" ${why}${m.regionNote ? ` ${m.regionNote}` : ''} Nothing was written.`,
+            },
+          };
+        }
+        if (target.billingCodeID != null && Number(target.billingCodeID) !== m.id) {
+          return { stop: { result: { status: 'invalid_work_type', workType: spoken, billingCodeID: Number(target.billingCodeID), reason: 'conflict', matched: { id: m.id, name: m.name } }, message: `workType "${spoken}" is ${m.id} = ${m.name}, but billingCodeID ${target.billingCodeID} was also given. Send one of them. Nothing was written.` } };
+        }
+        target.billingCodeID = m.id;
+        matched = { id: m.id, name: m.name, via: m.via, requested: spoken };
+      }
+      const bad = await checkWorkType(target.billingCodeID);
+      return bad ? { stop: bad } : { matched };
+    };
+    const workTypeBit = (m: { name: string; requested: string } | null): string => (m ? ` — work type ${m.name}${m.requested.trim().toLowerCase() !== m.name.toLowerCase() ? ` (from "${m.requested}")` : ''}` : '');
     const checkWorkType = async (billingCodeID: unknown): Promise<{ result: unknown; message: string } | null> => {
       if (billingCodeID == null) return null;
       let v: Awaited<ReturnType<typeof s.validateWorkType>>;
@@ -2257,10 +2330,12 @@ export class AutotaskToolHandler {
         // Ticket/task time: default/sole role, a pick, or validate the chosen one.
         const role = await resolveTimeEntryRole(a);
         if ('stop' in role) return role.stop;
+        let workType: { id: number; name: string; via: string; requested: string } | null = null;
         if (a.ticketID || a.taskID) {
-          const badWorkType = await checkWorkType(a.billingCodeID);
-          if (badWorkType) return badWorkType;
-        }
+          const wt = await resolveWorkType(a);
+          if ('stop' in wt) return wt.stop;
+          workType = wt.matched;
+        } else delete a.workType;
         // High-level billing intent -> Autotask field combo (explicit fields win).
         const billingTreatment = a.billingTreatment; delete a.billingTreatment;
         applyBillingTreatment(a, billingTreatment);
@@ -2298,12 +2373,13 @@ export class AutotaskToolHandler {
               hoursWorked: stored.hoursWorked, hoursToBill: (stored as any).hoursToBill,
               isNonBillable: (stored as any).isNonBillable, showOnInvoice: (stored as any).showOnInvoice,
               billingCodeID: (stored as any).billingCodeID,
+              ...(workType ? { workType } : {}),
               summaryNotes: stored.summaryNotes,
               ...(warnings.length ? { warnings } : {}),
             }
-          : { id, resourceID: a.resourceID, resourceName, roleID: a.roleID ?? null, roleName: role.roleName, roleSource: role.roleSource };
+          : { id, resourceID: a.resourceID, resourceName, roleID: a.roleID ?? null, roleName: role.roleName, roleSource: role.roleSource, ...(workType ? { workType } : {}) };
         const roleBit = a.roleID != null ? ` as ${role.roleName ?? 'role'} (${a.roleID})` : '';
-        return { result, message: `Successfully created time entry with ID: ${id}${resourceName ? ` for ${resourceName}` : ''}${roleBit}${warnings.length ? ` (warning: ${warnings.join('; ')})` : ''}` };
+        return { result, message: `Successfully created time entry with ID: ${id}${resourceName ? ` for ${resourceName}` : ''}${roleBit}${workTypeBit(workType)}${warnings.length ? ` (warning: ${warnings.join('; ')})` : ''}` };
       }],
       ['autotask_create_task_time_entries_bulk', async (a) => {
         if (!a.taskID) return { result: null, message: 'taskID is required.' };
@@ -2336,6 +2412,34 @@ export class AutotaskToolHandler {
         const r = await s.getRegularTimeCategories();
         const active = r.filter((c) => c.active);
         return { result: r, message: `${active.length} active Regular Time categor(y/ies): ${active.map((c) => c.name).join(', ')}` };
+      }],
+      ['autotask_list_work_types', async (a) => {
+        const all = await s.getWorkTypes();
+        const aliases = parseWorkTypeAliases(process.env.AUTOTASK_WORK_TYPE_ALIASES);
+        // Each alias under the work type it resolves to (an alias whose target is missing is reported apart).
+        const byId = new Map<number, string[]>();
+        const broken: Array<{ alias: string; target: string }> = [];
+        for (const [alias, target] of aliases) {
+          const m = matchWorkType(all, alias, aliases);
+          if (m.ok) byId.set(m.id, [...(byId.get(m.id) ?? []), alias]); else broken.push({ alias, target });
+        }
+        const regions = parseWorkTypeRegions(process.env.AUTOTASK_WORK_TYPE_REGIONS);
+        const workTypes = all.filter((w) => a.includeInactive === true || w.active).map((w) => {
+          const r = regions.length ? regionOf(w.name, regions) : null;
+          return { ...w, aliases: byId.get(w.id) ?? [], ...(r ? { region: { prefix: r.prefix, states: r.places } } : {}) };
+        });
+        const scoped = regions.length && (a.ticketID != null || a.taskID != null);
+        const place = scoped ? await clientState({ ticketID: a.ticketID, taskID: a.taskID }) : null;
+        const match = a.name != null && String(a.name).trim() !== ''
+          ? (regions.length ? matchWorkTypeForClient(all, String(a.name), aliases, regions, place) : matchWorkType(all, String(a.name), aliases))
+          : undefined;
+        const note = match && !match.ok && 'regionNote' in match && match.regionNote ? ` ${match.regionNote}` : '';
+        const matchMsg = !match ? '' : match.ok ? ` "${a.name}" → ${match.id} = ${match.name} (${match.via}).`
+          : ` "${a.name}": ${match.reason === 'confirm' ? `not exact — did you mean ${match.suggested!.name}? (confirm before using)` : match.reason}${match.similar ? ` — similar: ${match.choices.map((c) => c.name).join(' / ')}` : ''}.${note}`;
+        return {
+          result: { workTypes, ...(match ? { match } : {}), ...(scoped ? { clientState: place } : {}), ...(broken.length ? { brokenAliases: broken } : {}) },
+          message: `${workTypes.filter((w) => w.active).length} active work type(s): ${workTypes.filter((w) => w.active).map((w) => w.name).join(', ')}.${matchMsg}${broken.length ? ` ${broken.length} alias(es) point at no active work type.` : ''}`,
+        };
       }],
       ['autotask_get_appointment', async (a) => {
         const r = await s.getAppointment(a.id, a.timeZone);
@@ -2426,6 +2530,7 @@ export class AutotaskToolHandler {
         const wantsTime = a.hoursWorked != null || (a.startDateTime && a.endDateTime);
         let time: Parameters<typeof s.logTimeIdempotent>[0] | null = null;
         let roleInfo: { roleName: string | null; roleSource: RoleSource | null } | null = null;
+        let updateWorkType: { id: number; name: string; via: string; requested: string } | null = null;
         if (wantsTime) {
           // summaryNotes is printed on the client's INVOICE. Reuse the update
           // text only when the update itself is client-visible; an internal
@@ -2436,22 +2541,23 @@ export class AutotaskToolHandler {
           }
           const dateWorked = await workDate(a);
           time = Object.fromEntries(Object.entries({
-            ticketID: a.ticketID, resourceID: a.resourceID, roleID: a.roleID, billingCodeID: a.billingCodeID,
+            ticketID: a.ticketID, resourceID: a.resourceID, roleID: a.roleID, billingCodeID: a.billingCodeID, workType: a.workType,
             hoursWorked: a.hoursWorked, startDateTime: a.startDateTime, endDateTime: a.endDateTime, offsetHours: a.offsetHours,
             summaryNotes, internalNotes: a.internalNotes, dateWorked, timeZone: a.timeZone,
           }).filter(([, v]) => v !== undefined)) as Parameters<typeof s.logTimeIdempotent>[0];
           const role = await resolveTimeEntryRole(time);
           if ('stop' in role) return role.stop;
           roleInfo = role;
-          const badWorkType = await checkWorkType(time.billingCodeID);
-          if (badWorkType) return badWorkType;
+          const wt = await resolveWorkType(time as Record<string, any>);
+          if ('stop' in wt) return wt.stop;
+          updateWorkType = wt.matched;
         }
 
         const tn = plan.ticket.ticketNumber ?? `ticket ${a.ticketID}`;
         const planned = {
           ticketID: a.ticketID, ticketNumber: plan.ticket.ticketNumber,
           note: { visibility, publish: plan.publish, noteType: plan.noteType, title: a.title ?? 'Update' },
-          time: time ? { hoursWorked: time.hoursWorked ?? null, startDateTime: time.startDateTime ?? null, endDateTime: time.endDateTime ?? null, roleID: time.roleID ?? null, roleName: roleInfo?.roleName ?? null, dateWorked: time.dateWorked } : null,
+          time: time ? { hoursWorked: time.hoursWorked ?? null, startDateTime: time.startDateTime ?? null, endDateTime: time.endDateTime ?? null, roleID: time.roleID ?? null, roleName: roleInfo?.roleName ?? null, dateWorked: time.dateWorked, ...(updateWorkType ? { workType: updateWorkType } : {}) } : null,
           statusChange: plan.status ? { from: Number(plan.ticket.status), to: plan.status.value, label: plan.status.label } : null,
         };
         const steps = [`${visibility} note`, ...(time ? ['time entry'] : []), ...(plan.status ? [`status → ${plan.status.label}`] : [])];
@@ -2476,7 +2582,7 @@ export class AutotaskToolHandler {
         }
         const bits = [
           note.created ? `${visibility} note ${note.noteId} posted` : `note already posted (${note.noteId}) — not duplicated`,
-          ...(done.time ? [done.time.created ? `time entry ${done.time.id} logged` : `time entry already logged (${done.time.duplicateOf})`] : []),
+          ...(done.time ? [done.time.created ? `time entry ${done.time.id} logged${workTypeBit(updateWorkType)}` : `time entry already logged (${done.time.duplicateOf})`] : []),
           ...(done.status ? [`status → ${done.status.label}`] : []),
         ];
         return { result: { status: 'updated', ...planned, done }, message: `${tn}: ${bits.join('; ')}.` };
@@ -2507,16 +2613,18 @@ export class AutotaskToolHandler {
         // Ticket/task time: default/sole role, a pick, or validate the chosen one.
         const role = await resolveTimeEntryRole(a);
         if ('stop' in role) return role.stop;
+        let workType: { id: number; name: string; via: string; requested: string } | null = null;
         if (!isRegular) {
-          const badWorkType = await checkWorkType(a.billingCodeID);
-          if (badWorkType) return badWorkType;
-        }
+          const wt = await resolveWorkType(a);
+          if ('stop' in wt) return wt.stop;
+          workType = wt.matched;
+        } else delete a.workType;
         const dateWorked = await workDate(a);
         const written = await explainTimeEntryWrite(() => s.logTimeIdempotent({ ...a, dateWorked }));
         if ('stop' in written) return written.stop;
         const r = written.ok;
         const roleInfo = a.roleID != null ? { roleID: a.roleID, roleName: role.roleName, roleSource: role.roleSource } : {};
-        return { result: { ...r, ...roleInfo }, message: r.created ? `Logged time entry ${r.id}` : `Skipped — duplicate of existing time entry ${r.duplicateOf}` };
+        return { result: { ...r, ...roleInfo, ...(workType ? { workType } : {}) }, message: r.created ? `Logged time entry ${r.id}${workTypeBit(workType)}` : `Skipped — duplicate of existing time entry ${r.duplicateOf}` };
       }],
 
       // Projects
@@ -3857,8 +3965,9 @@ export class AutotaskToolHandler {
           const role = await resolveTimeEntryRole({ ...entry, roleID: updates.roleID });
           if ('stop' in role) return role.stop;
         }
-        const badWorkType = await checkWorkType(updates.billingCodeID);
-        if (badWorkType) return badWorkType;
+        const wt = await resolveWorkType(updates, async () => { const e = await s.getTimeEntry(id); return e ? { ticketID: e.ticketID, taskID: e.taskID } : null; });
+        if ('stop' in wt) return wt.stop;
+        const workType = wt.matched;
         // Timezone-normalize any local start/end (offset-aware or missing tz = passthrough).
         if (updates.startDateTime) updates.startDateTime = normalizeTimestamp(updates.startDateTime, timeZone);
         if (updates.endDateTime) updates.endDateTime = normalizeTimestamp(updates.endDateTime, timeZone);
@@ -3877,7 +3986,7 @@ export class AutotaskToolHandler {
           const w = hoursToBillWarning(requestedHoursToBill, after?.hoursToBill);
           if (w) warnings.push(w);
         }
-        return { result: warnings.length ? { id, warnings } : id, message: `Successfully updated time entry ${id}${warnings.length ? ` (warning: ${warnings.join('; ')})` : ''}` };
+        return { result: warnings.length || workType ? { id, ...(workType ? { workType } : {}), ...(warnings.length ? { warnings } : {}) } : id, message: `Successfully updated time entry ${id}${workTypeBit(workType)}${warnings.length ? ` (warning: ${warnings.join('; ')})` : ''}` };
       }],
       ['autotask_delete_time_entry', async (a) => {
         const dryRun = a.dryRun !== false; // default true
