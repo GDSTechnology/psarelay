@@ -256,6 +256,8 @@ first sign-in.
 | Pause sync at API usage % | Skip sync runs while tenant usage is high (default 85; keep it high — a stale mirror sends reads live) | `MCP_PG_SHADOW_PAUSE_AT_PCT` |
 | Read cache | The short-lived Autotask read cache | `AUTOTASK_CACHE` |
 | New company defaults | Set on every company PSArelay creates unless the request gives its own value, one `field=value` per line with this tenant's Autotask ids: `invoiceTemplateID`, `quoteTemplateID`, `taxRegionID`, `invoiceEmailMessageID`, `quoteEmailMessageID`, `currencyID`, `billToAddressToUse`, `isTaxExempt`. `create_company` reports which defaults it used. | `MCP_COMPANY_DEFAULTS` (comma-separated) |
+| Work type aliases | Extra spoken names for work types (voice / chat time entry), one `spoken name=work type name or id` per line, e.g. `rush=Onsite Support - Priority`. Word order and filler ("work") are ignored; names already match in any order without one. Env default `AUTOTASK_WORK_TYPE_ALIASES`. |
+| Regional work types | Copies of work types per state (e.g. a state tax rule), one `TAG=State/State` per line, e.g. `CT=CT/Connecticut`. TAG is a word anywhere in the work type names; the States are the client company State values. A client in that state gets only those work types, other clients never see them. Env default `AUTOTASK_WORK_TYPE_REGIONS`. |
 | Caller names | Names for clients that don't declare a `source`, one `pattern=name` rule per line. The pattern matches the IP address exactly, or appears in the user agent. Example: `172.19.0.3=n8n`, `Python-urllib=cron`, `Go-http-client=ChatGPT`. Applies to calls logged from then on. | `MCP_CALLER_LABELS` (comma-separated) |
 
 Changes apply at once and are kept in Postgres, so they survive restarts.

@@ -182,8 +182,8 @@ migrations, restarts, waits for `/health` and prints the version — and refuses
 | `AUTOTASK_MAX_CONCURRENT_TOTAL` | `8` | Calls in flight for the whole tenant |
 | `AUTOTASK_READ_RETRIES` | `2` | Retries of a read after a network error / timeout / 502–504 (0 = off) |
 | `AUTOTASK_OUTAGE_FAILURES` | `5` | Transient failures in a minute on one endpoint that open its outage breaker (3+ endpoints failing → the whole tenant) |
-| `AUTOTASK_WORK_TYPE_ALIASES` | — | Extra names for work types, e.g. `rush=Onsite Support - Priority; hot remote=102` (or JSON). Names in any word order already match without it |
-| `AUTOTASK_WORK_TYPE_REGIONS` | — | Regional copies of work types (e.g. per-state tax), as label prefix = company State values: `CT=CT,Connecticut; TX=TX` (or JSON). A client in a region gets only its work types ("priority" → "CT - Priority"); other clients never see them |
+| `AUTOTASK_WORK_TYPE_ALIASES` | — | Extra names for work types, e.g. `rush=Onsite Support - Priority; hot remote=102` (or JSON). Default for the console setting, editable live. Names in any word order already match without it |
+| `AUTOTASK_WORK_TYPE_REGIONS` | — | Regional copies of work types (e.g. per-state tax): a tag word in the names = client company States, `CT=CT,Connecticut; TX=TX` (or JSON). Default for the console setting, editable live. A client in a region gets only its work types; other clients never see them |
 | `MCP_PUBLIC_URL` | — | The address AI clients use for this server; the console's Setup page shows it with connection steps |
 | `LOG_LEVEL` / `LOG_FORMAT` | `info` / `simple` | `json` for production |
 

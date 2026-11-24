@@ -1186,11 +1186,11 @@ export class AutotaskToolHandler {
     //
     // A work type may also be NAMED — `workType: "priority remote"`, or a label
     // sent in billingCodeID — matched by utils/work-type-match (aliases from
-    // AUTOTASK_WORK_TYPE_ALIASES, any word order). The match is written back to
+    // the "Work type aliases" setting, any word order). The match is written back to
     // target.billingCodeID; `matched` says which work type it became, so the
     // caller can confirm it ("logged as Remote Support - Priority").
     type WorkTypeCheck = { stop: { result: unknown; message: string } } | { matched: { id: number; name: string; via: string; requested: string } | null };
-    // The client's State, for regional work types (AUTOTASK_WORK_TYPE_REGIONS) —
+    // The client's State, for regional work types (the "Regional work types" setting) —
     // ticket → company, or task → project → company. null = unknown (lookup failed
     // or no state): a regional work type is then only suggested, never used.
     const clientState = async (ref: { ticketID?: unknown; taskID?: unknown }): Promise<string | null> => {
@@ -1214,13 +1214,17 @@ export class AutotaskToolHandler {
       else if (typeof target.billingCodeID === 'string') target.billingCodeID = Number(target.billingCodeID);
       let matched: { id: number; name: string; via: string; requested: string } | null = null;
       if (spoken != null) {
-        const regions = parseWorkTypeRegions(process.env.AUTOTASK_WORK_TYPE_REGIONS);
+        const regions = parseWorkTypeRegions(settingValue<string[]>('workTypes.regions'));
         let place: string | null = null;
         if (regions.length) {
           const ref = scope ? await scope() : { ticketID: target.ticketID, taskID: target.taskID };
           place = ref ? await clientState(ref) : null;
         }
-        const m = matchWorkTypeForClient(await s.getWorkTypes(), spoken, parseWorkTypeAliases(process.env.AUTOTASK_WORK_TYPE_ALIASES), regions, place);
+        const aliases = parseWorkTypeAliases(settingValue<string[]>('workTypes.aliases'));
+        let m = matchWorkTypeForClient(await s.getWorkTypes(), spoken, aliases, regions, place);
+        // Work types change in Autotask (renamed, added): before answering "no" / "which one?" from the
+        // cached list (up to 15 min old), look again at the live one.
+        if (!m.ok) m = matchWorkTypeForClient(await s.getWorkTypes({ fresh: true }), spoken, aliases, regions, place);
         if (!m.ok) {
           // Never assume a loose match: the person picks, then the caller re-runs with the exact name / id.
           // A spoken answer must stay short: at most 8 named, the rest counted (all are in result.choices).
@@ -1231,7 +1235,7 @@ export class AutotaskToolHandler {
           const why = m.reason === 'confirm' ? `is not an exact work type name. Did you mean "${m.suggested!.name}" (${m.suggested!.id})? ${label}: ${list}. Confirm with the person before using it — re-run with workType "${m.suggested!.name}" once they agree, or the one they pick.`
             : m.reason === 'ambiguous' ? `could be more than one work type: ${list}. ${rerun}`
             : m.reason === 'inactive' ? `is an inactive work type. ${label}: ${list}. ${rerun}`
-            : m.badAlias ? `is an alias for "${m.badAlias}", which is not an active work type here — fix AUTOTASK_WORK_TYPE_ALIASES. ${label}: ${list}. ${rerun}`
+            : m.badAlias ? `is an alias for "${m.badAlias}", which is not an active work type here — fix it in the console (Work type aliases). ${label}: ${list}. ${rerun}`
             : `does not match a work type. ${label}: ${list}. ${rerun}`;
           return {
             stop: {
@@ -2414,8 +2418,14 @@ export class AutotaskToolHandler {
         return { result: r, message: `${active.length} active Regular Time categor(y/ies): ${active.map((c) => c.name).join(', ')}` };
       }],
       ['autotask_list_work_types', async (a) => {
-        const all = await s.getWorkTypes();
-        const aliases = parseWorkTypeAliases(process.env.AUTOTASK_WORK_TYPE_ALIASES);
+        let all = await s.getWorkTypes({ fresh: a.refresh === true });
+        const aliases = parseWorkTypeAliases(settingValue<string[]>('workTypes.aliases'));
+        // Before reporting a miss or a broken alias from the cached list, look at the live one (work types get renamed).
+        if (a.refresh !== true) {
+          const named = a.name != null && String(a.name).trim() !== '';
+          const stale = (named && !matchWorkType(all, String(a.name), aliases).ok) || [...aliases.keys()].some((k) => !matchWorkType(all, k, aliases).ok);
+          if (stale) all = await s.getWorkTypes({ fresh: true });
+        }
         // Each alias under the work type it resolves to (an alias whose target is missing is reported apart).
         const byId = new Map<number, string[]>();
         const broken: Array<{ alias: string; target: string }> = [];
@@ -2423,7 +2433,7 @@ export class AutotaskToolHandler {
           const m = matchWorkType(all, alias, aliases);
           if (m.ok) byId.set(m.id, [...(byId.get(m.id) ?? []), alias]); else broken.push({ alias, target });
         }
-        const regions = parseWorkTypeRegions(process.env.AUTOTASK_WORK_TYPE_REGIONS);
+        const regions = parseWorkTypeRegions(settingValue<string[]>('workTypes.regions'));
         const workTypes = all.filter((w) => a.includeInactive === true || w.active).map((w) => {
           const r = regions.length ? regionOf(w.name, regions) : null;
           return { ...w, aliases: byId.get(w.id) ?? [], ...(r ? { region: { prefix: r.prefix, states: r.places } } : {}) };

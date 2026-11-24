@@ -73,9 +73,9 @@ const sameSet = (a: string[], b: string[]): boolean => {
  * or `remote priority=Remote Support - Priority; rp=102`. Keys compare by words
  * (order and filler ignored); values are a work-type label or id.
  */
-export function parseWorkTypeAliases(raw: string | undefined | null): Map<string, string> {
+export function parseWorkTypeAliases(raw: string | string[] | undefined | null): Map<string, string> {
   const out = new Map<string, string>();
-  const text = String(raw ?? '').trim();
+  const text = (Array.isArray(raw) ? raw.join('\n') : String(raw ?? '')).trim();
   if (!text) return out;
   const add = (k: unknown, v: unknown): void => {
     const kk = [...workTypeWords(String(k ?? ''))].sort().join(' ');
@@ -158,51 +158,84 @@ export function matchWorkType(types: WorkTypeRef[], requested: string | number, 
 // ── Regional work types ───────────────────────────────────────────────────
 // Some MSPs keep a copy of their work types per state for tax ("CT - Priority" =
 // labour taxable in that state). Which copy applies depends on the CLIENT'S
-// state, never on what the tech says. AUTOTASK_WORK_TYPE_REGIONS maps a label
-// prefix to the company State values it covers:
-//   CT=CT,Connecticut; TX=TX,Texas      or      {"CT": ["CT", "Connecticut"]}
+// state, never on what the tech says. A rule maps a region TAG — a word in the
+// label, wherever it sits ("CT - Priority", "Remote Priority (CT)") — to the
+// company State values it covers. Set live in the console ("Regional work
+// types", one rule per line: CT=CT/Connecticut), env default
+// AUTOTASK_WORK_TYPE_REGIONS (CT=CT,Connecticut; TX=TX — or JSON). Labels are
+// re-read from Autotask, so renaming work types needs no change here.
 // With a client state known:
-//   - in a region: only that region's work types are matched (prefix ignored,
+//   - in a region: only that region's work types are matched (tag ignored,
 //     "priority" → "CT - Priority"); a name that fits none of them may fall back
 //     to an ordinary work type, but only for the person to confirm;
 //   - elsewhere: other regions' work types are never offered.
 // State unknown (no ticket / company has no state): a regional match is only a
-// suggestion to confirm. Naming the prefix ("CT priority"), an id or an alias is
+// suggestion to confirm. Naming the tag ("CT priority"), an id or an alias is
 // explicit and always honoured. No rules configured → nothing changes.
 
 export interface WorkTypeRegion { prefix: string; words: string[]; places: string[] }
 
-export function parseWorkTypeRegions(raw: string | undefined | null): WorkTypeRegion[] {
+const words0 = (s: string): string[] => String(s).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+
+/** Env / JSON / console text → one `key=value` line per rule (values joined with "/"). */
+export function workTypeRuleLines(raw: string | undefined | null): string[] {
   const text = String(raw ?? '').trim();
   if (!text) return [];
-  const pairs: Array<[string, unknown]> = [];
   if (text.startsWith('{')) {
-    try { pairs.push(...Object.entries(JSON.parse(text) as Record<string, unknown>)); } catch { /* fall through */ }
+    try {
+      return Object.entries(JSON.parse(text) as Record<string, unknown>)
+        .map(([k, v]) => `${String(k).trim()}=${Array.isArray(v) ? v.map((x) => String(x).trim()).join('/') : String(v ?? '').trim()}`)
+        .filter((l) => !/^=|=$/.test(l));
+    } catch { /* fall through to the k=v form */ }
   }
-  if (!pairs.length) {
-    for (const part of text.split(/[;\n]/)) { const i = part.indexOf('='); if (i > 0) pairs.push([part.slice(0, i), part.slice(i + 1)]); }
-  }
-  const out: WorkTypeRegion[] = [];
-  for (const [k, v] of pairs) {
-    const prefix = String(k).trim();
-    const words = String(prefix).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
-    const places = (Array.isArray(v) ? v : String(v ?? '').split(',')).map((p) => String(p).trim().toLowerCase()).filter(Boolean);
-    if (words.length && places.length) out.push({ prefix, words, places });
-  }
-  return out;
+  return text.split(/[;\n]/).map((l) => l.trim()).filter(Boolean);
 }
 
-/** The region whose prefix starts this label ("CT - Priority" → CT), or null. */
+export function parseWorkTypeRegions(raw: string | string[] | undefined | null): WorkTypeRegion[] {
+  const lines = Array.isArray(raw) ? raw : workTypeRuleLines(raw);
+  const byTag = new Map<string, WorkTypeRegion>();
+  for (const line of lines) {
+    const i = line.indexOf('=');
+    if (i < 1) continue;
+    const prefix = line.slice(0, i).trim();
+    const words = words0(prefix);
+    const places = line.slice(i + 1).split(/[,/|]/).map((p) => p.trim().toLowerCase()).filter(Boolean);
+    if (!words.length || !places.length) continue;
+    const key = words.join(' ');
+    const prev = byTag.get(key); // the same tag on two lines adds states
+    if (prev) prev.places = [...new Set([...prev.places, ...places])];
+    else byTag.set(key, { prefix, words, places: [...new Set(places)] });
+  }
+  return [...byTag.values()];
+}
+
+/** Why a console line is not a valid region rule, or null. */
+export function regionLineProblem(line: string): string | null {
+  const i = line.indexOf('=');
+  if (i < 1 || i === line.length - 1) return `"${line}" must look like TAG=State/State (e.g. CT=CT/Connecticut)`;
+  if (!words0(line.slice(0, i)).length) return `"${line}": the tag must contain a letter or digit`;
+  return null;
+}
+
+/** Why a console line is not a valid alias, or null. */
+export function aliasLineProblem(line: string): string | null {
+  const i = line.indexOf('=');
+  if (i < 1 || i === line.length - 1) return `"${line}" must look like spoken name=work type name or id (e.g. rush=Onsite Support - Priority)`;
+  if (!workTypeWords(line.slice(0, i)).length) return `"${line}": the spoken name has no words that count (filler like "work" is ignored)`;
+  return null;
+}
+
+/** The region whose tag is in this label ("CT - Priority", "Remote (CT)" → CT), or null. */
 export function regionOf(name: string, regions: WorkTypeRegion[]): WorkTypeRegion | null {
-  const w = String(name).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
-  return regions.find((r) => r.words.every((x, i) => w[i] === x)) ?? null;
+  const w = words0(name);
+  return regions.find((r) => r.words.every((x) => w.includes(x))) ?? null;
 }
 
-/** The label without its region prefix ("CT - Priority" → "Priority"). */
+/** The label without its region tag ("CT - Priority" → "Priority", "Remote Priority (CT)" → "Remote Priority"). */
 const stripRegion = (name: string, r: WorkTypeRegion): string => {
-  let rest = String(name).trimStart();
-  for (const w of r.words) rest = rest.replace(/^[^a-z0-9]*/i, '').slice(w.length);
-  return rest.replace(/^[^a-z0-9]+/i, '');
+  let rest = String(name);
+  for (const w of r.words) rest = rest.replace(new RegExp(`(^|[^a-z0-9])${w}(?=[^a-z0-9]|$)`, 'gi'), '$1');
+  return rest.replace(/\(\s*\)|\[\s*\]/g, '').replace(/^[\s\-–—~:|/,]+|[\s\-–—~:|/,]+$/g, '').replace(/\s{2,}/g, ' ');
 };
 
 export type RegionalMatch = WorkTypeMatch & { regionNote?: string };

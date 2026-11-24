@@ -4,7 +4,7 @@
 // a suggestion with the similar work types, for the person to confirm.
 // Service mocked.
 
-import { matchWorkType, matchWorkTypeForClient, parseWorkTypeAliases, parseWorkTypeRegions, regionOf, workTypeWords, type WorkTypeRef } from '../src/utils/work-type-match';
+import { aliasLineProblem, matchWorkType, matchWorkTypeForClient, parseWorkTypeAliases, parseWorkTypeRegions, regionLineProblem, regionOf, workTypeRuleLines, workTypeWords, type WorkTypeRef } from '../src/utils/work-type-match';
 import { AutotaskService } from '../src/services/autotask.service';
 import { Logger } from '../src/utils/logger';
 import type { McpServerConfig } from '../src/types/mcp';
@@ -355,5 +355,73 @@ describe('time-entry tools pick regional work types by the ticket client', () =>
     expect(b.data.workTypes.find((w: any) => w.id === 1).region).toBeUndefined();
     expect(b.data.clientState).toBe('NY');
     expect(b.data.match).toEqual(expect.objectContaining({ ok: true, id: 12 }));
+  });
+});
+
+// Work types change in Autotask while PSArelay runs (renamed, added, retagged): nothing here may need a restart.
+describe('work types stay live', () => {
+  const settings = require('../src/admin/settings');
+  const base = { resourceID: 1001, ticketID: 2002, roleID: 7, dateWorked: '2026-11-23', hoursWorked: 1, summaryNotes: 'Fix' };
+  afterEach(() => { settings._resetSettings(); delete process.env.AUTOTASK_WORK_TYPE_REGIONS; delete process.env.AUTOTASK_WORK_TYPE_ALIASES; });
+
+  test('a region tag counts anywhere in the name, and is ignored when matching', () => {
+    const rules = parseWorkTypeRegions(['CT=CT/Connecticut']);
+    expect(regionOf('Remote Priority (CT)', rules)!.prefix).toBe('CT');
+    expect(regionOf('Onsite - CT - Emergency', rules)!.prefix).toBe('CT');
+    expect(regionOf('Connect Support', rules)).toBeNull(); // a whole word, not a substring
+    const types: WorkTypeRef[] = [
+      { id: 1, name: 'Remote~Priority Service', active: true },
+      { id: 2, name: 'Remote Priority (CT)', active: true },
+      { id: 3, name: 'Onsite Priority (CT)', active: true },
+    ];
+    expect(matchWorkTypeForClient(types, 'remote priority', new Map(), rules, 'Connecticut')).toEqual(expect.objectContaining({ ok: true, id: 2, name: 'Remote Priority (CT)' }));
+    expect(matchWorkTypeForClient(types, 'remote priority service', new Map(), rules, 'MA')).toEqual(expect.objectContaining({ ok: true, id: 1 }));
+  });
+
+  test('rule lines: "/" or "," between states, a tag on two lines adds states, JSON env', () => {
+    expect(parseWorkTypeRegions(['CT=CT/Connecticut', 'CT=Conn.'])).toEqual([{ prefix: 'CT', words: ['ct'], places: ['ct', 'connecticut', 'conn.'] }]);
+    expect(workTypeRuleLines('{"CT": ["CT", "Connecticut"], "TX": "TX"}')).toEqual(['CT=CT/Connecticut', 'TX=TX']);
+    expect(workTypeRuleLines('CT=CT,Connecticut; TX=TX')).toEqual(['CT=CT,Connecticut', 'TX=TX']);
+    expect(regionLineProblem('CT')).toMatch(/TAG=State/);
+    expect(regionLineProblem('CT=CT/Connecticut')).toBeNull();
+    expect(aliasLineProblem('work=Remote Support')).toMatch(/no words that count/);
+  });
+
+  test('the console settings are used at once, no restart (env is only the default)', async () => {
+    process.env.AUTOTASK_WORK_TYPE_ALIASES = 'rush=101';
+    expect(settings.settingValue('workTypes.aliases')).toEqual(['rush=101']);
+    settings.setOverride('workTypes.aliases', ['rush=Onsite Support - Priority']);
+    settings.setOverride('workTypes.regions', ['NY=NY/New York']);
+    expect(() => settings.setOverride('workTypes.regions', ['NY'])).toThrow(/TAG=State/);
+    const s = mk();
+    const log = jest.spyOn(s, 'logTimeIdempotent').mockResolvedValue({ created: true, id: 5 } as any);
+    await new AutotaskToolHandler(s, logger).callTool('autotask_log_my_time', { ...base, workType: 'rush' });
+    expect(log).toHaveBeenCalledWith(expect.objectContaining({ billingCodeID: 104 }));
+  });
+
+  test('a name that misses on the cached list is re-checked live (work type renamed minutes ago)', async () => {
+    const s = mk();
+    const renamed: WorkTypeRef[] = [...TYPES, { id: 107, name: 'Remote Escalation', active: true }];
+    const get = (s.getWorkTypes as jest.Mock).mockImplementation(async (o?: { fresh?: boolean }) => (o?.fresh ? renamed : TYPES));
+    jest.spyOn(s, 'getBillingCode').mockResolvedValue({ id: 107, name: 'Remote Escalation', useType: 1, isActive: true } as any);
+    const create = jest.spyOn(s, 'createTimeEntry').mockResolvedValue(9 as any);
+    const b = body(await new AutotaskToolHandler(s, logger).callTool('autotask_create_time_entry', { ...base, workType: 'escalation remote' }));
+    expect(get).toHaveBeenCalledWith({ fresh: true });
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ billingCodeID: 107 }));
+    expect(b.message).toContain('Remote Escalation');
+  });
+
+  test('a sure match on the cached list costs no extra read', async () => {
+    const s = mk();
+    jest.spyOn(s, 'createTimeEntry').mockResolvedValue(9 as any);
+    await new AutotaskToolHandler(s, logger).callTool('autotask_create_time_entry', { ...base, workType: 'remote support' });
+    expect(s.getWorkTypes).toHaveBeenCalledTimes(1);
+    expect(s.getWorkTypes).not.toHaveBeenCalledWith({ fresh: true });
+  });
+
+  test('list_work_types refresh reads live', async () => {
+    const s = mk();
+    await new AutotaskToolHandler(s, logger).callTool('autotask_list_work_types', { refresh: true });
+    expect(s.getWorkTypes).toHaveBeenCalledWith({ fresh: true });
   });
 });

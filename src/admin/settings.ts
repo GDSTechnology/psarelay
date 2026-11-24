@@ -9,6 +9,7 @@
 
 import { companyCreateDefaults, companyDefaultLineProblem } from '../utils/company-defaults.js';
 import { registryLineProblem, referenceLineProblem } from '../utils/actor-classify.js';
+import { aliasLineProblem, regionLineProblem, workTypeRuleLines } from '../utils/work-type-match.js';
 
 export type SettingType = 'boolean' | 'integer' | 'string[]' | 'lines';
 
@@ -96,6 +97,18 @@ export const SETTINGS: SettingDef[] = [
     description: 'Set on every company PSArelay creates (AI, imports, orders) unless the request gives its own value — otherwise Autotask applies its defaults. One per line, field=value with this tenant\'s Autotask ids: invoiceTemplateID, quoteTemplateID, taxRegionID, invoiceEmailMessageID, quoteEmailMessageID, currencyID, billToAddressToUse, isTaxExempt (true/false). Example: invoiceTemplateID=12.',
     lineProblem: companyDefaultLineProblem,
     envDefault: (env) => (env.MCP_COMPANY_DEFAULTS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
+  },
+  {
+    key: 'workTypes.aliases', group: 'Defaults', type: 'lines', label: 'Work type aliases',
+    description: 'Extra spoken names for work types, used when someone logs time by voice or chat. One per line: spoken name=work type name or id (e.g. rush=Onsite Support - Priority). Word order and filler like "work" are ignored. Names already match in any word order without an alias. Takes effect at once; an alias to a work type renamed in Autotask is reported by autotask_list_work_types, never guessed.',
+    lineProblem: aliasLineProblem,
+    envDefault: (env) => workTypeRuleLines(env.AUTOTASK_WORK_TYPE_ALIASES),
+  },
+  {
+    key: 'workTypes.regions', group: 'Defaults', type: 'lines', label: 'Regional work types',
+    description: 'For copies of work types per state (e.g. a state tax rule: "CT - Priority"). One per line: TAG=State/State, where TAG is a word in the work type names (anywhere in the name) and the States are the client company State values it covers (e.g. CT=CT/Connecticut). A client in that state gets only those work types; other clients never see them. Takes effect at once; work type names are re-read from Autotask, so renaming them needs no change here.',
+    lineProblem: regionLineProblem,
+    envDefault: (env) => workTypeRuleLines(env.AUTOTASK_WORK_TYPE_REGIONS),
   },
   {
     key: 'callers.labels', group: 'Diagnostics', type: 'lines', label: 'Caller names',
