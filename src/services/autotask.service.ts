@@ -3717,12 +3717,13 @@ export class AutotaskService {
   private readonly WORK_TYPE_USE_TYPE = 1;
 
   /** Ticket/task WORK TYPES (BillingCodes useType 1): { id, name, active }. Read-only. */
-  async getWorkTypes(): Promise<Array<{ id: number; name: string; active: boolean }>> {
+  /** Work types (BillingCodes useType 1). `fresh` skips the read cache — work types renamed or added in Autotask minutes ago. */
+  async getWorkTypes(opts: { fresh?: boolean } = {}): Promise<Array<{ id: number; name: string; active: boolean }>> {
     const http = await this.ensureClient();
     const codes = await http.query<{ id: number; name?: string | null; isActive?: boolean }>(
       'BillingCodes',
       [{ op: 'eq', field: 'useType', value: this.WORK_TYPE_USE_TYPE }],
-      { maxRecords: 500, includeFields: ['id', 'name', 'isActive', 'useType'] }
+      { maxRecords: 500, includeFields: ['id', 'name', 'isActive', 'useType'], ...(opts.fresh ? { noCache: true } : {}) }
     );
     return codes
       .filter((c) => c.name != null)

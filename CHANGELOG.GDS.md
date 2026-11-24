@@ -10,6 +10,21 @@ Each entry lists the merge commit and the PR number. Brief section references
 
 ---
 
+## v6.30.0 — 2026-11-23 — Work types stay live while they're being reorganised
+
+- **Why**: the MSP is renaming and reorganising its work types in Autotask. The v6.29.0 matching read them through
+  the reference cache (up to 15 min old), and its aliases and regions were environment variables (a restart to change).
+- **A name that misses is re-checked live**: before any "did you mean" / "which one?" / "no such work type", the work
+  types are read again straight from Autotask (cache and mirror skipped), so a work type renamed or added minutes ago
+  is found. A sure match on the cached list costs no extra call. `autotask_list_work_types` does the same before it
+  reports a miss or a broken alias, and takes `refresh: true` to read live.
+- **Console settings, live**: **Work type aliases** and **Regional work types** (Defaults group) take effect at once;
+  `AUTOTASK_WORK_TYPE_ALIASES` / `AUTOTASK_WORK_TYPE_REGIONS` are now only their defaults. One rule per line:
+  `rush=Onsite Support - Priority`, `CT=CT/Connecticut` (states with "/" or ","; the same tag on two lines adds states).
+- **A region tag counts anywhere in the name**, as a whole word: "CT - Priority", "Remote Priority (CT)" and
+  "Onsite - CT - Emergency" are all CT, and the tag is ignored when matching ("remote priority" → "Remote Priority (CT)"
+  for a Connecticut client). Renaming work types needs no settings change as long as the tag stays in the name.
+
 ## v6.29.0 — 2026-11-23 — Work types by name ("remote priority")
 
 - **Bug**: voice and chat users (Copilot, ChatGPT voice) said "priority remote" / "remote priority work" and the
