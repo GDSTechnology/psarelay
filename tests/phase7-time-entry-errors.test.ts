@@ -177,7 +177,7 @@ describe('get_ticket_details carries an Open-in-Autotask link', () => {
     const b = body(await h.callTool('autotask_get_ticket_details', { ticketID: 208520 }));
     const url = 'https://ww3.autotask.net/Autotask/AutotaskExtend/ExecuteCommand.aspx?Code=OpenTicketDetail&TicketID=208520';
     expect(b.data.ticketUrl).toBe(url);
-    expect(b.message).toContain(`open in Autotask: ${url}`);
+    expect(b.message).toContain(`Open in Autotask: ${url}`);
   });
 });
 

@@ -18,7 +18,7 @@ import type { MaterialLine } from '../utils/ticket-materials.js';
 import { internalTextProblem } from '../utils/invoice-text.js';
 import type { ServiceWriteResult } from '../utils/service-catalog.js';
 import { defaultWorkDate, formatChoices, localDayWindow, matchPicklist, matchPicklistExact, TimeGap } from '../utils/staff-tools.js';
-import { isContractTermKind } from '../utils/contract-terms.js';
+import { CONTRACT_TYPE_LABELS, isContractTermKind } from '../utils/contract-terms.js';
 import { getShadowRuntime } from '../db/shadow-runtime.js';
 import { collectAuditEvents, type CollectOptions } from '../db/audit-collector.js';
 import { BACKFILL_SOURCES, BackfillJobs, MAX_RANGE_DAYS, runBackfillStep, type BackfillSource } from '../db/history-backfill.js';
@@ -1304,6 +1304,19 @@ export class AutotaskToolHandler {
     const workTargetLabel = async (x: { ticketID?: unknown; taskID?: unknown }): Promise<string | null> =>
       x.ticketID != null && String(x.ticketID) !== '' ? (await ticketRef(x.ticketID)).label
         : x.taskID != null && String(x.taskID) !== '' ? (await taskRef(x.taskID)).label : null;
+    /** Names (nameRefs) and picklist labels on rows of one entity, best-effort — ids always stay. */
+    const labeled = async <T>(entity: string, rows: T[], picklists: string[]): Promise<T[]> => {
+      const list = rows.filter((x) => x != null && typeof x === 'object') as unknown as Array<Record<string, any>>;
+      if (!list.length) return rows;
+      try { await s.nameRefs(list); } catch { /* ids stay */ }
+      try { await s.labelPicklistFields(entity, list, picklists); } catch { /* values stay */ }
+      return rows;
+    };
+    /** Contracts: names + picklist labels; contractType falls back to Autotask's fixed type list. */
+    const labelContracts = async (rows: Array<Record<string, any>>): Promise<void> => {
+      await labeled('Contracts', rows, ['status', 'contractType', 'contractCategory', 'serviceLevelAgreementID']);
+      for (const c of rows) if (c && c.contractType != null && c.contractTypeLabel == null && CONTRACT_TYPE_LABELS[Number(c.contractType)]) c.contractTypeLabel = CONTRACT_TYPE_LABELS[Number(c.contractType)];
+    };
     /** A resource's name (cached batch lookup), or null. */
     const personName = async (id: unknown): Promise<string | null> => {
       if (id == null || String(id) === '' || !Number.isFinite(Number(id))) return null;
@@ -1850,7 +1863,18 @@ export class AutotaskToolHandler {
           try { return r?.id != null ? s.getTicketWebUrl(Number(r.id)) : null; } catch { return null; }
         })();
         if (r && ticketUrl) (r as Record<string, unknown>).ticketUrl = ticketUrl;
-        return { result: r, message: `Ticket details retrieved successfully${ticketUrl ? ` — open in Autotask: ${ticketUrl}` : ''}` };
+        if (!r) return { result: r, message: `Ticket ${a.ticketID} not found` };
+        // Labels and names next to every id (same record shape — existing callers unaffected),
+        // and a reply that says what the ticket IS, like get_ticket_by_number.
+        const t = r as Record<string, any>;
+        await labeled('Tickets', [t], ['status', 'priority', 'queueID', 'issueType', 'subIssueType', 'source', 'ticketType', 'ticketCategory', 'serviceLevelAgreementID']);
+        if (t.queueIDLabel != null && t.queueLabel == null) t.queueLabel = t.queueIDLabel;
+        const bits = [
+          t.statusLabel && `status ${t.statusLabel}`, t.priorityLabel && `priority ${t.priorityLabel}`, t.queueLabel && `queue ${t.queueLabel}`,
+          t.company && `company ${t.company}`, t.contactName && `contact ${t.contactName}`, t.assignedTo && `assigned to ${t.assignedTo}${t.roleName ? ` (${t.roleName})` : ''}`,
+          t.issueTypeLabel && `issue ${t.issueTypeLabel}${t.subIssueTypeLabel ? ` / ${t.subIssueTypeLabel}` : ''}`,
+        ].filter(Boolean);
+        return { result: r, message: `${[t.ticketNumber ?? `Ticket ${t.id}`, t.title].filter(Boolean).join(' — ')}${bits.length ? `: ${bits.join(', ')}` : ''}${ticketUrl ? `. Open in Autotask: ${ticketUrl}` : ''}` };
       }],
       ['autotask_create_ticket', async (a) => {
         const payload = buildTicketPayload(a);
@@ -2247,10 +2271,14 @@ export class AutotaskToolHandler {
       ['autotask_get_service_call', async (a) => {
         const r = await s.getServiceCall(a.serviceCallId);
         if (!r) return { result: null, message: `No service call found with ID ${a.serviceCallId}` };
-        return { result: r, message: 'Service call retrieved successfully' };
+        const c = r as Record<string, any>;
+        await labeled('ServiceCalls', [c], ['status']);
+        return { result: r, message: `Service call${c.startDateTime ? ` ${String(c.startDateTime).slice(0, 16).replace('T', ' ')}` : ''}${c.company ? ` for ${c.company}` : ''}${c.statusLabel ? ` — ${c.statusLabel}` : ''}${c.description ? `: ${String(c.description).slice(0, 120)}` : ''}` };
       }],
       ['autotask_search_service_calls', async (a) => {
-        return paged(await s.searchServiceCalls(a), 'service calls');
+        const r = await s.searchServiceCalls(a);
+        await labeled('ServiceCalls', ((r as any).items ?? []) as Array<Record<string, any>>, ['status']);
+        return paged(r, 'service calls');
       }],
       ['autotask_reconcile_service_call', async (a) => {
         const r = await s.reconcileServiceCall({ serviceCallId: a.serviceCallId, ticketId: a.ticketId });
@@ -2369,10 +2397,13 @@ export class AutotaskToolHandler {
       ['autotask_get_company_todo', async (a) => {
         const r = await s.getCompanyToDo(a.id);
         if (!r) return { result: null, message: `No Company To-Do found with ID ${a.id}` };
-        return { result: r, message: 'Company To-Do retrieved successfully' };
+        const td = r as Record<string, any>;
+        await labeled('CompanyToDos', [td], ['actionType']);
+        return { result: r, message: `To-Do${td.actionTypeLabel ? ` (${td.actionTypeLabel})` : ''}${td.company ? ` for ${td.company}` : ''}${td.assignedTo ? `, assigned to ${td.assignedTo}` : ''}${td.activityDescription ? `: ${String(td.activityDescription).slice(0, 120)}` : ''}` };
       }],
       ['autotask_search_company_todos', async (a) => {
         const r = await s.searchCompanyToDos(a);
+        await labeled('CompanyToDos', r as Array<Record<string, any>>, ['actionType']);
         return { result: r, message: `Found ${r.length} Company To-Do(s)` };
       }],
       ['autotask_create_company_todo', async (a) => {
@@ -2778,10 +2809,15 @@ export class AutotaskToolHandler {
 
       // Projects
       ['autotask_search_projects', async (a) => {
-        return paged(await s.searchProjects(a), 'projects');
+        const r = await s.searchProjects(a);
+        await labeled('Projects', ((r as any).items ?? []) as Array<Record<string, any>>, ['status', 'projectType']);
+        return paged(r, 'projects');
       }],
       ['autotask_get_project', async (a) => {
-        const r = await s.getProject(a.id); return { result: r, message: r ? `Project ${a.id}` : `Project ${a.id} not found` };
+        const r = await s.getProject(a.id) as Record<string, any> | null;
+        if (!r) return { result: r, message: `Project ${a.id} not found` };
+        await labeled('Projects', [r], ['status', 'projectType']);
+        return { result: r, message: `Project ${r.projectName ?? a.id}${[r.statusLabel, r.company].filter(Boolean).length ? ` — ${[r.statusLabel, r.company].filter(Boolean).join(', ')}` : ''}` };
       }],
       ['autotask_get_project_structure', async (a) => {
         const r = await s.getProjectStructure(a.projectID);
@@ -3082,10 +3118,15 @@ export class AutotaskToolHandler {
 
       // Contracts
       ['autotask_search_contracts', async (a) => {
-        const r = await s.searchContracts(a); return { result: r, message: `Found ${r.length} contracts` };
+        const r = await s.searchContracts(a);
+        await labelContracts(r as Array<Record<string, any>>);
+        return { result: r, message: `Found ${r.length} contracts` };
       }],
       ['autotask_get_contract', async (a) => {
-        const r = await s.getContract(a.id); return { result: r, message: `Retrieved contract ${a.id}` };
+        const r = await s.getContract(a.id) as Record<string, any> | null;
+        if (!r) return { result: r, message: `Contract ${a.id} not found` };
+        await labelContracts([r]);
+        return { result: r, message: `Contract ${r.contractName ?? a.id}${[r.contractTypeLabel, r.statusLabel, r.company].filter(Boolean).length ? ` — ${[r.contractTypeLabel, r.statusLabel, r.company].filter(Boolean).join(', ')}` : ''}` };
       }],
       ['autotask_list_expiring_contracts', async (a) => {
         const r = await s.listExpiringContracts(a);
@@ -3358,14 +3399,19 @@ export class AutotaskToolHandler {
 
       // Tasks
       ['autotask_search_tasks', async (a) => {
-        return paged(await s.searchTasks(a), 'tasks');
+        const r = await s.searchTasks(a);
+        await labeled('Tasks', ((r as any).items ?? []) as Array<Record<string, any>>, ['status']);
+        return paged(r, 'tasks');
       }],
       ['autotask_create_task', async (a) => {
         const taskData = { ...a, taskType: a.taskType ?? 1 };
         const id = await s.createTask(taskData); return { result: id, message: `Created ${(await taskRef(id)).label}` };
       }],
       ['autotask_get_task', async (a) => {
-        const r = await s.getTask(a.id); return { result: r, message: r ? (await taskRef(a.id)).label.replace(/^task/, 'Task') : `Task ${a.id} not found` };
+        const r = await s.getTask(a.id);
+        if (r) await labeled('Tasks', [r as Record<string, any>], ['status']);
+        const st = (r as Record<string, any> | null)?.statusLabel;
+        return { result: r, message: r ? `${(await taskRef(a.id)).label.replace(/^task/, 'Task')}${st ? ` — ${st}` : ''}` : `Task ${a.id} not found` };
       }],
       ['autotask_get_task_by_number', async (a) => {
         const r = await s.getTaskByNumber(a.taskNumber);
@@ -3462,7 +3508,10 @@ export class AutotaskToolHandler {
 
       // Notes (ticket/project/company)
       ['autotask_get_ticket_note', async (a) => {
-        const r = await s.getTicketNote(a.ticketId, a.noteId); return { result: r, message: 'Ticket note retrieved successfully' };
+        const r = await s.getTicketNote(a.ticketId, a.noteId);
+        if (r) await labeled('TicketNotes', [r as Record<string, any>], ['noteType', 'publish']);
+        const nt = r as Record<string, any> | null;
+        return { result: r, message: nt ? `Note on ${(await ticketRef(a.ticketId)).label}${nt.title ? `: ${nt.title}` : ''}${nt.publishLabel ? ` (${nt.publishLabel})` : ''}` : 'Ticket note not found' };
       }],
       ['autotask_search_ticket_notes', async (a) => {
         const pageSize = Math.min(Math.max(Number(a.pageSize) || 25, 1), 100);
