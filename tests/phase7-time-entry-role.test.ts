@@ -184,7 +184,8 @@ describe('create_time_entry handler role wiring', () => {
       id: 555, ticketID: 209477, resourceID: 30683829, resourceName: 'Jonathan Fitzgerald',
       roleID: 29683355, roleName: 'Engineer', roleSource: 'explicit', hoursWorked: 0.1, summaryNotes: 'x',
     }));
-    expect(b.message).toMatch(/for Jonathan Fitzgerald as Engineer \(29683355\)/);
+    expect(b.message).toMatch(/for Jonathan Fitzgerald as Engineer$/);
+    expect(b.message).not.toMatch(/29683355/); // ids are never spoken
   });
 
   test('an explicit roleID that is not the resource\'s fails cleanly, writes nothing, lists valid roles', async () => {

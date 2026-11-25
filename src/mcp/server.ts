@@ -566,21 +566,18 @@ When LAZY_LOADING=true, only 3 meta-tools are exposed initially:
 
 Use autotask_list_categories to discover available tool categories, then autotask_list_category_tools to get full schemas for a category, then autotask_execute_tool to call the desired tool.
 
-## Available Tools (39 total):
-- Companies: search, create, update
-- Contacts: search, create
-- Tickets: search, get details, create
-- Time entries: create
-- Projects: search, create
-- Resources: search
-- Notes: get/search/create for tickets, projects, companies
-- Attachments: get/search ticket attachments
-- Financial: expense reports, quotes, quote items (CRUD), invoices, contracts
-- Sales: opportunities, products, services, service bundles
-- Configuration items: search
-- Tasks: search, create
-- Picklists: list queues, list ticket statuses, list ticket priorities, get field info
-- Utility: test connection
+## Available Tools:
+Several hundred tools in categories (tickets, time, projects and tasks, companies and contacts, service calls,
+To-Dos, contracts and billing, sales, configuration items, reports). Use autotask_list_categories to see them.
+
+## Speaking to people (chat and voice):
+People know records by their names and numbers, never by Autotask's internal ids. In anything you say or show:
+- A ticket is its **ticket number and title** ("T20261123.0012 — Printer offline"), never the numeric ticket id.
+- A task is its **title and project**; a project, company, contact or person is their **name**.
+- Status, priority, queue, work type, role, category: say the **label**, not the number.
+- Keep ids for the next tool call only. If a result has just an id, look the record up (or say "that ticket")
+  rather than reading the id aloud. Tool messages are written to be read out as they are.
+- Before logging time, confirm the work type by its name; if a tool returns needs_confirmation, ask the person.
 
 ## Picklist Discovery:
 Use autotask_list_queues, autotask_list_ticket_statuses, or autotask_list_ticket_priorities to discover valid IDs before filtering. Use autotask_get_field_info for any entity's field definitions and picklist values.
@@ -589,7 +586,8 @@ Use autotask_list_queues, autotask_list_ticket_statuses, or autotask_list_ticket
 Call **autotask_report_gap** (title = what was needed, detail = what the user asked and why the tools fell short, toolsTried) and tell the user it was logged. Don't guess, and don't work around it with raw_request writes. It lands on the admin console's Requests page, where it gets built. (action=list shows what is already requested.)
 
 ## ID-to-Name Mapping:
-All search and detail tools automatically include human-readable names for company and resource IDs in an _enhanced field on each result.
+Search and detail results carry names next to ids: company, assigned person, and labels for picklists
+(statusLabel, priorityLabel, queueLabel and similar). Use those names when talking to people.
 
 ## Authentication:
 This server requires valid Autotask API credentials. Ensure you have:

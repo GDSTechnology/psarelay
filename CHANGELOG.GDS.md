@@ -10,6 +10,22 @@ Each entry lists the merge commit and the PR number. Brief section references
 
 ---
 
+## v6.31.0 — 2026-11-25 — Replies say numbers and names, not internal ids (voice)
+
+- **Bug**: in ChatGPT / Copilot voice mode the assistant read out Autotask's internal ticket id ("logged time entry
+  41234", "ticket 209477") instead of the ticket number and title — the tool messages only had ids to read.
+- **Spoken replies name things.** A ticket is "T20261124.0042 — Printer offline", a task is its title and project,
+  people are their names; ids stay in `result` for the next call. Covered: create / log / update time entry
+  ("Logged 1.5 hours on T… — title for Pat Lee as Engineer — work type Remote Support"; Regular Time names its
+  category), create / update ticket, add ticket update (now with the title), ticket and task notes, task get /
+  create / update / complete, service-call ticket / task links and resource assignments, and create company /
+  contact / project / To-Do / service call. A failed lookup falls back to "ticket 123" — it never fails the tool.
+- **No ids spoken**: the time-entry role is "as Engineer", not "as Engineer (12345)"; update_ticket says "assigned
+  to Pat Lee → Sam Roe", "queue → Tier 1 Support", "contact", "work type", "company" by name instead of
+  `assignedResourceID 123 → 456`; "none" instead of "∅".
+- **Server instructions** (sent to every AI client) gained "Speaking to people": tickets by number and title, tasks
+  by title and project, labels not numbers, ids only for the next call. The stale "39 tools" list is gone.
+
 ## v6.30.0 — 2026-11-23 — Work types stay live while they're being reorganised
 
 - **Why**: the MSP is renaming and reorganising its work types in Autotask. The v6.29.0 matching read them through
