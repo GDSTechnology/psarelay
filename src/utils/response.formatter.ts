@@ -30,7 +30,7 @@ const SUMMARY_FIELDS: Record<EntityType, string[]> = {
   resources: ['id', 'firstName', 'lastName', 'email', 'isActive'],
   billingItems: ['id', 'itemName', 'companyID', 'ticketID', 'projectID', 'postedDate', 'totalAmount', 'invoiceID', 'billingItemType'],
   billingItemApprovalLevels: ['id', 'timeEntryID', 'approvalLevel', 'approvalResourceID', 'approvalDateTime'],
-  timeEntries: ['id', 'resourceID', 'ticketID', 'projectID', 'taskID', 'dateWorked', 'hoursWorked', 'summaryNotes'],
+  timeEntries: ['id', 'resourceID', 'resourceName', 'ticketID', 'ticketNumber', 'ticketTitle', 'projectID', 'projectName', 'taskID', 'taskTitle', 'dateWorked', 'hoursWorked', 'roleName', 'workTypeName', 'categoryName', 'summaryNotes'],
   // Everything a billing check needs, so it never reads each charge again.
   ticketCharges: ['id', 'ticketID', 'name', 'description', 'chargeType', 'status', 'datePurchased', 'createDate', 'unitQuantity', 'unitPrice', 'unitCost', 'extendedCost', 'billableAmount', 'isBillableToCompany', 'isBilled', 'billingCodeID', 'productID', 'contractID', 'contractServiceID', 'contractServiceBundleID', 'purchaseOrderNumber'],
 };

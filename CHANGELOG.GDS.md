@@ -10,6 +10,19 @@ Each entry lists the merge commit and the PR number. Brief section references
 
 ---
 
+## v6.32.0 — 2026-11-25 — Time entries and My day carry names
+
+- **Time entries** (`search_time_entries`, `get_time_entry`, My day): `resourceName`, `workTypeName`, `categoryName`
+  (Regular Time), `roleName`, `ticketNumber` + `ticketTitle`, `taskTitle` + `projectName` next to the ids, and kept in
+  the compact view (which dropped the work type entirely). `get_time_entry` answers "1.5 hour(s) on 2026-11-24 on
+  T… — title by Pat Lee as Engineer — work type Remote Support" instead of "Time entry retrieved successfully".
+- **My day**: open tasks get `statusLabel` and `projectName`; open To-Dos `actionTypeLabel`, `assignedTo`, `company`,
+  `contactName`; service calls now carry `company`, `description`, `statusLabel` and `tickets` (number + title) —
+  before, only ids. Missing-time gaps in the message are ticket numbers and titles, not ids.
+- `AutotaskService.nameRefs(rows)` / `labelPicklistFields(entity, rows, fields)`: one batched, cached read per kind,
+  never overwrite, a failed kind leaves the ids. Search results also name `resourceID` / `assignedToResourceID`, and
+  the "Unknown Resource" placeholder is never returned.
+
 ## v6.31.0 — 2026-11-25 — Replies say numbers and names, not internal ids (voice)
 
 - **Bug**: in ChatGPT / Copilot voice mode the assistant read out Autotask's internal ticket id ("logged time entry

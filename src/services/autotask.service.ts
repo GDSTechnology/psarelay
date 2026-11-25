@@ -814,7 +814,7 @@ export class AutotaskService {
 
       const r = await this.queryPaged<AutotaskContact>('Contacts', filters, options, { maxPageSize: 200 });
       // Always a true/false primaryContact on each item (Autotask / the shadow may give 0/1 or leave it out).
-      return { ...r, items: r.items.map((c) => ({ ...c, primaryContact: isActiveFlag((c as Record<string, unknown>).primaryContact) })) };
+      return { ...r, items: r.items.map((c) => ({ ...c, primaryContact: isActiveFlag((c as unknown as Record<string, unknown>).primaryContact) })) };
     } catch (error) {
       this.logger.error('Failed to search contacts:', error);
       throw error;
@@ -2733,6 +2733,80 @@ export class AutotaskService {
    * next UTC day. "Today" is local today; datetimes are windowed on local
    * midnight-to-midnight; time entries match on dateWorked (already a date).
    */
+  /**
+   * Names next to reference ids, across many rows at once — for voice / chat,
+   * where "resource 1234, billing code 5678" means nothing. One batched,
+   * cached read per kind; a kind that fails is skipped (rows keep their ids).
+   * Adds (never overwrites): resourceName, assignedTo (assignedToResourceID),
+   * workTypeName, categoryName (Regular Time), roleName, ticketNumber + ticketTitle,
+   * taskTitle, projectName, company, contactName.
+   */
+  async nameRefs(rows: Array<Record<string, any>>): Promise<void> {
+    if (!rows.length) return;
+    const http = await this.ensureClient();
+    const ids = (k: string) => [...new Set(rows.map((r) => r?.[k]).filter((v) => v != null && v !== '').map(Number).filter((n) => Number.isFinite(n)))];
+    const set = (r: Record<string, any>, k: string, v: unknown) => { if (v != null && v !== '' && r[k] == null) r[k] = v; };
+    const quiet = async <T>(fn: () => Promise<T>): Promise<T | null> => { try { return await fn(); } catch { return null; } };
+    const byIds = async (entity: string, list: number[], fields: string[]) =>
+      list.length ? ((await quiet(() => http.queryByIds<Record<string, any>>(entity, 'id', list, { includeFields: ['id', ...fields] })))?.items ?? []) : [];
+
+    const resIds = [...new Set([...ids('resourceID'), ...ids('assignedToResourceID')])];
+    const [people, works, cats, roles, tickets, tasks, companies, contacts] = await Promise.all([
+      resIds.length ? quiet(() => this.getResourceNames(resIds)) : null,
+      ids('billingCodeID').length ? quiet(() => this.getWorkTypes()) : null,
+      ids('internalBillingCodeID').length ? quiet(() => this.getRegularTimeCategories()) : null,
+      byIds('Roles', ids('roleID'), ['name']),
+      byIds('Tickets', ids('ticketID'), ['ticketNumber', 'title']),
+      byIds('Tasks', ids('taskID'), ['title', 'projectID']),
+      ids('companyID').length ? quiet(() => this.getCompanyNamesByIds(ids('companyID'))) : null,
+      byIds('Contacts', ids('contactID'), ['firstName', 'lastName']),
+    ]);
+    const projectIds = [...new Set([...ids('projectID'), ...tasks.map((t) => Number(t.projectID)).filter(Number.isFinite)])];
+    const projects = await byIds('Projects', projectIds, ['projectName']);
+
+    const m = <T extends Record<string, any>>(list: T[] | null | undefined, val: (x: T) => unknown) => new Map((list ?? []).map((x) => [Number(x.id), val(x)]));
+    const workName = m(works, (w) => w.name), catName = m(cats, (c) => c.name), roleName = m(roles, (x) => x.name);
+    const ticket = new Map(tickets.map((t) => [Number(t.id), t])), task = new Map(tasks.map((t) => [Number(t.id), t])), projName = m(projects, (p) => p.projectName);
+    const coName = m(companies, (c) => c.companyName);
+    const contactName = m(contacts, (c) => [c.firstName, c.lastName].filter(Boolean).join(' ') || null);
+    for (const r of rows) {
+      if (!r) continue;
+      if (r.resourceID != null) set(r, 'resourceName', people?.get(Number(r.resourceID)));
+      if (r.assignedToResourceID != null) set(r, 'assignedTo', people?.get(Number(r.assignedToResourceID)));
+      if (r.billingCodeID != null) set(r, 'workTypeName', workName.get(Number(r.billingCodeID)));
+      if (r.internalBillingCodeID != null) set(r, 'categoryName', catName.get(Number(r.internalBillingCodeID)));
+      if (r.roleID != null) set(r, 'roleName', roleName.get(Number(r.roleID)));
+      if (r.ticketID != null) { const t = ticket.get(Number(r.ticketID)); set(r, 'ticketNumber', t?.ticketNumber); set(r, 'ticketTitle', t?.title); }
+      if (r.taskID != null) {
+        const t = task.get(Number(r.taskID));
+        set(r, 'taskTitle', t?.title);
+        if (t?.projectID != null) set(r, 'projectName', projName.get(Number(t.projectID)));
+      }
+      if (r.projectID != null) set(r, 'projectName', projName.get(Number(r.projectID)));
+      if (r.companyID != null) set(r, 'company', coName.get(Number(r.companyID)));
+      if (r.contactID != null) set(r, 'contactName', contactName.get(Number(r.contactID)));
+    }
+  }
+
+  /**
+   * `<field>Label` next to picklist fields (status → statusLabel), from the
+   * entity's field info (cached an hour; inactive values included, so a retired
+   * status still reads as its name). Never overwrites; a failed read is skipped.
+   */
+  async labelPicklistFields(entity: string, rows: Array<Record<string, any>>, fields: string[]): Promise<void> {
+    if (!rows.length || !fields.length) return;
+    let info: Awaited<ReturnType<AutotaskService['getFieldInfo']>> = [];
+    try { info = await this.getFieldInfo(entity); } catch { return; }
+    const maps = new Map(fields.map((f) => [f, new Map((info.find((x) => x.name === f)?.picklistValues ?? []).map((p) => [String(p.value), p.label]))]));
+    for (const r of rows) {
+      if (!r) continue;
+      for (const [f, labels] of maps) {
+        const k = `${f}Label`;
+        if (r[f] != null && r[k] == null && labels.has(String(r[f]))) r[k] = labels.get(String(r[f]));
+      }
+    }
+  }
+
   async getMyDay(
     resourceID: number,
     date?: string,
@@ -2854,6 +2928,10 @@ export class AutotaskService {
         isComplete: c.isComplete === true || c.isComplete === 1,
         canceled: c.canceledDateTime != null,
         ticketIDs: ticketsByCall.get(Number(c.id)) ?? [],
+        // What the call is, for a spoken day plan (named by nameRefs / labelPicklistFields).
+        ...((c as unknown as Record<string, unknown>).companyID != null ? { companyID: Number((c as unknown as Record<string, unknown>).companyID) } : {}),
+        ...((c as unknown as Record<string, unknown>).description ? { description: String((c as unknown as Record<string, unknown>).description) } : {}),
+        ...((c as unknown as Record<string, unknown>).status != null ? { status: (c as unknown as Record<string, unknown>).status } : {}),
       }))
       .sort((a, b) => String(a.startDateTime ?? '').localeCompare(String(b.startDateTime ?? '')));
   }
