@@ -2737,9 +2737,9 @@ export class AutotaskService {
    * Names next to reference ids, across many rows at once — for voice / chat,
    * where "resource 1234, billing code 5678" means nothing. One batched,
    * cached read per kind; a kind that fails is skipped (rows keep their ids).
-   * Adds (never overwrites): resourceName, assignedTo (assignedToResourceID),
+   * Adds (never overwrites): resourceName, assignedTo (assignedResourceID / assignedToResourceID),
    * workTypeName, categoryName (Regular Time), roleName, ticketNumber + ticketTitle,
-   * taskTitle, projectName, company, contactName.
+   * taskTitle, projectName, company, contactName, contractName (roleName also from assignedResourceRoleID).
    */
   async nameRefs(rows: Array<Record<string, any>>): Promise<void> {
     if (!rows.length) return;
@@ -2750,16 +2750,17 @@ export class AutotaskService {
     const byIds = async (entity: string, list: number[], fields: string[]) =>
       list.length ? ((await quiet(() => http.queryByIds<Record<string, any>>(entity, 'id', list, { includeFields: ['id', ...fields] })))?.items ?? []) : [];
 
-    const resIds = [...new Set([...ids('resourceID'), ...ids('assignedToResourceID')])];
-    const [people, works, cats, roles, tickets, tasks, companies, contacts] = await Promise.all([
+    const resIds = [...new Set([...ids('resourceID'), ...ids('assignedToResourceID'), ...ids('assignedResourceID')])];
+    const [people, works, cats, roles, tickets, tasks, companies, contacts, contracts] = await Promise.all([
       resIds.length ? quiet(() => this.getResourceNames(resIds)) : null,
       ids('billingCodeID').length ? quiet(() => this.getWorkTypes()) : null,
       ids('internalBillingCodeID').length ? quiet(() => this.getRegularTimeCategories()) : null,
-      byIds('Roles', ids('roleID'), ['name']),
+      byIds('Roles', [...new Set([...ids('roleID'), ...ids('assignedResourceRoleID')])], ['name']),
       byIds('Tickets', ids('ticketID'), ['ticketNumber', 'title']),
       byIds('Tasks', ids('taskID'), ['title', 'projectID']),
       ids('companyID').length ? quiet(() => this.getCompanyNamesByIds(ids('companyID'))) : null,
       byIds('Contacts', ids('contactID'), ['firstName', 'lastName']),
+      byIds('Contracts', ids('contractID'), ['contractName']),
     ]);
     const projectIds = [...new Set([...ids('projectID'), ...tasks.map((t) => Number(t.projectID)).filter(Number.isFinite)])];
     const projects = await byIds('Projects', projectIds, ['projectName']);
@@ -2769,6 +2770,7 @@ export class AutotaskService {
     const ticket = new Map(tickets.map((t) => [Number(t.id), t])), task = new Map(tasks.map((t) => [Number(t.id), t])), projName = m(projects, (p) => p.projectName);
     const coName = m(companies, (c) => c.companyName);
     const contactName = m(contacts, (c) => [c.firstName, c.lastName].filter(Boolean).join(' ') || null);
+    const contractName = m(contracts, (c) => c.contractName);
     for (const r of rows) {
       if (!r) continue;
       if (r.resourceID != null) set(r, 'resourceName', people?.get(Number(r.resourceID)));
@@ -2776,6 +2778,9 @@ export class AutotaskService {
       if (r.billingCodeID != null) set(r, 'workTypeName', workName.get(Number(r.billingCodeID)));
       if (r.internalBillingCodeID != null) set(r, 'categoryName', catName.get(Number(r.internalBillingCodeID)));
       if (r.roleID != null) set(r, 'roleName', roleName.get(Number(r.roleID)));
+      if (r.assignedResourceRoleID != null) set(r, 'roleName', roleName.get(Number(r.assignedResourceRoleID)));
+      if (r.assignedResourceID != null) set(r, 'assignedTo', people?.get(Number(r.assignedResourceID)));
+      if (r.contractID != null) set(r, 'contractName', contractName.get(Number(r.contractID)));
       if (r.ticketID != null) { const t = ticket.get(Number(r.ticketID)); set(r, 'ticketNumber', t?.ticketNumber); set(r, 'ticketTitle', t?.title); }
       if (r.taskID != null) {
         const t = task.get(Number(r.taskID));

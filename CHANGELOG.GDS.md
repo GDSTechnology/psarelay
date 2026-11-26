@@ -10,6 +10,21 @@ Each entry lists the merge commit and the PR number. Brief section references
 
 ---
 
+## v6.33.0 — 2026-11-25 — Ticket details and get / search tools carry labels and names
+
+- **`get_ticket_details`**: the same record, plus `statusLabel`, `priorityLabel`, `queueLabel`, `issueTypeLabel`,
+  `subIssueTypeLabel`, `sourceLabel`, `ticketTypeLabel`, `company`, `contactName`, `assignedTo`, `roleName`,
+  `contractName`, `workTypeName`. The reply says what the ticket is — "T… — title: status In Progress, priority High,
+  queue Tier 1 Support, company …, contact …, assigned to Pat Lee (Engineer), issue Printing" — instead of "Ticket
+  details retrieved successfully".
+- **Tasks, projects, service calls, contracts, To-Dos, ticket notes** (get and search): status / type / action-type /
+  publish labels and names next to ids. Replies: "Project Mail migration — Active, Acme Dental", "Contract Managed
+  Services — Recurring Service, Active, Acme Dental", "Service call 2026-11-24 14:00 for Acme Dental — Scheduled:
+  Swap printer", "To-Do (Phone Call) for Acme Dental, assigned to Pat Lee: …", "Note on T… — title: …". Compact
+  task / project rows keep `statusLabel`, `projectName`, `projectTypeLabel`.
+- `nameRefs` also names `assignedResourceID` (assignedTo), `assignedResourceRoleID` (roleName) and `contractID`
+  (contractName). Record shapes are unchanged — only fields are added.
+
 ## v6.32.0 — 2026-11-25 — Time entries and My day carry names
 
 - **Time entries** (`search_time_entries`, `get_time_entry`, My day): `resourceName`, `workTypeName`, `categoryName`
