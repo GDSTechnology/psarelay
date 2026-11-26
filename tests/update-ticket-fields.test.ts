@@ -38,7 +38,7 @@ describe('update_ticket', () => {
     const r = await call({ queue: 'Tier 1 Support' });
     expect(update).toHaveBeenCalledWith(210669, { queueID: 29683418 });
     expect(r.data.changes).toEqual([{ field: 'queueID', to: 'Tier 1 Support', applied: true }]);
-    expect(r.message).toMatch(/^Updated T20261007\.0010: queueID → Tier 1 Support\.$/);
+    expect(r.message).toMatch(/^Updated T20261007\.0010: queue → Tier 1 Support\.$/);
   });
 
   test('queueID by id, and a label string in queueID, both work', async () => {
@@ -66,6 +66,6 @@ describe('update_ticket', () => {
     const { call } = mk({ id: 210669, ticketNumber: 'T20261007.0010', queueID: 29683421 });
     const r = await call({ queue: 'Tier 1 Support' });
     expect(r.data.verified).toBe(false);
-    expect(r.message).toMatch(/WARNING — Autotask did not apply: queueID \(now Purchasing\)/);
+    expect(r.message).toMatch(/WARNING — Autotask did not apply: queue \(now Purchasing\)/);
   });
 });

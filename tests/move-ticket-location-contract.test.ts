@@ -109,6 +109,6 @@ describe('update_ticket verifies UDFs', () => {
     expect(ok.data.changes).toEqual(expect.arrayContaining([expect.objectContaining({ field: 'udf:BP-Status', to: '2', applied: true })]));
     const bad = await call({ userDefinedFields: [{ name: 'Nexus-Status', value: '4' }] });
     expect(bad.data.verified).toBe(false);
-    expect(bad.message).toMatch(/did not apply: udf:Nexus-Status \(now 1\)/);
+    expect(bad.message).toMatch(/did not apply: Nexus-Status \(now 1\)/);
   });
 });

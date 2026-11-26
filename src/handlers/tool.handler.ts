@@ -1259,6 +1259,108 @@ export class AutotaskToolHandler {
       return bad ? { stop: bad } : { matched };
     };
     const workTypeBit = (m: { name: string; requested: string } | null): string => (m ? ` — work type ${m.name}${m.requested.trim().toLowerCase() !== m.name.toLowerCase() ? ` (from "${m.requested}")` : ''}` : '');
+    // How a ticket / task is NAMED in a reply. Voice assistants read the message
+    // aloud, so it says "T20261123.0012 — Printer offline", never the internal id
+    // (ids stay in `result` for follow-up calls). Lookups are cached reads; a
+    // failed one falls back to "ticket 123" rather than failing the tool.
+    const ticketRef = async (id: unknown): Promise<{ id: number; ticketNumber: string | null; title: string | null; label: string }> => {
+      const n = Number(id);
+      try {
+        const t = await s.getTicket(n) as Record<string, any> | null;
+        if (t) {
+          const ticketNumber = t.ticketNumber != null ? String(t.ticketNumber) : null;
+          const title = t.title != null && String(t.title).trim() ? String(t.title).trim() : null;
+          return { id: n, ticketNumber, title, label: [ticketNumber ?? `ticket ${n}`, title].filter(Boolean).join(' — ') };
+        }
+      } catch { /* fall back to the id */ }
+      return { id: n, ticketNumber: null, title: null, label: `ticket ${n}` };
+    };
+    const taskRef = async (id: unknown): Promise<{ id: number; title: string | null; projectName: string | null; label: string }> => {
+      const n = Number(id);
+      try {
+        const t = await s.getTask(n) as Record<string, any> | null;
+        if (t) {
+          const title = t.title != null && String(t.title).trim() ? String(t.title).trim() : null;
+          let projectName: string | null = null;
+          if (t.projectID != null) {
+            const p = await s.getProject(Number(t.projectID)).catch(() => null) as Record<string, any> | null;
+            projectName = p?.projectName != null ? String(p.projectName) : null;
+          }
+          return { id: n, title, projectName, label: `${title ? `task "${title}"` : `task ${n}`}${projectName ? ` on project ${projectName}` : ''}` };
+        }
+      } catch { /* fall back to the id */ }
+      return { id: n, title: null, projectName: null, label: `task ${n}` };
+    };
+    /** "on T… — title" / "on task "x" on project P" for a time entry's target; null for Regular Time. */
+    const workTargetLabel = async (x: { ticketID?: unknown; taskID?: unknown }): Promise<string | null> =>
+      x.ticketID != null && String(x.ticketID) !== '' ? (await ticketRef(x.ticketID)).label
+        : x.taskID != null && String(x.taskID) !== '' ? (await taskRef(x.taskID)).label : null;
+    /** A resource's name (cached batch lookup), or null. */
+    const personName = async (id: unknown): Promise<string | null> => {
+      if (id == null || String(id) === '' || !Number.isFinite(Number(id))) return null;
+      try { return (await s.getResourceNames([Number(id)])).get(Number(id)) ?? null; } catch { return null; }
+    };
+    /** Plain words for a field in a spoken reply ("assignedResourceID" → "assigned to"). */
+    const FIELD_SAID: Record<string, string> = {
+      assignedResourceID: 'assigned to', assignedResourceRoleID: 'role', queueID: 'queue', status: 'status', priority: 'priority',
+      contactID: 'contact', companyID: 'company', billingCodeID: 'work type', contractID: 'contract', issueType: 'issue type',
+      subIssueType: 'sub-issue type', ticketType: 'ticket type', source: 'source', dueDateTime: 'due', title: 'title',
+      description: 'description', estimatedHours: 'estimated hours', companyLocationID: 'location', serviceLevelAgreementID: 'SLA',
+    };
+    const fieldSaid = (k: string): string => FIELD_SAID[k] ?? (k.startsWith('udf:') ? k.slice(4) : k);
+    /**
+     * Names for reference ids in before/after records — people, contacts,
+     * companies, work types — so a change reads "assigned to Pat Lee → Sam Roe",
+     * not "assignedResourceID 123 → 456". Cached reads; anything unresolved stays raw.
+     */
+    const referenceNames = async (keys: string[], recs: Array<Record<string, unknown> | null | undefined>): Promise<(k: string, v: unknown) => string | null> => {
+      const vals = (k: string) => recs.map((r) => r?.[k]).filter((v) => v != null && String(v) !== '').map(Number).filter(Number.isFinite);
+      const people = new Map<number, string>(), contacts = new Map<number, string>(), companies = new Map<number, string>(), works = new Map<number, string>();
+      try {
+        const rids = keys.filter((k) => /ResourceID$/.test(k)).flatMap(vals);
+        if (rids.length) for (const [id, n] of await s.getResourceNames(rids)) people.set(id, n);
+      } catch { /* raw ids */ }
+      try {
+        for (const id of [...new Set(keys.includes('contactID') ? vals('contactID') : [])].slice(0, 4)) {
+          const c = await s.getContact(id) as Record<string, any> | null;
+          if (c) contacts.set(id, [c.firstName, c.lastName].filter(Boolean).join(' ') || String(id));
+        }
+      } catch { /* raw ids */ }
+      try {
+        const cids = keys.includes('companyID') ? vals('companyID') : [];
+        if (cids.length) for (const c of await s.getCompanyNamesByIds(cids)) companies.set(c.id, c.companyName);
+      } catch { /* raw ids */ }
+      try {
+        if (keys.includes('billingCodeID')) for (const w of await s.getWorkTypes()) works.set(w.id, w.name);
+      } catch { /* raw ids */ }
+      return (k, v) => {
+        if (v == null || String(v) === '') return null;
+        const n = Number(v);
+        if (/ResourceID$/.test(k)) return people.get(n) ?? null;
+        if (k === 'contactID') return contacts.get(n) ?? null;
+        if (k === 'companyID') return companies.get(n) ?? null;
+        if (k === 'billingCodeID') return works.get(n) ?? null;
+        return null;
+      };
+    };
+    /** A work type's name from its billingCodeID (cached list), or null. */
+    const workTypeNameOf = async (id: unknown): Promise<string | null> => {
+      if (id == null || String(id) === '' || !/^\d+$/.test(String(id))) return null;
+      try { return (await s.getWorkTypes()).find((w) => w.id === Number(id))?.name ?? null; } catch { return null; }
+    };
+    /** A Regular Time category's name (cached list), or null. */
+    const categoryName = async (id: unknown): Promise<string | null> => {
+      if (id == null || String(id) === '') return null;
+      try { return (await s.getRegularTimeCategories()).find((c) => Number(c.id) === Number(id))?.name ?? null; } catch { return null; }
+    };
+    /** "on T… — title" for ticket / task time, "as Regular Time: Internal Meeting" for Regular Time. */
+    const timeEntryWhere = async (x: { ticketID?: unknown; taskID?: unknown; internalBillingCodeID?: unknown }): Promise<string> => {
+      const target = await workTargetLabel(x);
+      if (target) return ` on ${target}`;
+      const cat = await categoryName(x.internalBillingCodeID);
+      return cat ? ` as Regular Time: ${cat}` : ' as Regular Time';
+    };
+    const hoursText = (h: unknown): string => { const n = Number(h); return Number.isFinite(n) && n > 0 ? `${Math.round(n * 100) / 100} hour${n === 1 ? '' : 's'}` : 'time'; };
     const checkWorkType = async (billingCodeID: unknown): Promise<{ result: unknown; message: string } | null> => {
       if (billingCodeID == null) return null;
       let v: Awaited<ReturnType<typeof s.validateWorkType>>;
@@ -1667,7 +1769,7 @@ export class AutotaskToolHandler {
       ['autotask_create_company', async (a) => {
         const { applied } = withCompanyDefaults(a, tenantCompanyDefaults());
         const id = await s.createCompany(a);
-        return { result: id, message: `Successfully created company with ID: ${id}${applied.length ? ` (tenant defaults applied: ${applied.join(', ')})` : ''}` };
+        return { result: id, message: `Created company ${a.companyName ?? id}${applied.length ? ` (tenant defaults applied: ${applied.join(', ')})` : ''}` };
       }],
       ['autotask_update_company', async (a) => {
         await s.updateCompany(a.id, a); return { result: undefined, message: `Successfully updated company ID: ${a.id}` };
@@ -1694,7 +1796,7 @@ export class AutotaskToolHandler {
         return { result: r, message: identityMessage('contact(s)', r) };
       }],
       ['autotask_create_contact', async (a) => {
-        const id = await s.createContact(a); return { result: id, message: `Successfully created contact with ID: ${id}` };
+        const id = await s.createContact(a); return { result: id, message: `Created contact ${[a.firstName, a.lastName].filter(Boolean).join(" ") || id}` };
       }],
       ['autotask_find_or_create_contact', async (a) => {
         const { companyID, ...rest } = a;
@@ -1755,15 +1857,15 @@ export class AutotaskToolHandler {
           const contacts = await addAdditionalContacts(s, r.id, contactIds);
           return {
             result: contacts.length ? { ...r, additionalContacts: contacts } : r,
-            message: `Created ticket ${r.id}; linked ${linked} additional CI(s)` + (failed ? `, ${failed} failed` : '') + additionalContactsSummary(contacts),
+            message: `Created ${(await ticketRef(r.id)).label}; linked ${linked} additional CI(s)` + (failed ? `, ${failed} failed` : '') + additionalContactsSummary(contacts),
           };
         }
         const id = await s.createTicket(payload);
         if (contactIds.length) {
           const contacts = await addAdditionalContacts(s, id, contactIds);
-          return { result: { id, additionalContacts: contacts }, message: `Successfully created ticket with ID: ${id}${additionalContactsSummary(contacts)}` };
+          return { result: { id, additionalContacts: contacts }, message: `Created ${(await ticketRef(id)).label}${additionalContactsSummary(contacts)}` };
         }
-        return { result: id, message: `Successfully created ticket with ID: ${id}` };
+        return { result: id, message: `Created ${(await ticketRef(id)).label}` };
       }],
       ['autotask_update_ticket', async (a) => {
         const { ticketId, ...rest } = a;
@@ -1779,7 +1881,7 @@ export class AutotaskToolHandler {
         const contactIds = additionalContactIds(rest);
         if (!Object.keys(payload).length && contactIds.length) {
           const contacts = await addAdditionalContacts(s, Number(ticketId), contactIds);
-          return { result: { ticketId, additionalContacts: contacts }, message: `Ticket ${ticketId}${additionalContactsSummary(contacts).replace(/^; /, ': ')}` };
+          return { result: { ticketId, additionalContacts: contacts }, message: `${(await ticketRef(ticketId)).label}${additionalContactsSummary(contacts).replace(/^; /, ': ')}` };
         }
         if (!Object.keys(payload).length) return { result: null, message: `Nothing to update on ticket ${ticketId} — no writable fields given.` };
         // Picklists by label or id: "Tier 1 Support" → its queue id; an unknown
@@ -1808,9 +1910,10 @@ export class AutotaskToolHandler {
         // Read back: report old → new per field, and anything Autotask didn't apply.
         let after: Record<string, unknown> | null = null;
         try { after = await s.getTicket(Number(ticketId), true) as Record<string, unknown> | null; } catch { /* verification is best-effort */ }
-        if (!after) return { result: contacts.length ? { ticketId, additionalContacts: contacts } : ticketId, message: `Successfully updated ticket ${ticketId}${additionalContactsSummary(contacts)}` };
+        if (!after) return { result: contacts.length ? { ticketId, additionalContacts: contacts } : ticketId, message: `Updated ${(await ticketRef(ticketId)).label}${additionalContactsSummary(contacts)}` };
         if (!fields.length) { try { fields = await s.getFieldInfo('Tickets'); } catch { /* raw values */ } }
-        const lbl = (k: string, v: unknown) => fields.find((f) => f.name === k)?.picklistValues?.find((p) => String(p.value) === String(v))?.label ?? v;
+        const named = await referenceNames(Object.keys(payload), [before, after]);
+        const lbl = (k: string, v: unknown) => named(k, v) ?? fields.find((f) => f.name === k)?.picklistValues?.find((p) => String(p.value) === String(v))?.label ?? v;
         const changes: Array<{ field: string; from: unknown; to: unknown; applied: boolean }> = Object.keys(payload).filter((k) => k !== 'userDefinedFields' && k !== 'ticketAdditionalContacts').map((k) => ({
           field: k, from: before ? lbl(k, before[k] ?? null) : undefined, to: lbl(k, after![k] ?? null),
           applied: JSON.stringify(after![k] ?? null) === JSON.stringify(payload[k] ?? null) || String(after![k]) === String(payload[k]),
@@ -1827,11 +1930,11 @@ export class AutotaskToolHandler {
           }
         }
         const notApplied = changes.filter((c) => !c.applied);
-        const tn = (after.ticketNumber as string) ?? `ticket ${ticketId}`;
-        const desc = changes.filter((c) => c.applied).map((c) => `${c.field}${c.from !== undefined ? ` ${c.from ?? '∅'} →` : ' →'} ${c.to ?? '∅'}`).join('; ');
+        const tn = [(after.ticketNumber as string) ?? `ticket ${ticketId}`, after.title ? String(after.title) : null].filter(Boolean).join(' — ');
+        const desc = changes.filter((c) => c.applied).map((c) => `${fieldSaid(c.field)}${c.from !== undefined ? ` ${c.from ?? 'none'} →` : ' →'} ${c.to ?? 'none'}`).join('; ');
         return {
           result: { ticketId, ticketNumber: after.ticketNumber ?? null, changes, verified: notApplied.length === 0, ...(contacts.length ? { additionalContacts: contacts } : {}) },
-          message: `Updated ${tn}${desc ? `: ${desc}` : ''}.${notApplied.length ? ` WARNING — Autotask did not apply: ${notApplied.map((c) => `${c.field} (now ${c.to ?? '∅'})`).join(', ')}.` : ''}${additionalContactsSummary(contacts)}`,
+          message: `Updated ${tn}${desc ? `: ${desc}` : ''}.${notApplied.length ? ` WARNING — Autotask did not apply: ${notApplied.map((c) => `${fieldSaid(c.field)} (now ${c.to ?? 'none'})`).join(', ')}.` : ''}${additionalContactsSummary(contacts)}`,
         };
       }],
       ['autotask_move_ticket_to_company', async (a) => {
@@ -2185,7 +2288,7 @@ export class AutotaskToolHandler {
       }],
       ['autotask_create_service_call', async (a) => {
         const id = await s.createServiceCall(a);
-        return { result: id, message: `Successfully created service call with ID: ${id}` };
+        return { result: id, message: `Created the service call${a.startDateTime ? ` for ${String(a.startDateTime).slice(0, 16).replace("T", " ")}` : ""}` };
       }],
       ['autotask_update_service_call', async (a) => {
         const { serviceCallId, ...updates } = a;
@@ -2204,7 +2307,7 @@ export class AutotaskToolHandler {
       }],
       ['autotask_create_service_call_ticket', async (a) => {
         const id = await s.createServiceCallTicket(a);
-        return { result: id, message: `Successfully linked ticket to service call, record ID: ${id}` };
+        return { result: id, message: `Added ${(await ticketRef(a.ticketID)).label} to the service call` };
       }],
       ['autotask_delete_service_call_ticket', async (a) => {
         await s.deleteServiceCallTicket(a.serviceCallTicketId);
@@ -2218,7 +2321,7 @@ export class AutotaskToolHandler {
       }],
       ['autotask_create_service_call_ticket_resource', async (a) => {
         const id = await s.createServiceCallTicketResource(a);
-        return { result: id, message: `Successfully assigned resource to service call ticket, record ID: ${id}${roleIgnoredNote(a.roleID)}` };
+        return { result: id, message: `Assigned ${(await personName(a.resourceID)) ?? "the resource"} to the service call ticket${roleIgnoredNote(a.roleID)}` };
       }],
       ['autotask_delete_service_call_ticket_resource', async (a) => {
         await s.deleteServiceCallTicketResource(a.serviceCallTicketResourceId);
@@ -2232,7 +2335,7 @@ export class AutotaskToolHandler {
       }],
       ['autotask_create_service_call_task', async (a) => {
         const id = await s.createServiceCallTask(a);
-        return { result: id, message: `Successfully linked task to service call, record ID: ${id}` };
+        return { result: id, message: `Added ${(await taskRef(a.taskID)).label} to the service call` };
       }],
       ['autotask_delete_service_call_task', async (a) => {
         await s.deleteServiceCallTask(a.serviceCallTaskId);
@@ -2246,7 +2349,7 @@ export class AutotaskToolHandler {
       }],
       ['autotask_create_service_call_task_resource', async (a) => {
         const id = await s.createServiceCallTaskResource(a);
-        return { result: id, message: `Successfully assigned resource to service call task, record ID: ${id}${roleIgnoredNote(a.roleID)}` };
+        return { result: id, message: `Assigned ${(await personName(a.resourceID)) ?? "the resource"} to the service call task${roleIgnoredNote(a.roleID)}` };
       }],
       ['autotask_delete_service_call_task_resource', async (a) => {
         await s.deleteServiceCallTaskResource(a.serviceCallTaskResourceId);
@@ -2265,7 +2368,7 @@ export class AutotaskToolHandler {
       }],
       ['autotask_create_company_todo', async (a) => {
         const id = await s.createCompanyToDo(a);
-        return { result: id, message: `Successfully created Company To-Do with ID: ${id}` };
+        return { result: id, message: `Created the To-Do${a.activityDescription ? `: ${String(a.activityDescription).slice(0, 80)}` : ""}` };
       }],
       ['autotask_create_sales_followup', async (a) => {
         const r = await s.createSalesFollowup(a);
@@ -2382,8 +2485,11 @@ export class AutotaskToolHandler {
               ...(warnings.length ? { warnings } : {}),
             }
           : { id, resourceID: a.resourceID, resourceName, roleID: a.roleID ?? null, roleName: role.roleName, roleSource: role.roleSource, ...(workType ? { workType } : {}) };
-        const roleBit = a.roleID != null ? ` as ${role.roleName ?? 'role'} (${a.roleID})` : '';
-        return { result, message: `Successfully created time entry with ID: ${id}${resourceName ? ` for ${resourceName}` : ''}${roleBit}${workTypeBit(workType)}${warnings.length ? ` (warning: ${warnings.join('; ')})` : ''}` };
+        // Spoken reply: what, where, who, as what — names only (the entry id is in result.id).
+        const roleBit = a.roleID != null && role.roleName ? ` as ${role.roleName}` : '';
+        const where = await timeEntryWhere({ ticketID: stored?.ticketID ?? a.ticketID, taskID: stored?.taskID ?? a.taskID, internalBillingCodeID: (stored as any)?.internalBillingCodeID ?? a.internalBillingCodeID });
+        const wtName = workType ? null : await workTypeNameOf((stored as any)?.billingCodeID ?? a.billingCodeID);
+        return { result: { ...result, ...(wtName ? { workTypeName: wtName } : {}) }, message: `Logged ${hoursText(stored?.hoursWorked ?? a.hoursWorked)}${where}${resourceName ? ` for ${resourceName}` : ''}${roleBit}${workTypeBit(workType)}${wtName ? ` — work type ${wtName}` : ''}${warnings.length ? ` (warning: ${warnings.join('; ')})` : ''}` };
       }],
       ['autotask_create_task_time_entries_bulk', async (a) => {
         if (!a.taskID) return { result: null, message: 'taskID is required.' };
@@ -2563,7 +2669,7 @@ export class AutotaskToolHandler {
           updateWorkType = wt.matched;
         }
 
-        const tn = plan.ticket.ticketNumber ?? `ticket ${a.ticketID}`;
+        const tn = [plan.ticket.ticketNumber ?? `ticket ${a.ticketID}`, plan.ticket.title ? String(plan.ticket.title) : null].filter(Boolean).join(" — ");
         const planned = {
           ticketID: a.ticketID, ticketNumber: plan.ticket.ticketNumber,
           note: { visibility, publish: plan.publish, noteType: plan.noteType, title: a.title ?? 'Update' },
@@ -2634,7 +2740,9 @@ export class AutotaskToolHandler {
         if ('stop' in written) return written.stop;
         const r = written.ok;
         const roleInfo = a.roleID != null ? { roleID: a.roleID, roleName: role.roleName, roleSource: role.roleSource } : {};
-        return { result: { ...r, ...roleInfo, ...(workType ? { workType } : {}) }, message: r.created ? `Logged time entry ${r.id}${workTypeBit(workType)}` : `Skipped — duplicate of existing time entry ${r.duplicateOf}` };
+        const where = await timeEntryWhere(a);
+        const roleSaid = a.roleID != null && role.roleName ? ` as ${role.roleName}` : '';
+        return { result: { ...r, ...roleInfo, ...(workType ? { workType } : {}) }, message: r.created ? `Logged ${hoursText(a.hoursWorked)}${where}${roleSaid}${workTypeBit(workType)}` : `Skipped — the same time is already logged${where}` };
       }],
 
       // Projects
@@ -2803,7 +2911,7 @@ export class AutotaskToolHandler {
           projectData.endDateTime = `${projectData.endDate}T00:00:00Z`;
           delete projectData.endDate;
         }
-        const id = await s.createProject(projectData); return { result: id, message: `Successfully created project with ID: ${id}` };
+        const id = await s.createProject(projectData); return { result: id, message: `Created project ${a.projectName ?? id}` };
       }],
       ['autotask_update_project', async (a) => {
         const { projectId, ...rest } = a;
@@ -3223,10 +3331,10 @@ export class AutotaskToolHandler {
       }],
       ['autotask_create_task', async (a) => {
         const taskData = { ...a, taskType: a.taskType ?? 1 };
-        const id = await s.createTask(taskData); return { result: id, message: `Successfully created task with ID: ${id}` };
+        const id = await s.createTask(taskData); return { result: id, message: `Created ${(await taskRef(id)).label}` };
       }],
       ['autotask_get_task', async (a) => {
-        const r = await s.getTask(a.id); return { result: r, message: r ? `Task ${a.id}` : `Task ${a.id} not found` };
+        const r = await s.getTask(a.id); return { result: r, message: r ? (await taskRef(a.id)).label.replace(/^task/, 'Task') : `Task ${a.id} not found` };
       }],
       ['autotask_get_task_by_number', async (a) => {
         const r = await s.getTaskByNumber(a.taskNumber);
@@ -3238,11 +3346,11 @@ export class AutotaskToolHandler {
         return { result: r, message: msg };
       }],
       ['autotask_update_task', async (a) => {
-        const { id, ...rest } = a; await s.updateTask(id, rest); return { result: undefined, message: `Successfully updated task ${id}` };
+        const { id, ...rest } = a; await s.updateTask(id, rest); return { result: undefined, message: `Updated ${(await taskRef(id)).label}` };
       }],
       ['autotask_complete_task', async (a) => {
         await s.completeTask(a.id, { projectID: a.projectID, statusId: a.statusId });
-        return { result: undefined, message: `Task ${a.id} marked complete` };
+        return { result: undefined, message: `Marked ${(await taskRef(a.id)).label} complete` };
       }],
       ['autotask_verify_task_time_entries', async (a) => {
         if (!a.taskID) return { result: null, message: 'taskID is required.' };
@@ -3368,12 +3476,12 @@ export class AutotaskToolHandler {
           return {
             result: r,
             message: r.created
-              ? `Successfully created ticket note with ID: ${r.noteId}`
+              ? `Added a note to ${(await ticketRef(a.ticketId)).label}`
               : `Ticket note already exists for key "${a.idempotencyKey}" (ID: ${r.noteId}) — not duplicated`
           };
         }
         const id = await s.createTicketNote(a.ticketId, noteBody);
-        return { result: id, message: `Successfully created ticket note with ID: ${id}` };
+        return { result: id, message: `Added a note to ${(await ticketRef(a.ticketId)).label}` };
       }],
       // Ticket Checklist Items
       ['autotask_search_ticket_checklist_items', async (a) => {
@@ -3439,7 +3547,7 @@ export class AutotaskToolHandler {
         if (a.noteType !== undefined) note.noteType = a.noteType;
         if (a.publish !== undefined) note.publish = a.publish;
         const id = await s.createTaskNote(a.taskId, note);
-        return { result: id, message: `Successfully created task note with ID: ${id}` };
+        return { result: id, message: `Added a note to ${(await taskRef(a.taskId)).label}` };
       }],
       ['autotask_search_project_attachments', async (a) => {
         const r = await s.searchProjectAttachments(a.projectId, { pageSize: a.pageSize }); return { result: r, message: `Found ${r.length} project attachment(s)` };
@@ -3996,7 +4104,9 @@ export class AutotaskToolHandler {
           const w = hoursToBillWarning(requestedHoursToBill, after?.hoursToBill);
           if (w) warnings.push(w);
         }
-        return { result: warnings.length || workType ? { id, ...(workType ? { workType } : {}), ...(warnings.length ? { warnings } : {}) } : id, message: `Successfully updated time entry ${id}${workTypeBit(workType)}${warnings.length ? ` (warning: ${warnings.join('; ')})` : ''}` };
+        const entryNow = await s.getTimeEntry(id).catch(() => null) as Record<string, any> | null;
+        const where = entryNow ? await timeEntryWhere(entryNow) : '';
+        return { result: warnings.length || workType ? { id, ...(workType ? { workType } : {}), ...(warnings.length ? { warnings } : {}) } : id, message: `Updated the time entry${entryNow?.hoursWorked != null ? ` (${hoursText(entryNow.hoursWorked)}${entryNow.dateWorked ? `, ${String(entryNow.dateWorked).slice(0, 10)}` : ''})` : ''}${where}${workTypeBit(workType)}${warnings.length ? ` (warning: ${warnings.join('; ')})` : ''}` };
       }],
       ['autotask_delete_time_entry', async (a) => {
         const dryRun = a.dryRun !== false; // default true

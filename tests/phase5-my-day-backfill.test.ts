@@ -105,7 +105,7 @@ describe('handler wiring (#42)', () => {
     const handler = new AutotaskToolHandler(service, logger);
     jest.spyOn(handler as any, 'resolveCaller').mockResolvedValue({ status: 'resolved', resource: { id: 5, name: 'Me' } });
     const result = await handler.callTool('autotask_log_my_time', { ticketID: 10, hoursWorked: 1, summaryNotes: 'dupe' });
-    expect(JSON.parse(result.content[0].text).message).toMatch(/duplicate of existing time entry 700/i);
+    expect(JSON.parse(result.content[0].text).message).toMatch(/already logged/i);
   });
 });
 
