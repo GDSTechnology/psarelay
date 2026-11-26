@@ -374,6 +374,15 @@ export class AutotaskToolHandler {
               if (name) result.lead = name;
             } catch { /* skip */ }
           }
+          // Time entries (resourceID) and To-Dos (assignedToResourceID) name their person too.
+          if (item.resourceID != null && typeof item.resourceID === 'number' && result.resourceName == null) {
+            try { const name = await mappingService.getResourceName(item.resourceID); if (name) result.resourceName = name; } catch { /* skip */ }
+          }
+          if (item.assignedToResourceID != null && typeof item.assignedToResourceID === 'number' && result.assignedTo == null) {
+            try { const name = await mappingService.getResourceName(item.assignedToResourceID); if (name) result.assignedTo = name; } catch { /* skip */ }
+          }
+          // The mapping service answers "Unknown Resource" for an id it can't find — never read that aloud.
+          for (const k of ['assignedTo', 'lead', 'resourceName']) if (result[k] === 'Unknown Resource') delete result[k];
           return result;
         }
       );
@@ -2610,7 +2619,29 @@ export class AutotaskToolHandler {
           if (t) Object.assign(g, { ticketNumber: t.ticketNumber, title: t.title, company: t.company, ticketUrl: t.ticketUrl });
           else { try { g.ticketUrl = s.getTicketWebUrl(Number(g.ticketID)); } catch { /* no web UI base known */ } }
         }
-        const gaps = r.totals.missingTime ? ` — ${r.totals.missingTime} service-call ticket(s) with NO time logged: ${(r.missingTime as TimeGap[]).map((g) => g.ticketID).join(', ')}` : '';
+        // Every other section named too (voice reads this back): time entries (who / work type /
+        // category / role / ticket), tasks (status, project), To-Dos (type, person, company),
+        // service calls (company, status, their tickets by number).
+        const rows = (k: string) => (Array.isArray(r[k]) ? r[k] : []) as Array<Record<string, any>>;
+        try {
+          await s.nameRefs([...rows('timeEntries'), ...rows('openTasks'), ...rows('openTodos'), ...rows('serviceCalls')]);
+          await Promise.all([
+            s.labelPicklistFields('Tasks', rows('openTasks'), ['status']),
+            s.labelPicklistFields('CompanyToDos', rows('openTodos'), ['actionType']),
+            s.labelPicklistFields('ServiceCalls', rows('serviceCalls'), ['status']),
+          ]);
+          const ticketNames = new Map<number, { ticketNumber?: unknown; title?: unknown }>();
+          for (const t of rows('assignedTickets')) ticketNames.set(Number(t.id), t);
+          for (const e of rows('timeEntries')) if (e.ticketID != null) ticketNames.set(Number(e.ticketID), { ticketNumber: e.ticketNumber, title: e.ticketTitle });
+          const unknownTickets = rows('serviceCalls').flatMap((c) => (c.ticketIDs ?? []) as number[]).filter((id) => !ticketNames.has(Number(id)));
+          if (unknownTickets.length) {
+            const refs = unknownTickets.map((ticketID) => ({ ticketID }));
+            await s.nameRefs(refs);
+            for (const x of refs) ticketNames.set(Number(x.ticketID), { ticketNumber: (x as any).ticketNumber, title: (x as any).ticketTitle });
+          }
+          for (const c of rows('serviceCalls')) c.tickets = ((c.ticketIDs ?? []) as number[]).map((id) => ({ id, ticketNumber: ticketNames.get(Number(id))?.ticketNumber ?? null, title: ticketNames.get(Number(id))?.title ?? null }));
+        } catch { /* names are best-effort; ids stay */ }
+        const gaps = r.totals.missingTime ? ` — ${r.totals.missingTime} service-call ticket(s) with NO time logged: ${(r.missingTime as Array<TimeGap & Record<string, unknown>>).map((g) => (g.ticketNumber ? `${g.ticketNumber}${g.title ? ` (${g.title})` : ''}` : `ticket ${g.ticketID}`)).join(', ')}` : '';
         return { result: r, message: `${r.date}: ${r.totals.assignedTickets} assigned ticket(s), ${r.totals.serviceCalls} service call(s), ${r.totals.openTodos} open To-Do(s), ${r.totals.timeEntries} time entr(ies) (${r.totals.hoursLogged}h logged), ${r.openTasks.length} open task(s)${gaps}` };
       }],
       ['autotask_start_work_on_ticket', async (a) => {
@@ -4058,12 +4089,22 @@ export class AutotaskToolHandler {
           page: a.page,
           pageSize: a.pageSize
         } as any);
+        // Who / work type / category / role / ticket by name, next to the ids.
+        try { await s.nameRefs(((r as any).items ?? []) as Array<Record<string, any>>); } catch { /* ids stay */ }
         return paged(r, 'time entries');
       }],
       ['autotask_get_time_entry', async (a) => {
         const r = await s.getTimeEntry(a.id);
         if (!r) return { result: null, message: `No time entry found with ID ${a.id}` };
-        return { result: r, message: 'Time entry retrieved successfully' };
+        const e = r as Record<string, any>;
+        try { await s.nameRefs([e]); } catch { /* ids stay */ }
+        const where = e.ticketNumber ? ` on ${[e.ticketNumber, e.ticketTitle].filter(Boolean).join(' — ')}`
+          : e.taskTitle ? ` on task "${e.taskTitle}"${e.projectName ? ` on project ${e.projectName}` : ''}`
+          : e.categoryName ? ` as Regular Time: ${e.categoryName}` : '';
+        return {
+          result: r,
+          message: `${e.hoursWorked != null ? `${e.hoursWorked} hour(s)` : 'Time'}${e.dateWorked ? ` on ${String(e.dateWorked).slice(0, 10)}` : ''}${where}${e.resourceName ? ` by ${e.resourceName}` : ''}${e.roleName ? ` as ${e.roleName}` : ''}${e.workTypeName ? ` — work type ${e.workTypeName}` : ''}`,
+        };
       }],
       ['autotask_update_time_entry', async (a) => {
         const { id, billingTreatment, timeZone, hoursToBill: requestedHoursToBill, ...updates } = a;
