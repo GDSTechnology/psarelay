@@ -3371,7 +3371,9 @@ export class AutotaskToolHandler {
         const t = r.totals;
         const cov = r.costCoverage.hoursNoBurden > 0 ? ` — ${r.costCoverage.hoursNoBurden}h with NO burden set (cost understated)` : '';
         const pend = t.pendingBillableHours > 0 ? `; ${t.pendingBillableHours}h pending/unposted` : '';
-        return { result: r, message: `${r.scope} ${r.entityId} P&L (${r.bucket}): $${t.postedRevenue} revenue − $${t.totalCost} cost = $${t.realizedMargin} margin${t.marginPct != null ? ` (${Math.round(t.marginPct * 100)}%)` : ''} over ${r.buckets.length} ${r.bucket}(s)${pend}${cov}` };
+        const plOf = r.scope === 'project' ? await nameOf('project', r.entityId)
+          : (await workTargetLabel(r.scope === 'task' ? { taskID: r.entityId } : { ticketID: r.entityId }).catch(() => null)) ?? `${r.scope} ${r.entityId}`;
+        return { result: r, message: `${plOf} P&L (${r.bucket}): $${t.postedRevenue} revenue − $${t.totalCost} cost = $${t.realizedMargin} margin${t.marginPct != null ? ` (${Math.round(t.marginPct * 100)}%)` : ''} over ${r.buckets.length} ${r.bucket}(s)${pend}${cov}` };
       }],
       ['autotask_report_inventory_reorder', async (a) => {
         const r = await s.getInventoryReorder({ locationID: a.locationID, warehouseOnly: a.warehouseOnly });
