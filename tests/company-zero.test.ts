@@ -26,7 +26,7 @@ test('get_company and find_duplicate_companies accept 0; an empty id is still re
   const { s } = mk();
   const full = jest.spyOn(s, 'getCompanyFull').mockResolvedValue({ company: { companyName: 'GDS Technology', isActive: true, createDate: '2018-01-01' }, labels: {}, names: {}, udfs: [] } as never);
   const h = new AutotaskToolHandler(s, logger);
-  expect((await text(h.callTool('autotask_get_company', { companyID: 0 }))).message).toMatch(/^Company 0: "GDS Technology"/);
+  expect((await text(h.callTool('autotask_get_company', { companyID: 0 }))).message).toMatch(/^GDS Technology — active/);
   expect(full).toHaveBeenCalledWith(0);
   const dup = jest.spyOn(s, 'findDuplicateCompanies').mockResolvedValue({ status: 'ok', candidates: [], clusters: [] } as never);
   await h.callTool('autotask_find_duplicate_companies', { companyId: 0 });

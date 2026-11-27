@@ -10,6 +10,42 @@ Each entry lists the merge commit and the PR number. Brief section references
 
 ---
 
+## v6.34.0 — 2026-11-26 — Parts from a stock location, the order sheet said up front; every reply names records
+
+- **Verified live (read-only field lists):** `TicketCharges.status` is READ-ONLY. Autotask sets it: Ready to
+  Deliver/Ship when the product is in stock or `doesNotRequireProcurement`, else Need to Order/Fulfill (the order
+  sheet). The API can't pick stock against a charge: `InventoryStockedItems.ticketChargeID` is read-only, and
+  `InventoryStockedItemsRemove` has no charge field.
+- **`add_ticket_materials`**:
+  - `fromLocation` (a stock location name or id, or "my van" = the caller's location) checks every line against
+    that location's stock before writing.
+  - Each line carries `stock`, `expectedStatus` and `onOrderSheet`, and the reply says which lines will land on the
+    order sheet before the tech confirms.
+  - After writing, each charge's real status is read back and said by name; charge ids stay in the result and are
+    no longer read out.
+  - `status` is no longer sent. It is reported as ignored.
+- **Other charge tools:**
+  - `create_ticket_charge` drops `status` and says the read-back status.
+  - `update_ticket_charge` with only a status writes nothing and explains why.
+  - get / search / update / delete of ticket and project charges name the charge, the ticket (number + title) and
+    the project.
+- **Every remaining reply that read out an id now names the record**:
+  - Contacts and companies: update, get, duplicates, find-or-create.
+  - Tickets: history and linked CIs.
+  - Service calls and To-Dos: update / complete / delete.
+  - Tasks: secondary resources and dependencies; task notes.
+  - Phases and projects: phases; project structure / context / labor; update project.
+  - Time entries: delete — "the 1.5 hour entry on 2026-11-24 on T… by Pat Lee".
+  - Resources: targets and roles.
+  - Contracts: create / update, services, milestones, coverage, terms.
+  - Configuration items, opportunities, quotes and quote items, expenses, invoices.
+  - Products and inventory: products, stock locations, transfers, stock add / remove ("Moved 5 × Cat6 Keystone
+    Jack from Warehouse to Van 3").
+  - Also: checklists, attachments, appointments, webhooks, move-ticket-to-company, and the sales-cycle findings.
+- New handler helper `nameOf(kind, id)`: reads the record with the entity's own get and falls back to "<kind> <id>",
+  so a failed lookup never fails the call. The `result` shapes are unchanged.
+- New guide: website "Parts on tickets".
+
 ## v6.33.0 — 2026-11-25 — Ticket details and get / search tools carry labels and names
 
 - **`get_ticket_details`**: the same record, plus `statusLabel`, `priorityLabel`, `queueLabel`, `issueTypeLabel`,

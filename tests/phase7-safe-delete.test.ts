@@ -106,7 +106,7 @@ describe('delete_time_entry', () => {
     const handler = new AutotaskToolHandler(svc, logger);
     const r = await handler.callTool('autotask_delete_time_entry', { id: 54827, dryRun: false, confirm: true });
     expect(del).toHaveBeenCalledWith(54827, { asResourceID: 30683922 });
-    expect(textOf(r)).toContain('Deleted time entry 54827');
+    expect(textOf(r)).toContain('Deleted the time entry on 2026-08-12');
   });
 
   test.each([

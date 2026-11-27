@@ -1372,7 +1372,7 @@ export const TOOL_DEFINITIONS: McpTool[] = [
   },
   {
     name: 'autotask_add_ticket_materials',
-    description: 'FINANCIAL — add materials / parts / products used on a ticket as ticket charges, priced from the Autotask product catalog. The way to "add charges to ticket T… : 200 ft cable, 3 patch cables, 2 keystones". Give the ticket number and one line per item: query (part number, SKU or name words) or productId, and quantity. Each line is matched against the whole catalog; it resolves only when unambiguous (one match, or an exact part number), otherwise the line comes back as needs_product with ranked candidates (id, name, sku, price, cost) — show them to the user and call again with the chosen productId. Price and cost come from the catalog (unitPrice / unitCost override per line). Checks the ticket\'s EXISTING charges: a product already charged is flagged duplicate and not added again (allowDuplicates to override), so a re-run never double-bills. DRY RUN by default — returns every line with product, quantity, unit price, extended price and the total, and writes nothing. Show that to the user; only after they approve, call again with the same lines, dryRun:false and confirm:true. Writes only when EVERY line is settled. Returns the created charge ids, each read back.',
+    description: 'FINANCIAL — add materials / parts / products used on a ticket as ticket charges, priced from the Autotask product catalog. The way to "add charges to ticket T… : 200 ft cable, 3 patch cables, 2 keystones". Give the ticket number and one line per item: query (part number, SKU or name words) or productId, and quantity. Each line is matched against the whole catalog; it resolves only when unambiguous (one match, or an exact part number), otherwise the line comes back as needs_product with ranked candidates (id, name, sku, price, cost) — show them to the user and call again with the chosen productId. Price and cost come from the catalog (unitPrice / unitCost override per line). Checks the ticket\'s EXISTING charges: a product already charged is flagged duplicate and not added again (allowDuplicates to override), so a re-run never double-bills. DRY RUN by default — returns every line with product, quantity, unit price, extended price and the total, and writes nothing. Show that to the user; only after they approve, call again with the same lines, dryRun:false and confirm:true. Writes only when EVERY line is settled. STOCK / ORDER SHEET: Autotask sets each new charge\'s status itself (the API cannot set it or pick stock): Ready to Deliver/Ship when the product is in stock (or needs no procurement), otherwise Need to Order/Fulfill — which puts it on the order sheet. Pass fromLocation (where the tech took the parts from — a stock location name like "Van 3" or "Warehouse", or "my van") and every line is checked against that location\'s stock before anything is written; lines that will land on the order sheet are listed (onOrderSheet) so the tech hears it up front. After writing, each charge\'s real status is read back and said ("… — Ready to Deliver/Ship"). A part the tech already has but Autotask shows as out of stock still lands on the order sheet: say so and have them pick it in Autotask. Returns the created charges (ids, names, status), each read back.',
     annotations: { title: 'Add materials to a ticket (priced from the catalog)' },
     inputSchema: {
       type: 'object',
@@ -1397,7 +1397,8 @@ export const TOOL_DEFINITIONS: McpTool[] = [
         },
         datePurchased: { type: 'string', description: 'Date used (YYYY-MM-DD). Default today.' },
         billable: { type: 'boolean', description: 'Bill to the customer (default true)' },
-        status: { type: 'string', description: 'Charge status label or id (default: the picklist default)' },
+        fromLocation: { type: 'string', description: 'Where the parts came from: a stock location name (e.g. "Van 3", "Warehouse") or id, or "my van" for the caller\'s own location. Checks stock there before writing and says whether each line will land on the order sheet. Unknown / ambiguous → nothing written, the locations are listed.' },
+        status: { type: 'string', description: 'IGNORED — Autotask sets a charge\'s status itself (read-only in the API). Kept so older callers don\'t fail.' },
         chargeType: { type: 'string', description: 'Charge type label or id (default: the picklist default, usually Operational)' },
         allowDuplicates: { type: 'boolean', description: 'Add a product even though the ticket already has a charge for it. Default false.' },
         allowInternalText: { type: 'boolean', description: 'Allow a line description that looks like internal notes (cost, markup, supplier, pickup, serial). Only for a false alarm.' },
@@ -1458,7 +1459,7 @@ export const TOOL_DEFINITIONS: McpTool[] = [
         },
         status: {
           type: 'number',
-          description: 'Charge status picklist ID'
+          description: 'IGNORED — Autotask sets a ticket charge\'s status itself (read-only in the API: Ready to Deliver/Ship when in stock, else Need to Order/Fulfill). The reply says the status it got.'
         },
         allowInternalText: { type: 'boolean', description: 'Write name / description even though they look like internal notes (cost, markup, supplier, pickup, serial). Only for a false alarm.' },
         confirm: { type: 'boolean', description: 'Must be true to write (financial change) — after the user approved the values.' }
@@ -1502,7 +1503,7 @@ export const TOOL_DEFINITIONS: McpTool[] = [
         },
         status: {
           type: 'number',
-          description: 'Updated status'
+          description: 'Read-only in the API — Autotask sets it (Need to Order/Fulfill, Ready to Deliver/Ship, …); a value sent here is reported as not applied. Pick / fulfil the charge in Autotask.'
         },
         allowInternalText: { type: 'boolean', description: 'Write name / description even though they look like internal notes (cost, markup, supplier, pickup, serial). Only for a false alarm.' },
         confirm: { type: 'boolean', description: 'Must be true to write (financial change) — after the user approved the values.' }

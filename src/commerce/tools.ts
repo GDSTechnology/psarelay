@@ -191,7 +191,7 @@ export function commerceToolHandlers(s: AutotaskService, getPool: () => Pool | n
         const http = await s.httpClient();
         const contract = await http.get<Record<string, any>>('Contracts', contractId).catch(() => null);
         if (!contract) return { result: { status: 'not_found' }, message: `No contract ${contractId}.` };
-        if (Number(contract.contractType) !== 7) return { result: { status: 'invalid' }, message: `Contract ${contractId} is not a recurring service contract (type ${contract.contractType}).` };
+        if (Number(contract.contractType) !== 7) return { result: { status: 'invalid' }, message: `Contract ${(contract as { contractName?: string }).contractName ? `"${(contract as { contractName?: string }).contractName}"` : contractId} is not a recurring service contract (type ${contract.contractType}).` };
         const q: QueryFn = (e, f, opts) => http.query(e, f as never, opts);
         const t = today();
         const lineRows = await q<Record<string, any>>('ContractServices', [{ op: 'eq', field: 'contractID', value: contractId }], { maxRecords: 200, includeFields: ['id', 'serviceID'], noCache: true });

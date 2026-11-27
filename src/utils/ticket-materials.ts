@@ -64,6 +64,12 @@ export interface MaterialLine {
   problem?: string;
   /** Something the reviewer should know that does not block the line. */
   note?: string;
+  /** Stock in Autotask inventory for this product (create lines). */
+  stock?: { availableAnywhere: number; location?: string; availableAtLocation?: number; doesNotRequireProcurement?: boolean };
+  /** The status Autotask is expected to give the new charge (it sets it; the API can't). */
+  expectedStatus?: 'Need to Order/Fulfill' | 'Ready to Deliver/Ship';
+  /** true → the charge will show on the order sheet (Need to Order). */
+  onOrderSheet?: boolean;
 }
 
 const round2 = (n: number): number => Math.round(n * 100) / 100;

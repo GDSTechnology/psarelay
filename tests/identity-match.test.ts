@@ -183,6 +183,6 @@ describe('search_* identity mode via the handler; plain mode untouched', () => {
     const { s } = mk(() => []);
     jest.spyOn(s, 'getCompanyFull').mockResolvedValue({ company: { companyName: 'Spam Account', isActive: true, createDate: '2020-01-01' }, labels: { companyType: 'Customer' }, names: { ownerResourceID: { name: 'Owner One' }, createdByResourceID: { name: 'Admin' } }, udfs: [] });
     const msg = JSON.parse((await new AutotaskToolHandler(s, logger).callTool('autotask_get_company', { companyID: 29684631 })).content[0].text).message;
-    expect(msg).toBe('Company 29684631: "Spam Account" — active, Customer, owner Owner One, created 2020-01-01 by Admin');
+    expect(msg).toBe('Spam Account — active, Customer, owner Owner One, created 2020-01-01 by Admin');
   });
 });

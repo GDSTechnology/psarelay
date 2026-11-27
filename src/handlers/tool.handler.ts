@@ -1383,6 +1383,60 @@ export class AutotaskToolHandler {
       return cat ? ` as Regular Time: ${cat}` : ' as Regular Time';
     };
     const hoursText = (h: unknown): string => { const n = Number(h); return Number.isFinite(n) && n > 0 ? `${Math.round(n * 100) / 100} hour${n === 1 ? '' : 's'}` : 'time'; };
+    /**
+     * A spoken name for any record — `project "Network refresh"`, `To-Do "Call back"`,
+     * `contract "Managed Services 2026"` — read with the entity's own get (cached where
+     * the service caches). Falls back to "<kind> <id>" so a reply is never blocked.
+     */
+    const short = (v: unknown, n = 60): string | null => {
+      const t = v == null ? '' : String(v).replace(/\s+/g, ' ').trim();
+      return t ? (t.length > n ? `${t.slice(0, n - 1)}…` : t) : null;
+    };
+    const day = (v: unknown): string | null => (v ? String(v).slice(0, 10) : null);
+    const NAMERS: Record<string, { get: (id: number) => Promise<unknown>; name: (r: Record<string, any>) => string | null; noun: string }> = {
+      project: { get: (id) => s.getProject(id), name: (r) => short(r.projectName), noun: 'project' },
+      company: { get: (id) => s.getCompany(id), name: (r) => short(r.companyName), noun: 'company' },
+      contact: { get: (id) => s.getContact(id), name: (r) => short([r.firstName, r.lastName].filter(Boolean).join(' ')), noun: 'contact' },
+      phase: { get: (id) => s.getPhase(id), name: (r) => short(r.title), noun: 'phase' },
+      contract: { get: (id) => s.getContract(id), name: (r) => short(r.contractName), noun: 'contract' },
+      contractService: { get: (id) => s.getContractService(id), name: (r) => short(r.invoiceDescription ?? r.internalDescription), noun: 'contract service' },
+      contractMilestone: { get: (id) => s.getContractMilestone(id), name: (r) => short(r.title), noun: 'milestone' },
+      serviceCall: { get: (id) => s.getServiceCall(id), name: (r) => [short(r.description, 50), day(r.startDateTime) ? `on ${day(r.startDateTime)}` : null].filter(Boolean).join(' ') || null, noun: 'service call' },
+      todo: { get: (id) => s.getCompanyToDo(id), name: (r) => short(r.activityDescription, 50), noun: 'To-Do' },
+      ci: { get: (id) => s.getConfigurationItem(id), name: (r) => short(r.referenceTitle ?? r.referenceNumber ?? r.serialNumber), noun: 'configuration item' },
+      opportunity: { get: (id) => s.getOpportunity(id), name: (r) => short(r.title), noun: 'opportunity' },
+      quote: { get: (id) => s.getQuote(id), name: (r) => short(r.name ?? r.description), noun: 'quote' },
+      quoteItem: { get: (id) => s.getQuoteItem(id), name: (r) => short(r.name ?? r.description), noun: 'quote item' },
+      product: { get: (id) => s.getProduct(id), name: (r) => short(r.name), noun: 'product' },
+      inventoryLocation: { get: (id) => s.getInventoryLocation(id), name: (r) => short(r.locationName), noun: 'stock location' },
+      ticketCharge: { get: (id) => s.getTicketCharge(id), name: (r) => short(r.name), noun: 'charge' },
+      projectCharge: { get: (id) => s.getProjectCharge(id), name: (r) => short(r.name), noun: 'charge' },
+      expenseReport: { get: (id) => s.getExpenseReport(id), name: (r) => short(r.name), noun: 'expense report' },
+      invoice: { get: (id) => s.getInvoice(id), name: (r) => short(r.invoiceNumber), noun: 'invoice' },
+      checklistLibrary: { get: (id) => s.getChecklistLibrary(id), name: (r) => short(r.name), noun: 'checklist library' },
+      resource: { get: (id) => s.getResource(id), name: (r) => short([r.firstName, r.lastName].filter(Boolean).join(' ')), noun: 'resource' },
+    };
+    /** "<product> at <location>" for an InventoryProducts row id. */
+    const stockName = async (inventoryProductID: unknown): Promise<string> => {
+      try {
+        const ip = await s.getInventoryProduct(Number(inventoryProductID));
+        if (ip) return `${await nameOf('product', ip.productID, { bare: true })} at ${await nameOf('inventoryLocation', ip.inventoryLocationID, { bare: true })}`;
+      } catch { /* fall back */ }
+      return `stock row ${String(inventoryProductID)}`;
+    };
+    /** `noun "name"` (or the bare name when `bare`), else `noun <id>`. */
+    const nameOf = async (kind: keyof typeof NAMERS | string, id: unknown, opts: { bare?: boolean; record?: Record<string, any> | null } = {}): Promise<string> => {
+      const k = NAMERS[kind];
+      const n = Number(id);
+      if (!k) return `${kind} ${String(id)}`;
+      if (kind === 'resource') { const p = await personName(n); if (p) return p; }
+      try {
+        const r = (opts.record ?? (Number.isFinite(n) ? await k.get(n) : null)) as Record<string, any> | null;
+        const nm = r ? k.name(r) : null;
+        if (nm) return opts.bare || kind === 'contact' || kind === 'company' || kind === 'resource' ? nm : `${k.noun} "${nm}"`;
+      } catch { /* fall back to the id */ }
+      return `${k.noun} ${String(id)}`;
+    };
     const checkWorkType = async (billingCodeID: unknown): Promise<{ result: unknown; message: string } | null> => {
       if (billingCodeID == null) return null;
       let v: Awaited<ReturnType<typeof s.validateWorkType>>;
@@ -1755,7 +1809,7 @@ export class AutotaskToolHandler {
         const r = await s.getCompanyFull(id);
         if (!r) return { result: null, message: `Company ${id} not found.` };
         const c = r.company as Record<string, unknown>, l = r.labels as Record<string, string>, n = r.names as Record<string, { name?: string | null }>;
-        return { result: r, message: `Company ${id}: "${c.companyName}" — ${c.isActive ? 'active' : 'INACTIVE'}${l.companyType ? `, ${l.companyType}` : ''}${n.ownerResourceID?.name ? `, owner ${n.ownerResourceID.name}` : ''}, created ${c.createDate ?? '?'}${n.createdByResourceID?.name ? ` by ${n.createdByResourceID.name}` : ''}` };
+        return { result: r, message: `${c.companyName ?? `Company ${id}`} — ${c.isActive ? 'active' : 'INACTIVE'}${l.companyType ? `, ${l.companyType}` : ''}${n.ownerResourceID?.name ? `, owner ${n.ownerResourceID.name}` : ''}, created ${c.createDate ?? '?'}${n.createdByResourceID?.name ? ` by ${n.createdByResourceID.name}` : ''}` };
       }],
       ['autotask_get_contact', async (a) => {
         const id = Number(a.contactID ?? a.contactId ?? a.id);
@@ -1763,7 +1817,7 @@ export class AutotaskToolHandler {
         const r = await s.getContactFull(id);
         if (!r) return { result: null, message: `Contact ${id} not found.` };
         const c = r.contact as Record<string, unknown>, n = r.names as Record<string, { name?: string | null }>;
-        return { result: r, message: `Contact ${id}: ${[c.firstName, c.lastName].filter(Boolean).join(' ')} <${c.emailAddress ?? 'no email'}> — ${c.isActive === 1 || c.isActive === true ? 'active' : 'INACTIVE'}, company ${n.companyID?.name ?? c.companyID ?? '?'}, created ${c.createDate ?? '?'}` };
+        return { result: r, message: `${[c.firstName, c.lastName].filter(Boolean).join(' ') || `Contact ${id}`} <${c.emailAddress ?? 'no email'}> — ${c.isActive === 1 || c.isActive === true ? 'active' : 'INACTIVE'}, company ${n.companyID?.name ?? c.companyID ?? '?'}, created ${c.createDate ?? '?'}` };
       }],
       ['autotask_find_company_contact_candidates', async (a) => {
         if (![a.companyName, a.contactName, a.email, a.phone, a.domain].some((v) => v != null && String(v).trim() !== '')) {
@@ -1779,14 +1833,14 @@ export class AutotaskToolHandler {
         if (!Number.isInteger(id) || id < 0) return { result: null, message: 'companyID is required (a whole number; 0 is your own company).' };
         const r = await s.findDuplicateCompanies(id);
         if (r.status === 'not_found') return { result: r, message: `Company ${id} not found.` };
-        return { result: r, message: identityMessage(`possible duplicate(s) of company ${id}`, r) };
+        return { result: r, message: identityMessage(`possible duplicate(s) of ${await nameOf('company', id)}`, r) };
       }],
       ['autotask_find_duplicate_contacts', async (a) => {
         const id = Number(a.contactID ?? a.contactId ?? a.id);
         if (!Number.isInteger(id) || id <= 0) return { result: null, message: 'contactID (a positive integer) is required.' };
         const r = await s.findDuplicateContacts(id);
         if (r.status === 'not_found') return { result: r, message: `Contact ${id} not found.` };
-        return { result: r, message: identityMessage(`possible duplicate(s) of contact ${id}`, r) };
+        return { result: r, message: identityMessage(`possible duplicate(s) of ${await nameOf('contact', id)}`, r) };
       }],
       ['autotask_create_company', async (a) => {
         const { applied } = withCompanyDefaults(a, tenantCompanyDefaults());
@@ -1794,15 +1848,16 @@ export class AutotaskToolHandler {
         return { result: id, message: `Created company ${a.companyName ?? id}${applied.length ? ` (tenant defaults applied: ${applied.join(', ')})` : ''}` };
       }],
       ['autotask_update_company', async (a) => {
-        await s.updateCompany(a.id, a); return { result: undefined, message: `Successfully updated company ID: ${a.id}` };
+        await s.updateCompany(a.id, a); return { result: undefined, message: `Updated ${await nameOf('company', a.id)}.` };
       }],
       ['autotask_get_company_site_configuration', async (a) => {
         const r = await s.getCompanySiteConfigurations(a.companyId);
-        return { result: r, message: `Found ${r.length} site configuration record(s) for company ${a.companyId}` };
+        return { result: r, message: `Found ${r.length} site configuration record(s) for ${await nameOf('company', a.companyId)}` };
       }],
       ['autotask_update_company_site_configuration', async (a) => {
         await s.updateCompanySiteConfiguration(a.id, a.updates || {});
-        return { result: undefined, message: `Successfully updated company site configuration ID: ${a.id}` };
+        const r0 = a.companyId != null ? await nameOf('company', a.companyId) : null;
+        return { result: undefined, message: `Updated the site configuration${r0 ? ` for ${r0}` : ''}.` };
       }],
 
       // Contacts
@@ -1823,11 +1878,11 @@ export class AutotaskToolHandler {
       ['autotask_find_or_create_contact', async (a) => {
         const { companyID, ...rest } = a;
         const r = await s.findOrCreateContact(companyID, rest);
-        if (r.status === 'ambiguous') return { result: r, message: `Nothing created: ${r.candidates?.length} contacts in company ${companyID} match by ${r.matchedBy} (ids ${r.candidates?.join(', ')}) — pick one.` };
-        return { result: r, message: r.created ? `Created contact ${r.id}` : `Found existing contact ${r.id} (by ${r.matchedBy})${r.reactivated ? ' — it was inactive and has been reactivated' : ''}` };
+        if (r.status === 'ambiguous') return { result: r, message: `Nothing created: ${r.candidates?.length} contacts at ${await nameOf('company', companyID)} match by ${r.matchedBy} (${(await Promise.all((r.candidates ?? []).slice(0, 5).map((c: unknown) => nameOf('contact', c)))).join(', ')}) — pick one.` };
+        return { result: r, message: r.created ? `Created contact ${await nameOf('contact', r.id)}` : `Found existing contact ${await nameOf('contact', r.id)} (by ${r.matchedBy})${r.reactivated ? ' — it was inactive and has been reactivated' : ''}` };
       }],
       ['autotask_update_contact', async (a) => {
-        await s.updateContact(a.id, a); return { result: undefined, message: `Successfully updated contact ID: ${a.id}` };
+        await s.updateContact(a.id, a); return { result: undefined, message: `Updated contact ${await nameOf('contact', a.id)}.` };
       }],
 
       // Tickets
@@ -1916,7 +1971,7 @@ export class AutotaskToolHandler {
           const contacts = await addAdditionalContacts(s, Number(ticketId), contactIds);
           return { result: { ticketId, additionalContacts: contacts }, message: `${(await ticketRef(ticketId)).label}${additionalContactsSummary(contacts).replace(/^; /, ': ')}` };
         }
-        if (!Object.keys(payload).length) return { result: null, message: `Nothing to update on ticket ${ticketId} — no writable fields given.` };
+        if (!Object.keys(payload).length) return { result: null, message: `Nothing to update on ${(await ticketRef(ticketId)).label} — no writable fields given.` };
         // Picklists by label or id: "Tier 1 Support" → its queue id; an unknown
         // label or inactive id returns the choices instead of a failed write.
         const pick = Object.keys(payload).filter((k) => TICKET_PICKLIST_FIELDS.has(k));
@@ -1975,7 +2030,7 @@ export class AutotaskToolHandler {
           contactID: a.contactID, force: a.force, companyLocationID: a.companyLocationID,
           also: { queueID: a.queueID, status: a.status, assignedResourceID: a.assignedResourceID, assignedResourceRoleID: a.assignedResourceRoleID, userDefinedFields: a.userDefinedFields },
         });
-        return { result: r, message: (r.message as string) ?? `Ticket ${a.ticketId} move result: ${r.status}` };
+        return { result: r, message: (r.message as string) ?? `${(await ticketRef(a.ticketId)).label}: move ${r.status}` };
       }],
       ['autotask_find_ticket_by_external_id', async (a) => {
         const r = await s.findTicketByExternalId(a.externalID);
@@ -1984,22 +2039,22 @@ export class AutotaskToolHandler {
       // TicketAdditionalConfigurationItems (§8)
       ['autotask_search_ticket_configuration_items', async (a) => {
         const r = await s.searchTicketConfigurationItems(a.ticketID, a.configurationItemID);
-        return { result: r, message: `Found ${r.length} additional configuration item(s) on ticket ${a.ticketID}` };
+        return { result: r, message: `Found ${r.length} additional configuration item(s) on ${(await ticketRef(a.ticketID)).label}${r.length ? `: ${(await Promise.all((r as Array<Record<string, any>>).slice(0, 10).map((x) => nameOf('ci', x.configurationItemID, { bare: true })))).join(', ')}` : ''}` };
       }],
       ['autotask_add_ticket_configuration_item', async (a) => {
         const id = await s.addTicketConfigurationItem(a.ticketID, a.configurationItemID);
-        return { result: id, message: `Linked CI ${a.configurationItemID} to ticket ${a.ticketID} (association ${id})` };
+        return { result: id, message: `Linked ${await nameOf('ci', a.configurationItemID)} to ${(await ticketRef(a.ticketID)).label}.` };
       }],
       ['autotask_remove_ticket_configuration_item', async (a) => {
         await s.removeTicketConfigurationItem(a.associationID);
-        return { result: a.associationID, message: `Removed ticket additional-CI association ${a.associationID}` };
+        return { result: a.associationID, message: 'Removed the configuration item from the ticket.' };
       }],
       // TicketAdditionalContacts (#266)
       ['autotask_list_ticket_additional_contacts', async (a) => {
         const r = await s.listTicketAdditionalContacts(Number(a.ticketID));
         if (r.status === 'not_found') return { result: r, message: `Ticket ${a.ticketID} not found` };
         const list = (r.contacts as Array<Record<string, any>>).map((c) => `${c.name ?? 'contact ' + c.contactID} <${c.email ?? 'no e-mail'}>${c.isActive === false ? ' (inactive)' : ''}`);
-        return { result: r, message: `${r.ticketNumber ?? `Ticket ${a.ticketID}`}: ${r.count} additional contact(s)${list.length ? ` — ${list.join(', ')}` : ''}` };
+        return { result: r, message: `${(await ticketRef(a.ticketID)).label}: ${r.count} additional contact(s)${list.length ? ` — ${list.join(', ')}` : ''}` };
       }],
       ['autotask_add_ticket_additional_contact', async (a) => {
         const r = await s.addTicketAdditionalContact(Number(a.ticketID), Number(a.contactID));
@@ -2032,11 +2087,15 @@ export class AutotaskToolHandler {
       ['autotask_get_ticket_charge', async (a) => {
         const r = await s.getTicketCharge(a.chargeId);
         if (!r) return { result: null, message: `No ticket charge found with ID ${a.chargeId}` };
-        return { result: r, message: 'Ticket charge retrieved successfully' };
+        await labeled('TicketCharges', [r as Record<string, any>], ['status', 'chargeType']);
+        const ch = r as Record<string, any>;
+        return { result: r, message: `Charge "${ch.name ?? 'unnamed'}" on ${(await ticketRef(ch.ticketID)).label} — ${ch.unitQuantity ?? '?'} × ${ch.unitPrice ?? '?'}${ch.statusLabel ? `, ${ch.statusLabel}` : ''}${ch.isBilled ? ', billed' : ''}` };
       }],
       ['autotask_search_ticket_charges', async (a) => {
         const r = await s.searchTicketCharges(a);
-        return { result: r, message: `Found ${r.length} ticket charges` };
+        await labeled('TicketCharges', r as unknown as Array<Record<string, any>>, ['status', 'chargeType']);
+        const where = a.ticketId ?? a.ticketID;
+        return { result: r, message: `Found ${r.length} ticket charge(s)${where != null ? ` on ${(await ticketRef(where)).label}` : ''}${r.length ? `: ${(r as Array<Record<string, any>>).slice(0, 10).map((c) => `${c.name ?? 'unnamed'} × ${c.unitQuantity ?? '?'}${c.statusLabel ? ` (${c.statusLabel})` : ''}`).join('; ')}` : ''}` };
       }],
       ['autotask_add_ticket_materials', async (a) => {
         const ref = await s.resolveTicketRef({ ticketID: a.ticketID ?? a.ticketId, ticketNumber: a.ticketNumber });
@@ -2044,27 +2103,38 @@ export class AutotaskToolHandler {
         const items = Array.isArray(a.items) ? a.items.filter((x: unknown) => x && typeof x === 'object') : [];
         if (!items.length) return { result: null, message: 'items is required: one { query or productId, quantity } per material. Nothing written.' };
         if (items.length > 50) return { result: null, message: `At most 50 materials per call (got ${items.length}). Nothing written.` };
+        const caller = getRequestAuth()?.resourceId ?? (a.resourceID != null ? Number(a.resourceID) : undefined);
         const r = await s.addTicketMaterials({
           ticketID: ref.id, items, dryRun: a.dryRun !== false, allowDuplicates: a.allowDuplicates === true, allowInternalText: a.allowInternalText === true,
           ...(a.datePurchased ? { datePurchased: String(a.datePurchased) } : {}),
           ...(typeof a.billable === 'boolean' ? { billable: a.billable } : {}),
           ...(a.status != null && a.status !== '' ? { status: a.status } : {}),
           ...(a.chargeType != null && a.chargeType !== '' ? { chargeType: a.chargeType } : {}),
+          ...(a.fromLocation != null && a.fromLocation !== '' ? { fromLocation: a.fromLocation } : {}),
+          ...(caller != null && Number.isFinite(caller) ? { callerResourceID: caller } : {}),
         });
-        const t = r.ticket as { ticketNumber?: string | null } | undefined;
-        const tn = t?.ticketNumber ?? ref.ticketNumber ?? `ticket ${ref.id}`;
+        const t = r.ticket as { ticketNumber?: string | null; title?: string | null } | undefined;
+        const tn = [t?.ticketNumber ?? ref.ticketNumber ?? `ticket ${ref.id}`, t?.title].filter(Boolean).join(' — ');
         const lines = (r.lines ?? []) as MaterialLine[];
         const money = (n: number | undefined) => (n === undefined ? '?' : `$${n.toFixed(2)}`);
-        const row = (l: MaterialLine) => `${l.line}. ${l.action === 'create' ? '' : `[${l.action.toUpperCase()}] `}${l.name ?? l.request.query ?? `product ${l.request.productId}`}${l.sku ? ` (${l.sku})` : ''} — ${l.quantity} × ${money(l.unitPrice)} = ${money(l.extendedPrice)}${l.problem ? ` — ${l.problem}` : ''}${l.note ? ` (${l.note})` : ''}`;
+        const row = (l: MaterialLine) => `${l.line}. ${l.action === 'create' ? '' : `[${l.action.toUpperCase()}] `}${l.name ?? l.request.query ?? 'the requested product'}${l.sku ? ` (${l.sku})` : ''} — ${l.quantity} × ${money(l.unitPrice)} = ${money(l.extendedPrice)}${l.problem ? ` — ${l.problem}` : ''}${l.note ? ` (${l.note})` : ''}`;
         const list = lines.map(row).join('\n');
         const total = `Total to add: ${money(r.total as number)}.`;
-        const message = r.status === 'not_found' ? `Ticket ${ref.id} not found. Nothing written.`
-          : r.status === 'validation_failed' ? `NOTHING WRITTEN — ${(r.errors as string[]).join('; ')}.`
+        const from = (r.settings as { fromLocation?: { name: string } } | undefined)?.fromLocation?.name;
+        const sheet = (r.onOrderSheet as number[] | undefined) ?? [];
+        const sheetNote = sheet.length ? ` ${sheet.length === 1 ? 'Line' : 'Lines'} ${sheet.join(', ')} will land on the order sheet as Need to Order — Autotask sets that from its stock count (the API can't pick). If the tech already has the part, pick it in Autotask.` : '';
+        const ignoredNote = (r.ignored as string[] | undefined)?.length ? ` Ignored: ${(r.ignored as string[]).join('; ')}.` : '';
+        const created = (r.created as Array<{ chargeID: number; verified: boolean; name?: string; statusLabel?: string | null }> | undefined) ?? [];
+        const statuses = created.map((c) => `${c.name ?? 'charge'} — ${c.statusLabel ?? (c.verified ? 'status unknown' : 'not readable yet')}${/need to order/i.test(c.statusLabel ?? '') ? ' (on the order sheet)' : ''}`).join('; ');
+        const errs = (r.errors as string[] | undefined) ?? [];
+        const choices = (r.locationChoices as Array<{ name: string }> | undefined)?.map((c) => c.name).join(', ');
+        const message = r.status === 'not_found' ? `Ticket ${ref.ticketNumber ?? ref.id} not found. Nothing written.`
+          : r.status === 'validation_failed' ? `NOTHING WRITTEN — ${errs.join('; ')}${choices && !errs.join(' ').includes(choices) ? ` Stock locations: ${choices}.` : ''}`
           : r.status === 'needs_input' ? `NOTHING WRITTEN — ${tn}: some lines need a decision (pick a product from the candidates and pass its productId, or fix the line), then call again:\n${list}`
           : r.status === 'nothing_to_add' ? `${tn}: nothing to add — every line is already charged on the ticket:\n${list}`
-          : r.status === 'dry_run' ? `DRY RUN (nothing written) — ${tn}:\n${list}\n${total} Show this to the user; after they approve, call again with the same items, dryRun:false and confirm:true.`
-          : r.status === 'created' ? `Added to ${tn}:\n${list}\n${total} Charge ids: ${(r.created as Array<{ chargeID: number; verified: boolean }>).map((c) => `${c.chargeID}${c.verified ? '' : ' (not yet readable)'}`).join(', ')}.`
-          : `${r.status === 'partial' ? 'PARTLY WRITTEN' : 'NOTHING WRITTEN'} — line ${String(r.failedLine)} failed: ${String(r.error)}. Created: ${(r.created as Array<{ chargeID: number }> | undefined)?.map((c) => c.chargeID).join(', ') || 'none'}. A re-run skips what was added (duplicate check).`;
+          : r.status === 'dry_run' ? `DRY RUN (nothing written) — ${tn}${from ? `, parts from ${from}` : ''}:\n${list}\n${total}${sheetNote}${ignoredNote} Show this to the user; after they approve, call again with the same items, dryRun:false and confirm:true.`
+          : r.status === 'created' ? `Added to ${tn}${from ? ` (parts from ${from})` : ''}:\n${list}\n${total} Status: ${statuses}.${ignoredNote}`
+          : `${r.status === 'partial' ? 'PARTLY WRITTEN' : 'NOTHING WRITTEN'} — line ${String(r.failedLine)} failed: ${String(r.error)}. Added: ${created.map((c) => c.name ?? 'a charge').join(', ') || 'none'}. A re-run skips what was added (duplicate check).`;
         return { result: r, message };
       }],
       ['autotask_create_ticket_charge', async (a) => {
@@ -2073,8 +2143,12 @@ export class AutotaskToolHandler {
         if (typeof billableToAccount === 'boolean' && charge.isBillableToCompany === undefined) charge.isBillableToCompany = billableToAccount;
         const internal = allowInternalText === true ? null : internalTextProblem(charge);
         if (internal) return { result: { status: 'internal_text' }, message: `NOTHING WRITTEN — ${internal}` };
+        const ignored = charge.status != null && charge.status !== '' ? ' Status ignored — Autotask sets it itself.' : '';
+        delete charge.status;
         const id = await s.createTicketCharge(charge);
-        return { result: id, message: `Successfully created ticket charge with ID: ${id}` };
+        const back = await s.getTicketCharge(id).catch(() => null) as Record<string, any> | null;
+        if (back) await labeled('TicketCharges', [back], ['status']);
+        return { result: id, message: `Added charge "${charge.name ?? 'unnamed'}" to ${(await ticketRef(charge.ticketID)).label}${back?.statusLabel ? ` — ${back.statusLabel}${/need to order/i.test(String(back.statusLabel)) ? ' (on the order sheet)' : ''}` : ''}.${ignored}` };
       }],
       ['autotask_update_ticket_charge', async (a) => {
         const { chargeId, billableToAccount, allowInternalText, ...updates } = a;
@@ -2083,35 +2157,44 @@ export class AutotaskToolHandler {
         if (typeof billableToAccount === 'boolean' && updates.isBillableToCompany === undefined) updates.isBillableToCompany = billableToAccount;
         const internal = allowInternalText === true ? null : internalTextProblem(updates);
         if (internal) return { result: { status: 'internal_text', chargeID: id }, message: `NOTHING WRITTEN — ${internal}` };
+        // TicketCharges.status is read-only (entityInformation): Autotask sets it; picking happens in Autotask.
+        const statusAsked = updates.status !== undefined;
+        delete updates.status;
+        if (statusAsked && !Object.keys(updates).length) {
+          return { result: { status: 'read_only', chargeID: id, field: 'status' }, message: "Nothing written: a charge's status can't be set through the API — Autotask sets it (Need to Order/Fulfill until it's in stock, then Ready to Deliver/Ship). Pick or fulfil the charge in Autotask." };
+        }
         const r = await s.updateTicketCharge(id, updates);
         const fmt = (v: unknown) => (v === null || v === undefined || v === '' ? '(empty)' : typeof v === 'string' ? `"${v}"` : String(v));
         const changed = Object.entries(r.changes).map(([k, c]) => `${k}: ${fmt(c.from)} → ${fmt(c.to)}`);
         const keep = (['unitQuantity', 'unitCost', 'unitPrice'] as const).filter((k) => !(k in r.changes)).map((k) => `${k} ${fmt((r.after ?? r.before)[k])}`);
         const warn = r.notApplied.length ? ` WARNING: Autotask did not apply ${r.notApplied.join(', ')} (read back unchanged).` : '';
+        const statusNote = statusAsked ? ' Status not changed — Autotask sets it; pick or fulfil the charge in Autotask.' : '';
         const verified = r.after ? 'verified by reading it back' : 'could not be read back yet';
-        return { result: r, message: `Updated ticket charge ${id} on ticket ${r.ticketID} (${verified}). ${changed.length ? changed.join('; ') : 'No field changed — it already had these values.'}${keep.length ? ` Unchanged: ${keep.join(', ')}.` : ''}${warn}` };
+        return { result: r, message: `Updated charge "${(r.after ?? r.before)?.name ?? 'unnamed'}" on ${(await ticketRef(r.ticketID)).label} (${verified}). ${changed.length ? changed.join('; ') : 'No field changed — it already had these values.'}${keep.length ? ` Unchanged: ${keep.join(', ')}.` : ''}${warn}${statusNote}` };
       }],
       ['autotask_delete_ticket_charge', async (a) => {
+        const gone = await s.getTicketCharge(a.chargeId).catch(() => null) as Record<string, any> | null;
         await s.deleteTicketCharge(a.ticketId, a.chargeId);
-        return { result: a.chargeId, message: `Successfully deleted ticket charge ${a.chargeId}` };
+        return { result: a.chargeId, message: `Deleted charge "${gone?.name ?? a.chargeId}" from ${(await ticketRef(a.ticketId)).label}.` };
       }],
 
       // Project Charges
       ['autotask_get_project_charge', async (a) => {
         const r = await s.getProjectCharge(a.chargeId);
         if (!r) return { result: null, message: `No project charge found with ID ${a.chargeId}` };
-        return { result: r, message: 'Project charge retrieved successfully' };
+        await labeled('ProjectCharges', [r], ['status', 'chargeType']);
+        return { result: r, message: `Charge "${r.name ?? 'unnamed'}" on ${await nameOf('project', r.projectID)} — ${r.unitQuantity ?? '?'} × ${r.unitPrice ?? '?'}${r.statusLabel ? `, ${r.statusLabel}` : ''}${r.isBilled ? ', billed' : ''}` };
       }],
       ['autotask_search_project_charges', async (a) => {
         const r = await s.searchProjectCharges(a);
-        return { result: r, message: `Found ${r.length} project charges` };
+        return { result: r, message: `Found ${r.length} project charge(s)${a.projectId != null ? ` on ${await nameOf('project', a.projectId)}` : ''}${r.length ? `: ${(r as Array<Record<string, any>>).slice(0, 10).map((c) => `${c.name ?? 'unnamed'} × ${c.unitQuantity ?? '?'}`).join('; ')}` : ''}` };
       }],
       ['autotask_create_project_charge', async (a) => {
         const { allowInternalText, confirm: _confirm, ...charge } = a;
         const internal = allowInternalText === true ? null : internalTextProblem(charge);
         if (internal) return { result: { status: 'internal_text' }, message: `NOTHING WRITTEN — ${internal}` };
         const id = await s.createProjectCharge(charge);
-        return { result: id, message: `Created project charge ${id} on project ${charge.projectID}` };
+        return { result: id, message: `Added charge "${charge.name ?? 'unnamed'}" to ${await nameOf('project', charge.projectID)}.` };
       }],
       ['autotask_update_project_charge', async (a) => {
         const { chargeId, allowInternalText, confirm: _confirm, ...updates } = a;
@@ -2123,13 +2206,13 @@ export class AutotaskToolHandler {
         const fmt = (v: unknown) => (v === null || v === undefined || v === '' ? '(empty)' : typeof v === 'string' ? `"${v}"` : String(v));
         const changed = Object.entries(r.changes).map(([k, c]) => `${k}: ${fmt(c.from)} → ${fmt(c.to)}`);
         const warn = r.notApplied.length ? ` WARNING: Autotask did not apply ${r.notApplied.join(', ')} (read back unchanged).` : '';
-        return { result: r, message: `Updated project charge ${id} on project ${r.projectID} (${r.after ? 'verified by reading it back' : 'could not be read back yet'}). ${changed.length ? changed.join('; ') : 'No field changed — it already had these values.'}${warn}` };
+        return { result: r, message: `Updated charge "${(r.after ?? r.before)?.name ?? 'unnamed'}" on ${await nameOf('project', r.projectID)} (${r.after ? 'verified by reading it back' : 'could not be read back yet'}). ${changed.length ? changed.join('; ') : 'No field changed — it already had these values.'}${warn}` };
       }],
       ['autotask_delete_project_charge', async (a) => {
         const r = await s.deleteProjectCharge(a.chargeId, a.projectId);
         const msg: Record<string, string> = {
-          deleted: `Deleted project charge ${a.chargeId} ("${r.deleted?.name ?? ''}", ${r.deleted?.unitQuantity ?? '?'} × ${r.deleted?.unitPrice ?? '?'}) from project ${r.projectID}`,
-          not_found: `Project charge ${a.chargeId} not found — nothing deleted`, invalid: r.error,
+          deleted: `Deleted charge "${r.deleted?.name ?? ''}" (${r.deleted?.unitQuantity ?? '?'} × ${r.deleted?.unitPrice ?? '?'}) from ${await nameOf('project', r.projectID)}`,
+          not_found: 'That project charge was not found — nothing deleted', invalid: r.error,
         };
         return { result: r, message: msg[r.status] ?? r.status };
       }],
@@ -2138,7 +2221,7 @@ export class AutotaskToolHandler {
       ['autotask_get_company_location', async (a) => {
         const r = await s.getCompanyLocation(a.locationId);
         if (!r) return { result: null, message: `No company location found with ID ${a.locationId}` };
-        return { result: r, message: `Location ${r.id}: ${r.name ?? ''} (company ${r.companyID})` };
+        return { result: r, message: `Location "${r.name ?? 'unnamed'}" of ${await nameOf('company', r.companyID)}` };
       }],
       ['autotask_search_company_locations', async (a) => {
         const r = await s.searchCompanyLocationRecords(a);
@@ -2146,9 +2229,10 @@ export class AutotaskToolHandler {
       }],
       ['autotask_create_company_location', async (a) => {
         const r = await s.createCompanyLocation(a);
+        const coName = await nameOf('company', a.companyID);
         const msg: Record<string, string> = {
-          created: `Created location ${r.locationID} "${r.location?.name}" on company ${a.companyID}${r.verified ? '' : ' (not yet readable)'}`,
-          exists: r.message, planned: `Plan only (dryRun): location "${r.location?.name}" on company ${a.companyID}`, invalid: `Not created: ${r.error}`,
+          created: `Created location "${r.location?.name}" for ${coName}${r.verified ? '' : ' (not yet readable)'}`,
+          exists: r.message, planned: `Plan only (dryRun): location "${r.location?.name}" for ${coName}`, invalid: `Not created: ${r.error}`,
         };
         return { result: r, message: msg[r.status] ?? r.status };
       }],
@@ -2172,7 +2256,7 @@ export class AutotaskToolHandler {
       }],
       ['autotask_search_ticket_history', async (a) => {
         const r = await s.searchTicketHistory({ ticketId: a.ticketId, pageSize: a.pageSize });
-        return { result: r, message: `Found ${r.length} ticket history entries for ticket ${a.ticketId}` };
+        return { result: r, message: `Found ${r.length} ticket history entries for ${(await ticketRef(a.ticketId)).label}` };
       }],
 
       // Ticket audit (read-only): full resolved ticket, parsed history, original email, picklists.
@@ -2234,7 +2318,7 @@ export class AutotaskToolHandler {
         }
         const c = r.counts as { events: number; hiddenTimestampOnly: number; byActorKind: Record<string, number> };
         const kinds = Object.entries(c.byActorKind).map(([k, v]) => `${v} by ${k}`).join(', ');
-        return { result: r, message: `${c.events} history event(s) on ticket ${ref.ticketNumber ?? ref.id}${kinds ? ` (${kinds})` : ''}${c.hiddenTimestampOnly ? `; ${c.hiddenTimestampOnly} timestamp-only event(s) hidden (includeTimestampOnly:true to show)` : ''}.` };
+        return { result: r, message: `${c.events} history event(s) on ${(await ticketRef(ref.id)).label}${kinds ? ` (${kinds})` : ''}${c.hiddenTimestampOnly ? `; ${c.hiddenTimestampOnly} timestamp-only event(s) hidden (includeTimestampOnly:true to show)` : ''}.` };
       }],
       ['autotask_get_ticket_email_context', async (a) => {
         const ref = await s.resolveTicketRef({ ticketID: a.ticketID ?? a.ticketId, ticketNumber: a.ticketNumber });
@@ -2330,11 +2414,12 @@ export class AutotaskToolHandler {
       ['autotask_update_service_call', async (a) => {
         const { serviceCallId, ...updates } = a;
         await s.updateServiceCall(serviceCallId, updates);
-        return { result: serviceCallId, message: `Successfully updated service call ${serviceCallId}` };
+        return { result: serviceCallId, message: `Updated the ${await nameOf('serviceCall', serviceCallId)}.` };
       }],
       ['autotask_delete_service_call', async (a) => {
+        const callName = await nameOf('serviceCall', a.serviceCallId);
         await s.deleteServiceCall(a.serviceCallId);
-        return { result: a.serviceCallId, message: `Successfully deleted service call ${a.serviceCallId}` };
+        return { result: a.serviceCallId, message: `Deleted the ${callName}.` };
       }],
 
       // ServiceCallTickets
@@ -2413,9 +2498,9 @@ export class AutotaskToolHandler {
       ['autotask_create_sales_followup', async (a) => {
         const r = await s.createSalesFollowup(a);
         const f = r.followup ?? {};
-        const what = `${f.actionTypeLabel ?? ''} follow-up "${f.activityDescription ?? ''}" ${f.startLocal ?? ''} (${f.timeZone ?? ''})${f.opportunity ? ` on opportunity ${f.opportunity.id}${f.opportunity.title ? ` "${f.opportunity.title}"` : ''}` : ''}${f.contact?.name ? ` with ${f.contact.name}` : ''}`;
+        const what = `${f.actionTypeLabel ?? ''} follow-up "${f.activityDescription ?? ''}" ${f.startLocal ?? ''} (${f.timeZone ?? ''})${f.opportunity ? ` on opportunity ${f.opportunity.title ? `"${f.opportunity.title}"` : f.opportunity.id}` : ''}${f.contact?.name ? ` with ${f.contact.name}` : ''}`;
         const msg: Record<string, string> = {
-          created: `Scheduled ${what} — To-Do ${r.todoID}`, planned: `Plan only (dryRun): ${what}`, exists: r.message,
+          created: `Scheduled ${what}`, planned: `Plan only (dryRun): ${what}`, exists: r.message,
           invalid: `Not scheduled: ${r.error}${r.choices ? ` Action types: ${r.choices.join(', ')}.` : ''}`, not_found: `Not scheduled: ${r.error}`,
         };
         return { result: r, message: msg[r.status] ?? r.status };
@@ -2423,15 +2508,16 @@ export class AutotaskToolHandler {
       ['autotask_update_company_todo', async (a) => {
         const { id, companyID, ...updates } = a;
         await s.updateCompanyToDo(id, updates, companyID);
-        return { result: id, message: `Successfully updated Company To-Do ${id}` };
+        return { result: id, message: `Updated the ${await nameOf('todo', id)}.` };
       }],
       ['autotask_complete_company_todo', async (a) => {
         const completedDate = await s.completeCompanyToDo(a.id, a.companyID);
-        return { result: { id: a.id, completedDate }, message: `Company To-Do ${a.id} marked complete (completedDate ${completedDate})` };
+        return { result: { id: a.id, completedDate }, message: `Marked the ${await nameOf('todo', a.id)} complete (${String(completedDate).slice(0, 10)}).` };
       }],
       ['autotask_delete_company_todo', async (a) => {
+        const todoName = await nameOf('todo', a.id);
         await s.deleteCompanyToDo(a.id, a.companyID);
-        return { result: a.id, message: `Successfully deleted Company To-Do ${a.id}` };
+        return { result: a.id, message: `Deleted the ${todoName}.` };
       }],
 
 
@@ -2556,7 +2642,7 @@ export class AutotaskToolHandler {
       ['autotask_get_time_entry_targets', async (a) => {
         if (a.resourceID == null) return { result: null, message: 'resourceID is required (whose targets to list).' };
         const r = await s.getTimeEntryTargets({ resourceID: a.resourceID, companyID: a.companyID, projectID: a.projectID, searchTerm: a.searchTerm, maxRecords: a.maxRecords });
-        return { result: r, message: `Targets for resource ${a.resourceID}: ${r.counts.tasks} open task(s), ${r.counts.tickets} open ticket(s)` };
+        return { result: r, message: `Targets for ${await nameOf('resource', a.resourceID)}: ${r.counts.tasks} open task(s), ${r.counts.tickets} open ticket(s)` };
       }],
       ['autotask_list_regular_time_categories', async () => {
         const r = await s.getRegularTimeCategories();
@@ -2599,7 +2685,7 @@ export class AutotaskToolHandler {
       }],
       ['autotask_get_appointment', async (a) => {
         const r = await s.getAppointment(a.id, a.timeZone);
-        return { result: r, message: r ? `Appointment ${a.id}: ${r.title ?? ''} ${r.startLocal ?? ''}–${r.endLocal ?? ''} (${r.timeZone})` : `Appointment ${a.id} not found` };
+        return { result: r, message: r ? `Appointment "${r.title ?? 'untitled'}" ${r.startLocal ?? ''}–${r.endLocal ?? ''} (${r.timeZone})` : `Appointment ${a.id} not found` };
       }],
       ['autotask_search_appointments', async (a) => {
         const r = await s.searchAppointments({ resourceIDs: a.resourceIDs, from: a.from, to: a.to, date: a.date, days: a.days, timeZone: a.timeZone, titleContains: a.titleContains, pageSize: a.pageSize, page: a.page });
@@ -2620,7 +2706,7 @@ export class AutotaskToolHandler {
         const { id, ...rest } = a;
         const r = await s.updateAppointment(id, rest);
         const msg: Record<string, string> = {
-          updated: `Updated appointment ${id}: ${Object.keys(r.changes ?? {}).join(', ')} → ${r.after?.startLocal}–${r.after?.endLocal} (${r.after?.timeZone})`,
+          updated: `Updated appointment "${r.after?.title ?? r.before?.title ?? 'untitled'}": ${Object.keys(r.changes ?? {}).join(', ')} → ${r.after?.startLocal}–${r.after?.endLocal} (${r.after?.timeZone})`,
           unchanged: r.message, conflict: r.message, not_found: `Appointment ${id} not found — nothing changed`,
           planned: `Plan only (dryRun): would change ${Object.keys(r.changes ?? {}).join(', ')}`, invalid: `Not changed: ${r.error}`,
         };
@@ -2628,7 +2714,7 @@ export class AutotaskToolHandler {
       }],
       ['autotask_delete_appointment', async (a) => {
         const r = await s.deleteAppointment(a.id, a.timeZone);
-        return { result: r, message: r.status === 'deleted' ? `Deleted appointment ${a.id}: ${r.deleted?.title ?? ''} ${r.deleted?.startLocal ?? ''}–${r.deleted?.endLocal ?? ''}` : `Appointment ${a.id} not found — nothing deleted` };
+        return { result: r, message: r.status === 'deleted' ? `Deleted appointment "${r.deleted?.title ?? 'untitled'}" ${r.deleted?.startLocal ?? ''}–${r.deleted?.endLocal ?? ''}` : `Appointment ${a.id} not found — nothing deleted` };
       }],
       ['autotask_get_resource_availability', async (a) => {
         const r = await s.getResourceAvailability({ resourceIDs: a.resourceIDs, date: a.date, days: a.days, timeZone: a.timeZone, workdayStart: a.workdayStart, workdayEnd: a.workdayEnd, minMinutes: a.minMinutes, includeWeekends: a.includeWeekends, includeServiceCalls: a.includeServiceCalls });
@@ -2750,7 +2836,7 @@ export class AutotaskToolHandler {
           const entry = time;
           const written = await explainTimeEntryWrite(() => s.logTimeIdempotent(entry));
           if ('stop' in written) {
-            return { result: { status: 'partial', ...planned, done, timeError: written.stop.result }, message: `${tn}: note ${note.created ? `posted (${note.noteId})` : `already posted (${note.noteId})`}, but the time entry was NOT logged — ${written.stop.message}${plan.status ? ' Status left unchanged.' : ''}` };
+            return { result: { status: 'partial', ...planned, done, timeError: written.stop.result }, message: `${tn}: note ${note.created ? 'posted' : 'already posted'}, but the time entry was NOT logged — ${written.stop.message}${plan.status ? ' Status left unchanged.' : ''}` };
           }
           done.time = written.ok;
         }
@@ -2759,8 +2845,8 @@ export class AutotaskToolHandler {
           done.status = { to: plan.status.value, label: plan.status.label };
         }
         const bits = [
-          note.created ? `${visibility} note ${note.noteId} posted` : `note already posted (${note.noteId}) — not duplicated`,
-          ...(done.time ? [done.time.created ? `time entry ${done.time.id} logged${workTypeBit(updateWorkType)}` : `time entry already logged (${done.time.duplicateOf})`] : []),
+          note.created ? `${visibility} note posted` : 'note already posted — not duplicated',
+          ...(done.time ? [done.time.created ? `${hoursText(time?.hoursWorked)} logged${workTypeBit(updateWorkType)}` : 'time already logged — not duplicated'] : []),
           ...(done.status ? [`status → ${done.status.label}`] : []),
         ];
         return { result: { status: 'updated', ...planned, done }, message: `${tn}: ${bits.join('; ')}.` };
@@ -2821,7 +2907,7 @@ export class AutotaskToolHandler {
       }],
       ['autotask_get_project_structure', async (a) => {
         const r = await s.getProjectStructure(a.projectID);
-        return { result: r, message: `Project ${a.projectID}: ${r.summary.phaseCount} phase(s), ${r.summary.taskCount} task(s), depth ${r.summary.maxPhaseDepth}` };
+        return { result: r, message: `${await nameOf('project', a.projectID, { bare: true })}: ${r.summary.phaseCount} phase(s), ${r.summary.taskCount} task(s), depth ${r.summary.maxPhaseDepth}` };
       }],
       ['autotask_get_complete_project_context', async (a) => {
         const r = await s.getCompleteProjectContext(a.projectID, {
@@ -2830,11 +2916,11 @@ export class AutotaskToolHandler {
         });
         if (!r.found) return { result: r, message: r.message };
         const errs = r.errors?.length ? `, ${r.errors.length} section error(s)` : '';
-        return { result: r, message: `Project ${a.projectID} context: ${r.summary.phaseCount} phase(s), ${r.summary.taskCount} task(s), ${r.summary.dependencyCount} dependency(ies), ${r.summary.milestoneCount} milestone(s)${errs}` };
+        return { result: r, message: `${await nameOf('project', a.projectID, { bare: true })} context: ${r.summary.phaseCount} phase(s), ${r.summary.taskCount} task(s), ${r.summary.dependencyCount} dependency(ies), ${r.summary.milestoneCount} milestone(s)${errs}` };
       }],
       ['autotask_get_project_labor_summary', async (a) => {
         const r = await s.getProjectLaborSummary(a.projectID);
-        return { result: r, message: `Project ${a.projectID} labor: ${r.actualHours}h actual vs ${r.estimatedHours}h estimated (variance ${r.variance}h), ${r.billableHours}h billable` };
+        return { result: r, message: `${await nameOf('project', a.projectID, { bare: true })} labor: ${r.actualHours}h actual vs ${r.estimatedHours}h estimated (variance ${r.variance}h), ${r.billableHours}h billable` };
       }],
       ['autotask_export_project_blueprint', async (a) => {
         const r = await s.exportProjectBlueprint(a.projectID);
@@ -2897,7 +2983,7 @@ export class AutotaskToolHandler {
       ['autotask_get_webhook', async (a) => {
         const r = await s.getWebhook(a.entity, a.id);
         if (!r) return { result: null, message: `Webhook ${a.id} not found on ${a.entity}` };
-        return { result: r, message: `Webhook ${a.id} on ${r.entity}: ${(r.fields as any[]).length} field(s), ${(r.excludedResources as any[]).length} excluded resource(s)` };
+        return { result: r, message: `Webhook "${(r as Record<string, any>).name ?? a.id}" on ${r.entity}: ${(r.fields as any[]).length} field(s), ${(r.excludedResources as any[]).length} excluded resource(s)` };
       }],
       ['autotask_create_webhook', async (a) => {
         const r = await s.createWebhook(a.entity, {
@@ -2908,11 +2994,12 @@ export class AutotaskToolHandler {
           fields: a.fields, udfFields: a.udfFields, excludedResourceIDs: a.excludedResourceIDs, excludeSelf: a.excludeSelf, dryRun: a.dryRun,
         });
         const ex = (r.plannedExcludedResources ?? r.excludedResources) as Array<{ resourceID: number; reason: string }> | undefined;
-        const exText = ex?.length ? ` — excluded resources: ${ex.map((e) => `${e.resourceID} (${e.reason})`).join(', ')}` : ` — NO excluded resources (the MCP's own writes WILL fire it)`;
+        const exNames = ex?.length ? await s.getResourceNames(ex.map((e) => Number(e.resourceID))).catch(() => new Map<number, string>()) : new Map<number, string>();
+        const exText = ex?.length ? ` — excluded resources: ${ex.map((e) => `${exNames.get(Number(e.resourceID)) ?? e.resourceID} (${e.reason})`).join(', ')}` : ` — NO excluded resources (the MCP's own writes WILL fire it)`;
         const warn = (r.warnings as string[] | undefined)?.length ? ` WARNING: ${(r.warnings as string[]).join(' ')}` : '';
         const msg = r.status === 'dry_run' ? `Dry run: would create a ${a.entity} webhook → ${a.webhookUrl} with ${(r.plannedFields as unknown[])?.length ?? 0} field(s), ${(r.plannedUdfFields as unknown[])?.length ?? 0} UDF field(s)${exText}; secret from ${a.secretKey ? 'the argument (hidden)' : 'AUTOTASK_WEBHOOK_SECRET'}; nothing written.${warn}`
           : r.status === 'validation_failed' ? `Validation failed: ${JSON.stringify(r.errors ?? r.detail)}`
-          : `Created ${a.entity} webhook ${r.webhookID}` + ((r.errors as any[])?.length ? ` with ${(r.errors as any[]).length} child error(s)` : '');
+          : `Created ${a.entity} webhook "${a.name ?? r.webhookID}"` + ((r.errors as any[])?.length ? ` with ${(r.errors as any[]).length} child error(s)` : '');
         // The receiver must verify X-Hook-Signature; point the builder of the
         // n8n flow at the tested snippet rather than a hand-rolled HMAC.
         const guide = r.status === 'validation_failed' ? '' : ` Receiver: verify the signature with the n8n Code node in ${N8N_RECEIVER_GUIDE}.`;
@@ -2938,7 +3025,7 @@ export class AutotaskToolHandler {
         const r = await s.setWebhookExcludedResources(a.entity, a.webhookID, a.resourceIDs, a.mode, a.dryRun);
         const msg = r.status === 'dry_run' ? `Dry run (${a.mode ?? 'add'}): would add ${(r.wouldAddResourceIDs as any[])?.length ?? 0}, remove ${(r.wouldRemoveRowIDs as any[])?.length ?? 0} excluded resource(s) on webhook ${a.webhookID}; nothing written`
           : r.status === 'validation_failed' ? `Validation failed: ${typeof r.detail === 'string' ? r.detail : JSON.stringify(r.detail)}`
-          : `Excluded resources on webhook ${a.webhookID}: +${r.added}/-${r.removed}`;
+          : `Excluded resources on the webhook: +${r.added}/-${r.removed}`;
         return { result: r, message: msg };
       }],
       ['autotask_calculate_bom_labor', async (a) => {
@@ -3009,16 +3096,16 @@ export class AutotaskToolHandler {
         const department = rest.department ?? rest.departmentID;
         if (department !== undefined) updates.department = department;
         await s.updateProject(projectId, updates);
-        return { result: undefined, message: `Successfully updated project ID: ${projectId}` };
+        return { result: undefined, message: `Updated ${await nameOf('project', projectId)}.` };
       }],
       ['autotask_create_configuration_item', async (a) => {
         const id = await s.createConfigurationItem(a);
-        return { result: id, message: `Successfully created configuration item with ID: ${id}` };
+        return { result: id, message: `Created configuration item "${a.referenceTitle ?? a.referenceNumber ?? a.serialNumber ?? id}"${a.companyID != null ? ` for ${await nameOf('company', a.companyID)}` : ''}.` };
       }],
       ['autotask_update_configuration_item', async (a) => {
         const { id, ...updates } = a;
         await s.updateConfigurationItem(id, updates);
-        return { result: id, message: `Successfully updated configuration item ${id}` };
+        return { result: id, message: `Updated ${await nameOf('ci', id)}.` };
       }],
       ['autotask_link_project_commercial', async (a) => {
         const r = await s.linkProjectCommercial(a);
@@ -3076,8 +3163,8 @@ export class AutotaskToolHandler {
       }],
       ['autotask_get_resource_roles', async (a) => {
         const r = await s.getResourceRoles(a.resourceID);
-        const summary = r.map((x) => `${x.roleID}=${x.roleExists === false ? '(hidden system role — not for time entry)' : (x.roleName ?? '?')}${x.departmentName ? ` [${x.departmentName}]` : ''}${x.isDefaultServiceDeskRole ? ' (default)' : ''}`).join('; ');
-        return { result: r, message: `Resource ${a.resourceID} has ${r.length} role association(s): ${summary}` };
+        const summary = r.map((x) => `${x.roleExists === false ? '(hidden system role — not for time entry)' : (x.roleName ?? '?')}${x.departmentName ? ` [${x.departmentName}]` : ''}${x.isDefaultServiceDeskRole ? ' (default)' : ''}`).join('; ');
+        return { result: r, message: `${await nameOf('resource', a.resourceID)} has ${r.length} role association(s): ${summary}` };
       }],
       ['autotask_report_resource_burden', async (a) => {
         const r = await s.reportResourceBurden({ includeInactive: a.includeInactive, includeApiUsers: a.includeApiUsers, resourceType: a.resourceType, resourceIDs: a.resourceIDs });
@@ -3093,14 +3180,14 @@ export class AutotaskToolHandler {
         if (!ci) return { result: null, message: `No configuration item found with ID ${a.configurationItemId}` };
         if (a.enrichReferences) {
           const _enriched = await s.enrichConfigurationItemReferences(ci);
-          return { result: { ...ci, _enriched }, message: `Retrieved configuration item ${a.configurationItemId} (enriched)` };
+          return { result: { ...ci, _enriched }, message: `${await nameOf('ci', a.configurationItemId, { record: ci as Record<string, any> })}${(ci as Record<string, any>).companyID != null ? ` at ${await nameOf('company', (ci as Record<string, any>).companyID)}` : ''} (enriched)` };
         }
-        return { result: ci, message: `Retrieved configuration item ${a.configurationItemId}` };
+        return { result: ci, message: `${await nameOf('ci', a.configurationItemId, { record: ci as Record<string, any> })}${(ci as Record<string, any>).companyID != null ? ` at ${await nameOf('company', (ci as Record<string, any>).companyID)}` : ''}` };
       }],
       ['autotask_get_configuration_item_entitlement', async (a) => {
         const r = await s.getConfigurationItemEntitlement(a.configurationItemId);
         const msg = !r.found ? `Configuration item ${a.configurationItemId} not found`
-          : `CI ${a.configurationItemId}: ${r.isEntitled ? 'entitled' : 'not entitled'} (${r.reason})`;
+          : `${await nameOf('ci', a.configurationItemId)}: ${r.isEntitled ? 'entitled' : 'not entitled'} (${r.reason})`;
         return { result: r, message: msg };
       }],
       ['autotask_search_configuration_item_coverage_gaps', async (a) => {
@@ -3140,7 +3227,7 @@ export class AutotaskToolHandler {
         const excluded = t.excludedRoleHours + t.excludedWorkTypeHours;
         const block = t.allocated != null ? `; ${t.drawn} of ${t.allocated} block hour(s) drawn, ${t.overage} over, ${t.forfeited} forfeited` : '';
         const fc = f && f.allocated ? `. ${f.month} forecast: ${f.projectedDrawn} of ${f.allocated} (${f.status})` : '';
-        return { result: r, message: `Contract ${a.contractID} ${r.window.from}..${r.window.to}: ${t.coveredHours} h covered, ${Math.round(excluded * 100) / 100} h excluded, ${t.nonBillableHours} h non-billable${block}${fc}${r.truncated ? ' — TRUNCATED, narrow the window' : ''}` };
+        return { result: r, message: `${await nameOf('contract', a.contractID)} ${r.window.from}..${r.window.to}: ${t.coveredHours} h covered, ${Math.round(excluded * 100) / 100} h excluded, ${t.nonBillableHours} h non-billable${block}${fc}${r.truncated ? ' — TRUNCATED, narrow the window' : ''}` };
       }],
       ['autotask_report_block_hour_usage', async (a) => {
         const r = await s.getBlockHourUsage({ contractID: a.contractID, companyID: a.companyID, includeInactive: a.includeInactive });
@@ -3304,22 +3391,22 @@ export class AutotaskToolHandler {
         return { result: r, message: `Created ${ok}/${r.length} contracts` };
       }],
       ['autotask_create_contract', async (a) => {
-        const id = await s.createContract(a); return { result: id, message: `Successfully created contract with ID: ${id}` };
+        const id = await s.createContract(a); return { result: id, message: `Created contract "${a.contractName ?? id}"${a.companyID != null ? ` for ${await nameOf('company', a.companyID)}` : ''}.` };
       }],
       ['autotask_update_contract', async (a) => {
         const { id, ...rest } = a;
-        await s.updateContract(id, rest); return { result: undefined, message: `Successfully updated contract ID: ${id}` };
+        await s.updateContract(id, rest); return { result: undefined, message: `Updated ${await nameOf('contract', id)}.` };
       }],
       ['autotask_create_contract_service', async (a) => {
-        const id = await s.createContractService(a); return { result: id, message: `Successfully created contract service with ID: ${id}` };
+        const id = await s.createContractService(a); return { result: id, message: `Added ${a.invoiceDescription ? `"${a.invoiceDescription}"` : 'the service'} to ${await nameOf('contract', a.contractID)}.` };
       }],
       ['autotask_update_contract_service', async (a) => {
         const { id, ...rest } = a;
-        await s.updateContractService(id, rest); return { result: undefined, message: `Successfully updated contract service ID: ${id}` };
+        await s.updateContractService(id, rest); return { result: undefined, message: `Updated ${await nameOf('contractService', id)}.` };
       }],
       ['autotask_get_contract_service', async (a) => {
         const r = await s.getContractService(a.id);
-        return { result: r, message: r ? `Retrieved contract service ${a.id}` : `Contract service ${a.id} not found` };
+        return { result: r, message: r ? `${await nameOf('contractService', a.id, { record: r })} on ${await nameOf('contract', r.contractID)}` : `Contract service ${a.id} not found` };
       }],
       ['autotask_search_contract_services', async (a) => {
         const r = await s.searchContractServices({ contractID: a.contractID, serviceID: a.serviceID, quoteItemID: a.quoteItemID, pageSize: a.pageSize });
@@ -3343,18 +3430,18 @@ export class AutotaskToolHandler {
         return { result: r, message: `${r.count} contract(s): ${b.billed} billed, ${b.block} block, ${b.absorbed} absorbed, ${b.umbrella} umbrella, ${b.unknown} unknown.` };
       }],
       ['autotask_get_contract_milestone', async (a) => {
-        const r = await s.getContractMilestone(a.id); return { result: r, message: r ? `Contract milestone ${a.id}` : `Contract milestone ${a.id} not found` };
+        const r = await s.getContractMilestone(a.id); return { result: r, message: r ? `${await nameOf('contractMilestone', a.id, { record: r })} on ${await nameOf('contract', r.contractID)}` : `Contract milestone ${a.id} not found` };
       }],
       ['autotask_search_contract_milestones', async (a) => {
         const r = await s.searchContractMilestones({ contractID: a.contractID, status: a.status, pageSize: a.pageSize });
         return { result: r, message: `Found ${r.length} contract milestone(s)` };
       }],
       ['autotask_create_contract_milestone', async (a) => {
-        const id = await s.createContractMilestone(a); return { result: id, message: `Successfully created contract milestone with ID: ${id}` };
+        const id = await s.createContractMilestone(a); return { result: id, message: `Added milestone "${a.title ?? id}" to ${await nameOf('contract', a.contractID)}.` };
       }],
       ['autotask_update_contract_milestone', async (a) => {
         const { id, ...rest } = a;
-        await s.updateContractMilestone(id, rest); return { result: undefined, message: `Successfully updated contract milestone ${id}` };
+        await s.updateContractMilestone(id, rest); return { result: undefined, message: `Updated ${await nameOf('contractMilestone', id)}.` };
       }],
 
       ['autotask_list_contract_terms', async (a) => {
@@ -3362,7 +3449,7 @@ export class AutotaskToolHandler {
         const r = await s.listContractTerms(Number(a.contractID), kinds);
         if (r.status === 'not_found') return { result: r, message: `Contract ${a.contractID} not found` };
         const parts = Object.entries(r.counts as Record<string, number>).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k}`);
-        return { result: r, message: `Contract ${a.contractID} (${r.contract.contractTypeLabel ?? 'type ' + r.contract.contractType}): ${parts.length ? parts.join(', ') : 'no terms'}${r.errors ? ` — ${r.errors.length} kind(s) could not be read` : ''}` };
+        return { result: r, message: `${await nameOf('contract', a.contractID, { record: r.contract as Record<string, any> })} (${r.contract.contractTypeLabel ?? 'type ' + r.contract.contractType}): ${parts.length ? parts.join(', ') : 'no terms'}${r.errors ? ` — ${r.errors.length} kind(s) could not be read` : ''}` };
       }],
       ...(['create', 'update', 'delete'] as const).map((op) => [`autotask_${op}_contract_term`, async (a: any) => {
         const r = await s.writeContractTerm({ op, kind: a.kind, contractID: a.contractID, id: a.id, fields: a.fields, dryRun: a.dryRun, allowDuplicate: a.allowDuplicate === true });
@@ -3394,7 +3481,7 @@ export class AutotaskToolHandler {
         const r = await s.getInvoiceDetails(a.invoiceId);
         const count = r?.lineItems?.length ?? 0;
         const tix = r?.linkedTicketIDs?.length ?? 0;
-        return { result: r, message: r ? `Invoice ${a.invoiceId}: ${count} line item(s), ${tix} linked ticket(s)` : `Invoice ${a.invoiceId} not found` };
+        return { result: r, message: r ? `Invoice ${await nameOf('invoice', a.invoiceId, { bare: true })}: ${count} line item(s), ${tix} linked ticket(s)` : `Invoice ${a.invoiceId} not found` };
       }],
 
       // Tasks
@@ -3434,8 +3521,8 @@ export class AutotaskToolHandler {
         if (!a.dateWorked) return { result: null, message: 'dateWorked (YYYY-MM-DD) is required.' };
         const r = await s.verifyTaskTimeEntries(a.taskID, a.dateWorked, a.expectedResourceIDs);
         const msg = a.expectedResourceIDs?.length
-          ? `Task ${a.taskID} (${a.dateWorked}): ${r.found}/${r.expected} expected present, ${r.missingResourceIDs.length} missing, ${r.duplicateResourceIDs.length} duplicate`
-          : `Task ${a.taskID} (${a.dateWorked}): ${r.entries.length} entr(ies) across ${r.found} resource(s)`;
+          ? `${(await taskRef(a.taskID)).label} (${a.dateWorked}): ${r.found}/${r.expected} expected present, ${r.missingResourceIDs.length} missing, ${r.duplicateResourceIDs.length} duplicate`
+          : `${(await taskRef(a.taskID)).label} (${a.dateWorked}): ${r.entries.length} entr(ies) across ${r.found} resource(s)`;
         return { result: r, message: msg };
       }],
       ['autotask_close_meeting_task', async (a) => {
@@ -3464,32 +3551,32 @@ export class AutotaskToolHandler {
         return { result: r, message: msg };
       }],
       ['autotask_list_task_resources', async (a) => {
-        const r = await s.listTaskResources(a.taskID); return { result: r, message: `${r.length} secondary resource(s) on task ${a.taskID}` };
+        const r = await s.listTaskResources(a.taskID); return { result: r, message: `${r.length} secondary resource(s) on ${(await taskRef(a.taskID)).label}${r.length ? `: ${(await Promise.all((r as Array<Record<string, any>>).slice(0, 10).map((x) => nameOf('resource', x.resourceID)))).join(', ')}` : ''}` };
       }],
       ['autotask_add_task_resource', async (a) => {
-        const id = await s.addTaskResource(a.taskID, a.resourceID, a.roleID); return { result: id, message: `Added resource ${a.resourceID} to task ${a.taskID} (row ${id})` };
+        const id = await s.addTaskResource(a.taskID, a.resourceID, a.roleID); return { result: id, message: `Added ${await nameOf('resource', a.resourceID)} to ${(await taskRef(a.taskID)).label}.` };
       }],
       ['autotask_remove_task_resource', async (a) => {
-        await s.removeTaskResource(a.id); return { result: undefined, message: `Removed task resource row ${a.id}` };
+        await s.removeTaskResource(a.id); return { result: undefined, message: 'Removed the secondary resource from the task.' };
       }],
       ['autotask_list_task_predecessors', async (a) => {
-        const r = await s.listTaskPredecessors(a.taskID); return { result: r, message: `${r.length} predecessor(s) for task ${a.taskID}` };
+        const r = await s.listTaskPredecessors(a.taskID); return { result: r, message: `${r.length} predecessor(s) for ${(await taskRef(a.taskID)).label}${r.length ? `: ${(await Promise.all((r as Array<Record<string, any>>).slice(0, 10).map(async (x) => (await taskRef(x.predecessorTaskID)).title ?? `task ${x.predecessorTaskID}`))).join(', ')}` : ''}` };
       }],
       ['autotask_add_task_predecessor', async (a) => {
-        const id = await s.addTaskPredecessor(a.successorTaskID, a.predecessorTaskID, a.lagDays); return { result: id, message: `Task ${a.predecessorTaskID} → ${a.successorTaskID} (row ${id})` };
+        const id = await s.addTaskPredecessor(a.successorTaskID, a.predecessorTaskID, a.lagDays); return { result: id, message: `${(await taskRef(a.predecessorTaskID)).label} now comes before ${(await taskRef(a.successorTaskID)).label}${a.lagDays ? ` (${a.lagDays} day lag)` : ''}.` };
       }],
       ['autotask_remove_task_predecessor', async (a) => {
-        await s.removeTaskPredecessor(a.id); return { result: undefined, message: `Removed task predecessor row ${a.id}` };
+        await s.removeTaskPredecessor(a.id); return { result: undefined, message: 'Removed the task dependency.' };
       }],
       ['autotask_get_task_predecessor', async (a) => {
-        const r = await s.getTaskPredecessor(a.id); return { result: r, message: r ? `Task predecessor row ${a.id}` : `Task predecessor row ${a.id} not found` };
+        const r = await s.getTaskPredecessor(a.id); return { result: r, message: r ? `${(await taskRef((r as Record<string, any>).predecessorTaskID)).label} comes before ${(await taskRef((r as Record<string, any>).successorTaskID)).label}${(r as Record<string, any>).lagDays ? ` (${(r as Record<string, any>).lagDays} day lag)` : ''}` : `Task dependency ${a.id} not found` };
       }],
       ['autotask_search_task_predecessors', async (a) => {
         const r = await s.searchTaskPredecessors({ successorTaskID: a.successorTaskID, predecessorTaskID: a.predecessorTaskID, pageSize: a.pageSize });
         return { result: r, message: `Found ${r.length} task predecessor row(s)` };
       }],
       ['autotask_update_task_predecessor', async (a) => {
-        await s.updateTaskPredecessor(a.id, a.lagDays); return { result: undefined, message: `Updated task predecessor row ${a.id} (lagDays=${a.lagDays})` };
+        await s.updateTaskPredecessor(a.id, a.lagDays); return { result: undefined, message: `Set the task dependency's lag to ${a.lagDays} day(s).` };
       }],
 
       // Phases
@@ -3497,13 +3584,13 @@ export class AutotaskToolHandler {
         return paged(await s.searchPhases(a.projectID, { page: a.page, pageSize: a.pageSize }), 'phases');
       }],
       ['autotask_create_phase', async (a) => {
-        const id = await s.createPhase(a); return { result: id, message: `Successfully created phase with ID: ${id}` };
+        const id = await s.createPhase(a); return { result: id, message: `Created phase "${a.title ?? id}"${a.projectID != null ? ` on ${await nameOf('project', a.projectID)}` : ''}.` };
       }],
       ['autotask_get_phase', async (a) => {
-        const r = await s.getPhase(a.id); return { result: r, message: r ? `Phase ${a.id}` : `Phase ${a.id} not found` };
+        const r = await s.getPhase(a.id); return { result: r, message: r ? `${await nameOf('phase', a.id, { record: r as unknown as Record<string, any> })}${(r as unknown as Record<string, any>).projectID != null ? ` on ${await nameOf('project', (r as unknown as Record<string, any>).projectID)}` : ''}` : `Phase ${a.id} not found` };
       }],
       ['autotask_update_phase', async (a) => {
-        const { id, ...rest } = a; await s.updatePhase(id, rest); return { result: undefined, message: `Successfully updated phase ${id}` };
+        const { id, ...rest } = a; await s.updatePhase(id, rest); return { result: undefined, message: `Updated ${await nameOf('phase', id)}.` };
       }],
 
       // Notes (ticket/project/company)
@@ -3557,7 +3644,7 @@ export class AutotaskToolHandler {
             result: r,
             message: r.created
               ? `Added a note to ${(await ticketRef(a.ticketId)).label}`
-              : `Ticket note already exists for key "${a.idempotencyKey}" (ID: ${r.noteId}) — not duplicated`
+              : `That note is already on ${(await ticketRef(a.ticketId)).label} — not duplicated`
           };
         }
         const id = await s.createTicketNote(a.ticketId, noteBody);
@@ -3574,7 +3661,7 @@ export class AutotaskToolHandler {
           position: a.position,
           isCompleted: a.isCompleted
         });
-        return { result: id, message: `Successfully created ticket checklist item with ID: ${id}` };
+        return { result: id, message: `Added checklist item "${a.itemName ?? id}" to ${(await ticketRef(a.ticketID ?? a.ticketId)).label}.` };
       }],
       ['autotask_update_ticket_checklist_item', async (a) => {
         await s.updateTicketChecklistItem(a.ticketId, a.itemId, {
@@ -3582,11 +3669,11 @@ export class AutotaskToolHandler {
           isCompleted: a.isCompleted,
           position: a.position
         });
-        return { result: a.itemId, message: `Successfully updated ticket checklist item ${a.itemId}` };
+        return { result: a.itemId, message: `Updated checklist item${a.itemName ? ` "${a.itemName}"` : ''}${a.isCompleted === true ? ' — done' : ''} on ${(await ticketRef(a.ticketId ?? a.ticketID)).label}.` };
       }],
       ['autotask_delete_ticket_checklist_item', async (a) => {
         await s.deleteTicketChecklistItem(a.ticketId, a.itemId);
-        return { result: a.itemId, message: `Successfully deleted ticket checklist item ${a.itemId}` };
+        return { result: a.itemId, message: `Removed the checklist item from ${(await ticketRef(a.ticketId ?? a.ticketID)).label}.` };
       }],
 
       // Checklist Libraries (§10)
@@ -3597,12 +3684,12 @@ export class AutotaskToolHandler {
       ['autotask_get_checklist_library', async (a) => {
         const r = await s.getChecklistLibrary(a.id);
         if (!r) return { result: null, message: `No checklist library found with ID ${a.id}` };
-        return { result: r, message: `Retrieved checklist library ${a.id} with ${(r.items as any[])?.length ?? 0} item(s)` };
+        return { result: r, message: `Checklist library "${r.name ?? a.id}" with ${(r.items as any[])?.length ?? 0} item(s)` };
       }],
       ['autotask_apply_checklist_library_to_ticket', async (a) => {
         const r = await s.applyChecklistLibraryToTicket(a.ticketID, a.checklistLibraryID);
         const failed = r.itemErrors.length;
-        return { result: r, message: `Applied checklist library ${a.checklistLibraryID} to ticket ${a.ticketID}: created ${r.created.length} item(s)` + (failed ? `, ${failed} failed` : '') };
+        return { result: r, message: `Applied ${await nameOf('checklistLibrary', a.checklistLibraryID)} to ${(await ticketRef(a.ticketID)).label}: created ${r.created.length} item(s)` + (failed ? `, ${failed} failed` : '') };
       }],
 
       ['autotask_get_project_note', async (a) => {
@@ -3613,10 +3700,10 @@ export class AutotaskToolHandler {
       }],
       ['autotask_create_project_note', async (a) => {
         const id = await s.createProjectNote(a.projectId, { title: a.title, description: a.description, noteType: a.noteType, publish: a.publish ?? 1, isAnnouncement: a.isAnnouncement ?? false });
-        return { result: id, message: `Successfully created project note with ID: ${id}` };
+        return { result: id, message: `Added a note to ${await nameOf('project', a.projectId ?? a.projectID)}.` };
       }],
       ['autotask_get_task_note', async (a) => {
-        const r = await s.getTaskNote(a.taskId, a.noteId); return { result: r, message: r ? `Task note ${a.noteId}` : `Task note ${a.noteId} not found` };
+        const r = await s.getTaskNote(a.taskId, a.noteId); return { result: r, message: r ? `Note${(r as Record<string, any>).title ? ` "${(r as Record<string, any>).title}"` : ''} on ${(await taskRef(a.taskId)).label}${(r as Record<string, any>).createDateTime ? `, ${String((r as Record<string, any>).createDateTime).slice(0, 10)}` : ''}` : `That note was not found on ${(await taskRef(a.taskId)).label}` };
       }],
       ['autotask_search_task_notes', async (a) => {
         const r = await s.searchTaskNotes(a.taskId, { pageSize: a.pageSize }); return { result: r, message: `Found ${r.length} task notes` };
@@ -3643,7 +3730,7 @@ export class AutotaskToolHandler {
       }],
       ['autotask_create_company_note', async (a) => {
         const id = await s.createCompanyNote(a.companyId, { title: a.title, description: a.description, actionType: a.actionType });
-        return { result: id, message: `Successfully created company note with ID: ${id}` };
+        return { result: id, message: `Added a note to ${await nameOf('company', a.companyId ?? a.companyID)}.` };
       }],
 
       // Attachments
@@ -3652,7 +3739,7 @@ export class AutotaskToolHandler {
           includeData: a.includeData,
           maxInlineBase64Bytes: a.maxInlineBase64Bytes,
         });
-        if (!r) return { result: null, message: `No ticket attachment found with ID ${a.attachmentId} on ticket ${a.ticketId}` };
+        if (!r) return { result: null, message: `That attachment was not found on ${(await ticketRef(a.ticketId)).label}` };
         const message = r.dataOmittedReason
           ? `Ticket attachment retrieved (data omitted: oversized for inline transport)`
           : 'Ticket attachment retrieved successfully';
@@ -3676,14 +3763,14 @@ export class AutotaskToolHandler {
           contentType: a.contentType,
           publish: a.publish ?? 1
         });
-        return { result: id, message: `Successfully created ticket attachment with ID: ${id}` };
+        return { result: id, message: `Attached "${a.title ?? a.fullPath ?? 'the file'}" to ${(await ticketRef(a.ticketId ?? a.ticketID ?? a.parentId)).label}.` };
       }],
       ['autotask_get_project_attachment', async (a) => {
         const r = await s.getProjectAttachment(a.projectId, a.attachmentId, {
           includeData: a.includeData,
           maxInlineBase64Bytes: a.maxInlineBase64Bytes,
         });
-        if (!r) return { result: null, message: `No project attachment found with ID ${a.attachmentId} on project ${a.projectId}` };
+        if (!r) return { result: null, message: `That attachment was not found on ${await nameOf('project', a.projectId)}` };
         const message = r.dataOmittedReason
           ? 'Project attachment retrieved (data omitted: oversized for inline transport)'
           : 'Project attachment retrieved successfully';
@@ -3702,14 +3789,14 @@ export class AutotaskToolHandler {
           contentType: a.contentType,
           publish: a.publish ?? 1
         });
-        return { result: id, message: `Successfully created project attachment with ID: ${id}` };
+        return { result: id, message: `Attached "${a.title ?? a.fullPath ?? 'the file'}" to ${await nameOf('project', a.projectId ?? a.projectID ?? a.parentId)}.` };
       }],
       ['autotask_get_task_attachment', async (a) => {
         const r = await s.getTaskAttachment(a.taskId, a.attachmentId, {
           includeData: a.includeData,
           maxInlineBase64Bytes: a.maxInlineBase64Bytes,
         });
-        if (!r) return { result: null, message: `No task attachment found with ID ${a.attachmentId} on task ${a.taskId}` };
+        if (!r) return { result: null, message: `That attachment was not found on ${(await taskRef(a.taskId)).label}` };
         const message = r.dataOmittedReason
           ? 'Task attachment retrieved (data omitted: oversized for inline transport)'
           : 'Task attachment retrieved successfully';
@@ -3728,7 +3815,7 @@ export class AutotaskToolHandler {
           contentType: a.contentType,
           publish: a.publish ?? 1
         });
-        return { result: id, message: `Successfully created task attachment with ID: ${id}` };
+        return { result: id, message: `Attached "${a.title ?? a.fullPath ?? 'the file'}" to ${(await taskRef(a.taskId ?? a.taskID ?? a.parentId)).label}.` };
       }],
 
       // Expense Reports
@@ -3741,7 +3828,7 @@ export class AutotaskToolHandler {
       }],
       ['autotask_create_expense_report', async (a) => {
         const id = await s.createExpenseReport({ name: a.name, description: a.description, submitterID: a.submitterId, weekEnding: a.weekEndingDate || a.weekEnding });
-        return { result: id, message: `Successfully created expense report with ID: ${id}` };
+        return { result: id, message: `Created expense report "${a.name ?? id}"${a.submitterID != null ? ` for ${await nameOf('resource', a.submitterID)}` : ''}.` };
       }],
 
       // Expense Items
@@ -3751,7 +3838,7 @@ export class AutotaskToolHandler {
       }],
       ['autotask_create_expense_item', async (a) => {
         const id = await s.createExpenseItem({ expenseReportID: a.expenseReportId, description: a.description, expenseDate: a.expenseDate, expenseCategory: a.expenseCategory, expenseCurrencyExpenseAmount: a.amount, companyID: a.companyId ?? 0, haveReceipt: a.haveReceipt ?? false, isBillableToCompany: a.isBillableToCompany ?? false, isReimbursable: a.isReimbursable ?? true, paymentType: a.paymentType ?? 10 });
-        return { result: id, message: `Successfully created expense item with ID: ${id}` };
+        return { result: id, message: `Added expense "${a.description ?? id}"${a.expenseReportID != null ? ` to ${await nameOf('expenseReport', a.expenseReportID)}` : ''}.` };
       }],
 
       // Quotes
@@ -3793,7 +3880,7 @@ export class AutotaskToolHandler {
         }
 
         const id = await s.createQuote({ name: a.name, description: a.description, companyID: a.companyId, contactID: a.contactId, opportunityID: a.opportunityId, effectiveDate: a.effectiveDate, expirationDate: a.expirationDate });
-        return { result: id, message: `Successfully created quote with ID: ${id}` };
+        return { result: id, message: `Created quote "${a.name ?? id}"${(a.companyId ?? a.companyID) != null ? ` for ${await nameOf('company', a.companyId ?? a.companyID)}` : ''}.` };
       }],
 
       // Opportunities
@@ -3806,7 +3893,7 @@ export class AutotaskToolHandler {
       }],
       ['autotask_create_opportunity', async (a) => {
         const id = await s.createOpportunity({ title: a.title, companyID: a.companyId, ownerResourceID: a.ownerResourceId, status: a.status, stage: a.stage, projectedCloseDate: a.projectedCloseDate, startDate: a.startDate, probability: a.probability ?? 50, amount: a.amount ?? 0, cost: a.cost ?? 0, useQuoteTotals: a.useQuoteTotals ?? true, totalAmountMonths: a.totalAmountMonths, contactID: a.contactId, description: a.description, opportunityCategoryID: a.opportunityCategoryID });
-        return { result: id, message: `Successfully created opportunity with ID: ${id}` };
+        return { result: id, message: `Created opportunity "${a.title ?? id}"${(a.companyID ?? a.companyId) != null ? ` for ${await nameOf('company', a.companyID ?? a.companyId)}` : ''}.` };
       }],
       ['autotask_report_sales_cycle', async (a) => {
         const r = await s.reportSalesCycle({ opportunityID: a.opportunityId ?? a.opportunityID, companyID: a.companyId ?? a.companyID, createdSince: a.createdSince, maxOpportunities: a.maxOpportunities, includeUnlinked: a.includeUnlinked });
@@ -3854,7 +3941,7 @@ export class AutotaskToolHandler {
         }
         if (a.contactId !== undefined) updates.contactID = a.contactId;
         await s.updateOpportunity(a.opportunityId, updates);
-        return { result: a.opportunityId, message: `Successfully updated opportunity ${a.opportunityId}` };
+        return { result: a.opportunityId, message: `Updated ${await nameOf('opportunity', a.opportunityId)}.` };
       }],
 
       // Products
@@ -3898,10 +3985,10 @@ export class AutotaskToolHandler {
       }],
       // Product CRUD (full access)
       ['autotask_create_product', async (a) => {
-        const id = await s.createProduct(a); return { result: id, message: `Created product ${id}` };
+        const id = await s.createProduct(a); return { result: id, message: `Created product "${a.name ?? id}".` };
       }],
       ['autotask_update_product', async (a) => {
-        const { id, ...rest } = a; await s.updateProduct(id, rest); return { result: undefined, message: `Updated product ${id}` };
+        const { id, ...rest } = a; await s.updateProduct(id, rest); return { result: undefined, message: `Updated ${await nameOf('product', id)}.` };
       }],
       // Inventory products (stock at a location)
       ['autotask_search_inventory_products', async (a) => {
@@ -3909,13 +3996,15 @@ export class AutotaskToolHandler {
         return { result: r, message: `Found ${r.length} inventory-product record(s)` };
       }],
       ['autotask_get_inventory_product', async (a) => {
-        const r = await s.getInventoryProduct(a.id); return { result: r, message: r ? `Inventory product ${a.id}` : `Inventory product ${a.id} not found` };
+        const r = await s.getInventoryProduct(a.id); return { result: r, message: r ? `${await nameOf('product', r.productID, { bare: true })} at ${await nameOf('inventoryLocation', r.inventoryLocationID, { bare: true })}: ${r.onHandUnits ?? '?'} on hand, ${r.availableUnits ?? '?'} available` : `Inventory product ${a.id} not found` };
       }],
       ['autotask_create_inventory_product', async (a) => {
-        const id = await s.createInventoryProduct(a); return { result: id, message: `Created inventory-product ${id}` };
+        const id = await s.createInventoryProduct(a); return { result: id, message: `Now stocking ${await nameOf('product', a.productID, { bare: true })} at ${await nameOf('inventoryLocation', a.inventoryLocationID, { bare: true })} (min ${a.quantityMinimum}, max ${a.quantityMaximum}).` };
       }],
       ['autotask_update_inventory_product', async (a) => {
-        const { id, ...rest } = a; await s.updateInventoryProduct(id, rest); return { result: undefined, message: `Updated inventory-product ${id}` };
+        const { id, ...rest } = a; await s.updateInventoryProduct(id, rest);
+        const ip = await s.getInventoryProduct(id).catch(() => null);
+        return { result: undefined, message: ip ? `Updated stock settings for ${await nameOf('product', ip.productID, { bare: true })} at ${await nameOf('inventoryLocation', ip.inventoryLocationID, { bare: true })}.` : 'Updated the stock settings.' };
       }],
       // Inventory locations
       ['autotask_search_inventory_locations', async (a) => {
@@ -3923,13 +4012,13 @@ export class AutotaskToolHandler {
         return { result: r, message: `Found ${r.length} inventory location(s)` };
       }],
       ['autotask_get_inventory_location', async (a) => {
-        const r = await s.getInventoryLocation(a.id); return { result: r, message: r ? `Inventory location ${a.id}` : `Inventory location ${a.id} not found` };
+        const r = await s.getInventoryLocation(a.id); return { result: r, message: r ? `Stock location "${r.locationName ?? a.id}"${r.resourceID != null ? ` (${await nameOf('resource', r.resourceID)})` : ''}${r.isActive === false ? ', inactive' : ''}` : `Inventory location ${a.id} not found` };
       }],
       ['autotask_create_inventory_location', async (a) => {
-        const id = await s.createInventoryLocation(a); return { result: id, message: `Created inventory location ${id}` };
+        const id = await s.createInventoryLocation(a); return { result: id, message: `Created stock location "${a.locationName ?? id}"${a.resourceID != null ? ` for ${await nameOf('resource', a.resourceID)}` : ''}.` };
       }],
       ['autotask_update_inventory_location', async (a) => {
-        const { id, ...rest } = a; await s.updateInventoryLocation(id, rest); return { result: undefined, message: `Updated inventory location ${id}` };
+        const { id, ...rest } = a; await s.updateInventoryLocation(id, rest); return { result: undefined, message: `Updated ${await nameOf('inventoryLocation', id)}.` };
       }],
       // Stocked items (units / serials / counts)
       ['autotask_search_inventory_stocked_items', async (a) => {
@@ -3937,7 +4026,7 @@ export class AutotaskToolHandler {
         return { result: r, message: `Found ${r.length} stocked-item record(s)` };
       }],
       ['autotask_get_inventory_stocked_item', async (a) => {
-        const r = await s.getInventoryStockedItem(a.id); return { result: r, message: r ? `Stocked item ${a.id}` : `Stocked item ${a.id} not found` };
+        const r = await s.getInventoryStockedItem(a.id); return { result: r, message: r ? `Stocked item${r.serialNumber ? ` serial ${r.serialNumber}` : ''}: ${r.onHandUnits ?? '?'} on hand${r.currentInventoryLocationID != null ? ` at ${await nameOf('inventoryLocation', r.currentInventoryLocationID, { bare: true })}` : ''}` : `Stocked item ${a.id} not found` };
       }],
       // Transfers + count adjustments (inventory-movement: need confirm:true)
       ['autotask_search_inventory_transfers', async (a) => {
@@ -3945,13 +4034,13 @@ export class AutotaskToolHandler {
         return { result: r, message: `Found ${r.length} transfer(s)` };
       }],
       ['autotask_create_inventory_transfer', async (a) => {
-        const id = await s.createInventoryTransfer(a); return { result: id, message: `Created inventory transfer ${id} (${a.quantityTransferred} of product ${a.productID}: ${a.fromLocationID}→${a.toLocationID})` };
+        const id = await s.createInventoryTransfer(a); return { result: id, message: `Moved ${a.quantityTransferred} × ${await nameOf('product', a.productID, { bare: true })} from ${await nameOf('inventoryLocation', a.fromLocationID, { bare: true })} to ${await nameOf('inventoryLocation', a.toLocationID, { bare: true })}.` };
       }],
       ['autotask_add_inventory_stock', async (a) => {
-        const id = await s.addInventoryStock(a); return { result: id, message: `Added ${a.quantityBeingAdded} unit(s) to inventory-product ${a.inventoryProductID} (adjustment ${id})` };
+        const id = await s.addInventoryStock(a); return { result: id, message: `Added ${a.quantityBeingAdded} unit(s) of ${await stockName(a.inventoryProductID)}.` };
       }],
       ['autotask_remove_inventory_stock', async (a) => {
-        const id = await s.removeInventoryStock(a); return { result: id, message: `Removed ${a.quantityBeingRemoved} unit(s) from inventory-product ${a.inventoryProductID} (adjustment ${id})` };
+        const id = await s.removeInventoryStock(a); return { result: id, message: `Removed ${a.quantityBeingRemoved} unit(s) of ${a.inventoryProductID != null ? await stockName(a.inventoryProductID) : 'the stocked item'}.` };
       }],
 
       // Services
@@ -4029,14 +4118,15 @@ export class AutotaskToolHandler {
         }
 
         const id = await s.createQuoteItem({ quoteID: a.quoteId, name: a.name, description: a.description, quantity: a.quantity, unitPrice: a.unitPrice, unitCost: a.unitCost, unitDiscount: a.unitDiscount, lineDiscount: a.lineDiscount, percentageDiscount: a.percentageDiscount, isOptional: a.isOptional, serviceID: a.serviceID, productID: a.productID, serviceBundleID: a.serviceBundleID, sortOrderID: a.sortOrderID, quoteItemType: a.quoteItemType });
-        return { result: id, message: `Successfully created quote item with ID: ${id}` };
+        return { result: id, message: `Added "${a.name ?? 'the item'}"${a.quantity != null ? ` × ${a.quantity}` : ''} to ${await nameOf('quote', a.quoteId ?? a.quoteID)}.` };
       }],
       ['autotask_update_quote_item', async (a) => {
         await s.updateQuoteItem(a.quoteItemId, { quantity: a.quantity, unitPrice: a.unitPrice, unitDiscount: a.unitDiscount, lineDiscount: a.lineDiscount, percentageDiscount: a.percentageDiscount, isOptional: a.isOptional, sortOrderID: a.sortOrderID });
-        return { result: true, message: `Quote item ${a.quoteItemId} updated successfully` };
+        return { result: true, message: `Updated ${await nameOf('quoteItem', a.quoteItemId)}${a.quoteId != null ? ` on ${await nameOf('quote', a.quoteId)}` : ''}.` };
       }],
       ['autotask_delete_quote_item', async (a) => {
-        await s.deleteQuoteItem(a.quoteId, a.quoteItemId); return { result: true, message: `Quote item ${a.quoteItemId} deleted successfully` };
+        const qi = await nameOf('quoteItem', a.quoteItemId);
+        await s.deleteQuoteItem(a.quoteId, a.quoteItemId); return { result: true, message: `Removed ${qi} from ${await nameOf('quote', a.quoteId)}.` };
       }],
       // Picklist tools
       ['autotask_list_queues', async () => {
@@ -4204,6 +4294,7 @@ export class AutotaskToolHandler {
         const entry = await s.getTimeEntry(a.id);
         if (!entry) return { result: { status: 'already_deleted', timeEntryId: a.id }, message: `Time entry ${a.id} not found (already deleted).` };
         const lock = await s.assessTimeEntryLock(entry);
+        const said = `the ${hoursText(entry.hoursWorked)} entry${entry.dateWorked ? ` on ${day(entry.dateWorked)}` : ''}${await timeEntryWhere(entry as Record<string, unknown>)}${entry.resourceID != null ? ` by ${await nameOf('resource', entry.resourceID)}` : ''}`;
         const target = {
           id: entry.id, resourceID: entry.resourceID, dateWorked: entry.dateWorked, hoursWorked: entry.hoursWorked,
           hoursToBill: (entry as any).hoursToBill, ticketID: entry.ticketID, taskID: entry.taskID, billingCodeID: (entry as any).billingCodeID,
@@ -4219,7 +4310,7 @@ export class AutotaskToolHandler {
           const canDelete = !blockedByApproval;
           return {
             result: { status: 'dry_run', timeEntry: target, lock, canDelete, preflightOnly: true, ...(canDelete ? {} : { blockedReason: lock.reason }) },
-            message: canDelete ? `DRY RUN: no billing-post lock on time entry ${a.id}. ${caveat} Re-run with dryRun:false and confirm:true to attempt.` : `DRY RUN: time entry ${a.id} is BLOCKED — ${lock.reason}`,
+            message: canDelete ? `DRY RUN: no billing-post lock on ${said}. ${caveat} Re-run with dryRun:false and confirm:true to attempt.` : `DRY RUN: ${said} is BLOCKED — ${lock.reason}`,
           };
         }
         if (blockedByApproval) return { result: { status: 'blocked', timeEntryId: a.id, lock }, message: `Not deleted — ${lock.reason} Pass allowApproved:true to attempt anyway (Autotask may still refuse).` };
@@ -4232,7 +4323,7 @@ export class AutotaskToolHandler {
           throw e;
         }
         const after = await s.getTimeEntry(a.id).catch(() => null);
-        return { result: { status: 'deleted', timeEntryId: a.id, verification: { exists: !!after } }, message: `Deleted time entry ${a.id}.` };
+        return { result: { status: 'deleted', timeEntryId: a.id, verification: { exists: !!after } }, message: `Deleted ${said}.` };
       }],
       ['autotask_delete_task', async (a) => {
         // Autotask does NOT permit deleting a project task via the REST API
@@ -4248,7 +4339,7 @@ export class AutotaskToolHandler {
         const base = { taskId: a.id, taskNumber: (inv.task as any).taskNumber, title: inv.task.title, projectId: a.projectID ?? (inv.task as any).projectID };
         return {
           result: { status: 'ui_delete_required', ...base, apiDeletable: false, attached },
-          message: `Autotask does not allow deleting a project task via the API — delete task ${a.id} in the Autotask UI (its notes & secondary resources cascade). This tool can clear the API-deletable time entries first: use autotask_delete_task_with_time. Attached now: ${attached.timeEntries.length} time entr(ies), ${attached.notes.length} note(s), ${attached.secondaryResources.length} secondary resource(s), ${attached.dependencies.length} dependency(ies).`,
+          message: `Autotask does not allow deleting a project task via the API — delete ${(await taskRef(a.id)).label} in the Autotask UI (its notes & secondary resources cascade). This tool can clear the API-deletable time entries first: use autotask_delete_task_with_time. Attached now: ${attached.timeEntries.length} time entr(ies), ${attached.notes.length} note(s), ${attached.secondaryResources.length} secondary resource(s), ${attached.dependencies.length} dependency(ies).`,
         };
       }],
       ['autotask_delete_task_with_time', async (a) => {
@@ -4276,7 +4367,7 @@ export class AutotaskToolHandler {
           ];
           return {
             result: { status: 'dry_run', ...base, apiTaskDeletable: false, timeEntries: teAssess, willRemoveSecondaryResources: removeSecondaryResources ? secResourceIds : [], uiRemainder, plannedActions },
-            message: `DRY RUN: would delete ${teAssess.length} time entr(ies)${removeSecondaryResources ? ` + ${secResourceIds.length} secondary resource(s)` : ''} for task ${taskId}, then you delete the task in the UI (API can't). Locks beyond billing-post are enforced at execution. Re-run with dryRun:false and confirm:true.`,
+            message: `DRY RUN: would delete ${teAssess.length} time entr(ies)${removeSecondaryResources ? ` + ${secResourceIds.length} secondary resource(s)` : ''} for ${(await taskRef(taskId)).label}, then you delete the task in the UI (API can't). Locks beyond billing-post are enforced at execution. Re-run with dryRun:false and confirm:true.`,
           };
         }
         // Execute: delete time entries as their owners (best-effort, per-entry).
