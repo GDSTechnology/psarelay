@@ -1966,12 +1966,14 @@ export class AutotaskService {
     // A contract belongs to one company: keep it only if it is the target company's.
     const t = ticket as unknown as Record<string, unknown>;
     let contractCleared: Record<string, unknown> | null = null;
+    let contractName: string | null = null;
     if (t.contractID != null) {
       let contractCompany: number | null = null;
       try {
         const http = await this.ensureClient();
         const c = await http.get<Record<string, unknown>>('Contracts', Number(t.contractID));
         contractCompany = c?.companyID != null ? Number(c.companyID) : null;
+        if (c?.contractName != null) contractName = String(c.contractName);
       } catch { /* unknown → treat as not the target's */ }
       if (contractCompany !== targetCompanyID) {
         updates.contractID = null;
@@ -2002,6 +2004,8 @@ export class AutotaskService {
       (opts.contactID == null || Number(after.contactID) === Number(opts.contactID)) &&
       (!contractCleared || after.contractID == null) &&
       routing.every((r) => r.applied);
+    const saidTicket = [after?.ticketNumber ?? (ticket as unknown as Record<string, unknown>).ticketNumber ?? `Ticket ${ticketId}`, (ticket as unknown as Record<string, unknown>).title].filter(Boolean).join(' — ');
+    const saidCompany = (await this.getCompanyNamesByIds([targetCompanyID]).catch(() => [] as Array<{ id: number; companyName: string }>)).find((c) => Number(c.id) === Number(targetCompanyID))?.companyName ?? `company ${targetCompanyID}`;
 
     return {
       status: verified ? 'updated' : 'failed-verification',
@@ -2015,8 +2019,8 @@ export class AutotaskService {
       ...(routing.length ? { routing } : {}),
       verified,
       message: verified
-        ? `Ticket ${ticketId} moved to company ${targetCompanyID} (location ${location.id}${opts.companyLocationID != null ? '' : ', primary'}${contractCleared ? `; contract ${String(contractCleared.contractID)} cleared — it belongs to another company` : ''}).`
-        : `Ticket ${ticketId} move did not verify — check company/location/contact/contract${routing.some((r) => !r.applied) ? ` and ${routing.filter((r) => !r.applied).map((r) => r.field).join(', ')}` : ''} on the ticket.`,
+        ? `${saidTicket} moved to ${saidCompany} (location ${(location as { name?: string }).name ? `"${(location as { name?: string }).name}"` : location.id}${opts.companyLocationID != null ? '' : ', primary'}${contractCleared ? `; contract ${contractName ? `"${contractName}"` : String(contractCleared.contractID)} cleared — it belongs to another company` : ''}).`
+        : `${saidTicket} move did not verify — check company/location/contact/contract${routing.some((r) => !r.applied) ? ` and ${routing.filter((r) => !r.applied).map((r) => r.field).join(', ')}` : ''} on the ticket.`,
     };
   }
 
@@ -2318,7 +2322,7 @@ export class AutotaskService {
     const body = { ...this.pickLocationFields(o), name };
     const existing = (await this.searchCompanyLocationRecords({ companyId: companyID, pageSize: 500 }))
       .find((l) => String(l.name ?? '').trim().toLowerCase() === name.toLowerCase());
-    if (existing) return { status: 'exists', locationID: existing.id, location: existing, message: `Company ${companyID} already has an active location named "${existing.name}" (${existing.id}) — nothing written.` };
+    if (existing) return { status: 'exists', locationID: existing.id, location: existing, message: `${(await this.getCompanyNamesByIds([companyID]).catch(() => [] as Array<{ id: number; companyName: string }>)).find((c) => Number(c.id) === Number(companyID))?.companyName ?? `Company ${companyID}`} already has an active location named "${existing.name}" — nothing written.` };
     if (o.dryRun === true) return { status: 'planned', location: { companyID, ...body } };
     const http = await this.ensureClient();
     const id = await http.childCreate('Companies', companyID, 'Locations', body);
@@ -3048,7 +3052,7 @@ export class AutotaskService {
     if (o.description != null && String(o.description).trim()) body.description = String(o.description);
     const { busy, errors } = await this.resourceBusy(resourceID, t.start, t.end, o.checkServiceCalls !== false);
     const same = busy.find((b) => b.kind === 'appointment' && b.title === title && Date.parse(b.start) === Date.parse(t.start) && Date.parse(b.end) === Date.parse(t.end));
-    if (same) return { status: 'exists', appointmentID: same.id, appointment: withLocalTimes({ id: same.id, ...body }, tz), message: `Appointment ${same.id} is already booked for this resource, title and time — nothing written.` };
+    if (same) return { status: 'exists', appointmentID: same.id, appointment: withLocalTimes({ id: same.id, ...body }, tz), message: `"${String(body.title ?? 'That appointment')}" is already booked for this person at that time — nothing written.` };
     const conflicts = conflictsWith(busy, t.start, t.end).map((b) => ({ ...b, startLocal: localWallClock(b.start, tz), endLocal: localWallClock(b.end, tz) }));
     const base = { appointment: withLocalTimes(body, tz), conflicts, ...(errors.length ? { notChecked: errors } : {}) };
     if (conflicts.length && !o.allowOverlap) return { status: 'conflict', ...base, message: `Overlaps ${conflicts.length} existing booking(s) — nothing written. Pick another time, or pass allowOverlap:true to double-book.` };
@@ -3194,7 +3198,7 @@ export class AutotaskService {
       }
       const roleID = opts.roleID ?? await this.resolveResourceDefaultRole(opts.resourceID);
       if (roleID == null) {
-        return { ...base, status: 'role_required', message: `Resource ${opts.resourceID} has no default role — pass roleID to assign the ticket.` };
+        return { ...base, status: 'role_required', message: `${(await this.getResourceNames([opts.resourceID]).catch(() => new Map<number, string>())).get(opts.resourceID) ?? 'That resource'} has no default role — pass roleID to assign the ticket.` };
       }
       patch.assignedResourceID = opts.resourceID;
       patch.assignedResourceRoleID = roleID;
@@ -7868,7 +7872,7 @@ export class AutotaskService {
     const changes = Object.fromEntries(Object.entries(patch).map(([k, v]) => [k, { from: opp[k] ?? null, to: v }]));
     const extras = notSent.length ? { notSent, notSentNote: `This tenant has no writable ${notSent.join(', ')} on Opportunities — not sent.` } : {};
     if (!Object.keys(patch).length && (!project || project.status === 'exists')) {
-      return { status: 'unchanged', ...summary, ...(project ? { project } : {}), ...extras, message: `Opportunity ${id} is already ${outcome}${project ? ` and has project ${project.projectID}` : ''} — nothing written.` };
+      return { status: 'unchanged', ...summary, ...(project ? { project } : {}), ...extras, message: `Opportunity "${opp.title ?? id}" is already ${outcome}${project ? ` and has its project${project.projectName ? ` "${project.projectName}"` : ''}` : ''} — nothing written.` };
     }
     if (o.dryRun !== false) return { status: 'planned', ...summary, changes, ...(project ? { project } : {}), ...extras };
 
@@ -7881,7 +7885,7 @@ export class AutotaskService {
         project = { status: 'created', projectID: pid, projectName: project.body.projectName };
       } catch (e) {
         return { status: 'partial', ...summary, changes, notApplied, ...extras, project: { status: 'failed', error: e instanceof Error ? e.message : String(e), body: project.body },
-          message: `Opportunity ${id} was closed as ${outcome}, but creating the delivery project failed. A re-run skips the close and retries the project.` };
+          message: `Opportunity "${opp.title ?? id}" was closed as ${outcome}, but creating the delivery project failed. A re-run skips the close and retries the project.` };
       }
     }
     this.logger.info(`Opportunity ${id} closed as ${outcome}${project?.projectID ? ` (project ${project.projectID})` : ''}`);
@@ -8327,11 +8331,20 @@ export class AutotaskService {
   async addTicketMaterials(opts: {
     ticketID: number; items: MaterialRequest[]; dryRun: boolean; allowDuplicates?: boolean; allowInternalText?: boolean;
     datePurchased?: string; billable?: boolean; status?: string | number; chargeType?: string | number;
+    /** Where the tech took the parts from: an inventory location name or id, or "mine" / "my van" (the caller's location). */
+    fromLocation?: string | number; callerResourceID?: number;
   }): Promise<Record<string, unknown>> {
     const http = await this.ensureClient();
     const ticket = await http.get<AutotaskTicket>('Tickets', opts.ticketID);
     if (!ticket) return { status: 'not_found', ticketID: opts.ticketID };
     const ticketRef = { id: opts.ticketID, ticketNumber: (ticket as any).ticketNumber ?? null, title: (ticket as any).title ?? null, companyID: (ticket as any).companyID ?? null };
+    // The stock location the tech named — resolved before anything else, so a wrong name stops the call.
+    let location: { id: number; name: string } | undefined;
+    if (opts.fromLocation !== undefined && opts.fromLocation !== null && opts.fromLocation !== '') {
+      const loc = await this.resolveInventoryLocation(opts.fromLocation, opts.callerResourceID);
+      if ('error' in loc) return { status: 'validation_failed', errors: [loc.error], ticket: ticketRef, ...(loc.choices ? { locationChoices: loc.choices } : {}) };
+      location = loc;
+    }
 
     // Catalog scan only when a line is free text (one bounded walk, shared by every line).
     const needsCatalog = opts.items.some((it) => num0(it.productId) === undefined && typeof it.query === 'string' && it.query.trim());
@@ -8353,8 +8366,39 @@ export class AutotaskService {
     const existing = await http.query<ExistingCharge>('TicketCharges', [{ op: 'eq', field: 'ticketID', value: opts.ticketID }], { includeFields: ['id', 'productID', 'name', 'unitQuantity', 'unitPrice', 'datePurchased', 'isBilled'], maxRecords: 500, noCache: true });
     const lines = planMaterialLines({ items: opts.items, resolved, products, existing, ...(opts.allowDuplicates ? { allowDuplicates: true } : {}), ...(opts.allowInternalText ? { allowInternalText: true } : {}) });
     const summary = summarizeMaterialLines(lines);
+    // Stock: Autotask decides a new charge's status itself (TicketCharges.status is read-only) —
+    // Ready to Deliver/Ship when the product is in stock or needs no procurement, otherwise
+    // Need to Order/Fulfill, which puts it on the order sheet. Say which BEFORE writing.
+    const stockRows: Array<{ productID: number; inventoryLocationID: number; availableUnits: number }> = [];
+    const stockIds = [...new Set(lines.flatMap((l) => (l.action === 'create' && l.productID != null ? [l.productID] : [])))];
+    for (let i = 0; i < stockIds.length; i += 200) {
+      try {
+        stockRows.push(...await http.query<{ productID: number; inventoryLocationID: number; availableUnits: number }>('InventoryProducts', [{ op: 'in', field: 'productID', value: stockIds.slice(i, i + 200) }], { includeFields: ['productID', 'inventoryLocationID', 'availableUnits'], maxRecords: 5000, noCache: true }));
+      } catch { /* stock unknown — the line says so */ }
+    }
+    for (const l of lines) {
+      if (l.action !== 'create' || l.productID == null) continue;
+      const p = products.get(l.productID) as (CatalogProduct & { doesNotRequireProcurement?: boolean }) | undefined;
+      const rows = stockRows.filter((r) => Number(r.productID) === l.productID);
+      const anywhere = rows.reduce((n, r) => n + (Number(r.availableUnits) || 0), 0);
+      const there = location ? rows.filter((r) => Number(r.inventoryLocationID) === location!.id).reduce((n, r) => n + (Number(r.availableUnits) || 0), 0) : undefined;
+      const noProcurement = p?.doesNotRequireProcurement === true;
+      const inStock = location ? (there ?? 0) >= l.quantity : anywhere >= l.quantity;
+      const onOrderSheet = !noProcurement && !inStock;
+      l.stock = { availableAnywhere: anywhere, ...(location ? { location: location.name, availableAtLocation: there ?? 0 } : {}), ...(noProcurement ? { doesNotRequireProcurement: true } : {}) };
+      l.expectedStatus = onOrderSheet ? 'Need to Order/Fulfill' : 'Ready to Deliver/Ship';
+      l.onOrderSheet = onOrderSheet;
+      if (onOrderSheet) {
+        const why = location ? `${location.name} has ${there ?? 0} available in Autotask` : `${anywhere} available in Autotask inventory`;
+        const hint = `${why} — it will land on the order sheet as Need to Order. If you already have it, pick it in Autotask (or correct the stock count first).`;
+        l.note = l.note ? `${l.note}; ${hint}` : hint;
+      }
+    }
+    const ignored = opts.status !== undefined && opts.status !== null && opts.status !== ''
+      ? ['status — Autotask sets a charge\'s status itself (read-only in the API)'] : [];
 
-    // Charge type / status: a label or id, else the tenant's picklist default (else 1).
+    // Charge type: a label or id, else the tenant's picklist default (else 1). Status is NOT sent:
+    // TicketCharges.status is read-only (entityInformation, verified 2026-11-26) — Autotask sets it.
     const pick = async (field: string, requested: string | number | undefined): Promise<{ value: number; label: string } | { error: string }> => {
       const values = await this.getPicklistValues('TicketCharges', field).catch(() => [] as PicklistValue[]);
       if (requested === undefined || requested === null || requested === '') {
@@ -8365,23 +8409,25 @@ export class AutotaskService {
       return m.ok ? { value: m.value, label: m.label } : { error: `${field} "${String(requested)}" is not one of: ${m.choices.map((c) => `${c.value} ${c.label}`).join(', ')}` };
     };
     const chargeType = await pick('chargeType', opts.chargeType);
-    const status = await pick('status', opts.status);
     const datePurchased = (opts.datePurchased ?? new Date().toISOString()).slice(0, 10);
-    const settings = { chargeType, status, datePurchased, billable: opts.billable !== false };
-    const errors = [chargeType, status].flatMap((p) => ('error' in p ? [p.error] : []));
+    const settings = { chargeType, datePurchased, billable: opts.billable !== false, ...(location ? { fromLocation: location } : {}) };
+    const errors = [chargeType].flatMap((p) => ('error' in p ? [p.error] : []));
+    const onOrderSheet = lines.filter((l) => l.action === 'create' && l.onOrderSheet).map((l) => l.line);
 
-    const base = { ticket: ticketRef, lines, ...summary, settings, existingCharges: existing.length };
+    const base = { ticket: ticketRef, lines, ...summary, settings, existingCharges: existing.length, onOrderSheet, ...(ignored.length ? { ignored } : {}) };
     if (errors.length) return { status: 'validation_failed', errors, ...base };
     if (!summary.readyToWrite) return { status: summary.counts.create === 0 && summary.counts.needs_product === 0 && summary.counts.invalid === 0 ? 'nothing_to_add' : 'needs_input', ...base };
     if (opts.dryRun) return { status: 'dry_run', ...base };
 
-    const created: Array<{ line: number; chargeID: number; verified: boolean }> = [];
+    const statusLabels = await this.getPicklistValues('TicketCharges', 'status').catch(() => [] as PicklistValue[]);
+    const statusLabel = (v: unknown) => (v == null ? null : statusLabels.find((p) => String(p.value) === String(v))?.label ?? String(v));
+    const created: Array<{ line: number; chargeID: number; verified: boolean; name?: string; status?: number | null; statusLabel?: string | null }> = [];
     for (const l of lines) {
       if (l.action !== 'create') continue;
       const charge: Record<string, unknown> = {
         ticketID: opts.ticketID, productID: l.productID, name: (l.name ?? `Product ${l.productID}`).slice(0, 100),
         unitQuantity: l.quantity, unitPrice: l.unitPrice, unitCost: l.unitCost ?? 0,
-        chargeType: (chargeType as { value: number }).value, status: (status as { value: number }).value,
+        chargeType: (chargeType as { value: number }).value,
         datePurchased, isBillableToCompany: settings.billable,
         ...(l.description ? { description: String(l.description).slice(0, 2000) } : {}),
         ...(l.billingCodeID != null ? { billingCodeID: l.billingCodeID } : {}),
@@ -8389,13 +8435,43 @@ export class AutotaskService {
       try {
         const id = await http.childCreate('Tickets', opts.ticketID, 'Charges', charge);
         const back = await http.get<AutotaskTicketCharge>('TicketCharges', id).catch(() => null);
-        created.push({ line: l.line, chargeID: id, verified: !!back && Number(back.ticketID) === opts.ticketID });
+        const st = back ? (back as any).status ?? null : null;
+        created.push({ line: l.line, chargeID: id, verified: !!back && Number(back.ticketID) === opts.ticketID, name: String(charge.name), status: st, statusLabel: statusLabel(st) });
       } catch (error) {
         // Stop at the first failure: what was written is reported; a re-run skips it as a duplicate.
         return { status: created.length ? 'partial' : 'failed', error: error instanceof Error ? error.message : String(error), failedLine: l.line, created, ...base };
       }
     }
     return { status: 'created', created, ...base };
+  }
+
+  /**
+   * An inventory location by id, name (exact, then partial) or "mine" / "my van" (the location
+   * linked to the caller's resource). Ambiguous or unknown → the active choices.
+   */
+  async resolveInventoryLocation(ref: string | number, callerResourceID?: number): Promise<{ id: number; name: string } | { error: string; choices?: Array<{ id: number; name: string }> }> {
+    const http = await this.ensureClient();
+    const rows = await http.query<{ id: number; locationName?: string; isActive?: boolean; resourceID?: number | null }>('InventoryLocations', MATCH_ALL, { includeFields: ['id', 'locationName', 'isActive', 'resourceID'], maxRecords: 500 });
+    const active = rows.filter((r) => r.isActive !== false);
+    const named = (r: { id: number; locationName?: string }) => ({ id: Number(r.id), name: String(r.locationName ?? `location ${r.id}`) });
+    const choices = active.map(named);
+    const raw = String(ref).trim();
+    if (/^\d+$/.test(raw)) {
+      const hit = rows.find((r) => Number(r.id) === Number(raw));
+      return hit ? named(hit) : { error: `No inventory location ${raw}.`, choices };
+    }
+    if (/^(mine|my( own)? ?(van|truck|car|stock|location|inventory)?|van|truck)$/i.test(raw)) {
+      if (callerResourceID == null) return { error: 'Could not tell whose van that is — say the location by name.', choices };
+      const mine = active.filter((r) => r.resourceID != null && Number(r.resourceID) === Number(callerResourceID));
+      if (mine.length === 1) return named(mine[0]!);
+      return { error: mine.length ? 'You have several stock locations — say which one by name.' : 'No stock location is linked to you in Autotask — say the location by name.', choices: (mine.length ? mine.map(named) : choices) };
+    }
+    const q = raw.toLowerCase();
+    const exact = active.filter((r) => String(r.locationName ?? '').toLowerCase() === q);
+    if (exact.length === 1) return named(exact[0]!);
+    const partial = active.filter((r) => String(r.locationName ?? '').toLowerCase().includes(q));
+    if (partial.length === 1) return named(partial[0]!);
+    return { error: partial.length ? `"${raw}" matches several stock locations: ${partial.map((r) => r.locationName).join(', ')} — say which.` : `No stock location called "${raw}". Locations: ${choices.map((c) => c.name).join(', ') || 'none'}.`, choices: partial.length ? partial.map(named) : choices };
   }
 
   // =====================================================
@@ -10493,7 +10569,7 @@ export class AutotaskService {
       { op: 'lte', field: 'startDateTime', value: day.end },
     ], { maxRecords: 100, noCache: true });
     const dup = sameDay.find((t) => t.completedDate == null && String(t.activityDescription ?? '').trim() === note && (opportunityID == null || Number(t.opportunityID) === opportunityID));
-    if (dup) return { status: 'exists', todoID: dup.id, followup: { ...followup, id: dup.id }, message: `An open follow-up with this text is already on that day (To-Do ${dup.id}) — nothing written.` };
+    if (dup) return { status: 'exists', todoID: dup.id, followup: { ...followup, id: dup.id }, message: 'An open follow-up with this text is already on that day — nothing written.' };
     if (o.dryRun === true) return { status: 'planned', followup };
     const id = await http.childCreate('Companies', companyID, 'ToDos', body);
     this.logger.info(`Sales follow-up To-Do created with ID: ${id}`);

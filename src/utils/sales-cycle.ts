@@ -94,21 +94,22 @@ export function correlateSalesCycle(input: {
     quotes: q.get(Number(o.id)) ?? [], contracts: c.get(Number(o.id)) ?? [], projects: p.get(Number(o.id)) ?? [],
   }));
 
+  const said = (ch: SalesChain): string => (ch.title ? `"${ch.title}"` : String(ch.opportunityID));
   for (const ch of chains) {
     for (const [kind, rows] of [['quote', ch.quotes], ['contract', ch.contracts], ['project', ch.projects]] as const) {
       for (const r of rows) {
         if (!sameCompany(r.companyID, ch.companyID)) {
           findings.push({
             code: 'company_mismatch', severity: 'error', opportunityID: ch.opportunityID, kind, recordID: r.id,
-            message: `${kind} ${r.id} is on company ${r.companyID}, but opportunity ${ch.opportunityID} is on company ${ch.companyID}.`,
+            message: `${kind} ${(r as { name?: string | null }).name ? `"${(r as { name?: string | null }).name}"` : r.id} is on company ${r.companyID}, but opportunity ${said(ch)} is on company ${ch.companyID}.`,
           });
         }
       }
     }
     const delivered = ch.contracts.length + ch.projects.length > 0;
-    if (ch.phase === 'won' && !delivered) findings.push({ code: 'won_no_delivery', severity: 'warning', opportunityID: ch.opportunityID, message: `Opportunity ${ch.opportunityID} is won (${ch.statusLabel}) but no contract or project is linked to it.` });
-    if (ch.phase === 'lost' && delivered) findings.push({ code: 'lost_with_delivery', severity: 'warning', opportunityID: ch.opportunityID, message: `Opportunity ${ch.opportunityID} is lost but has ${ch.contracts.length} contract(s) and ${ch.projects.length} project(s) linked — the outcome or the links are wrong.` });
-    if (ch.phase === 'won' && ch.quotes.length === 0) findings.push({ code: 'won_no_quote', severity: 'info', opportunityID: ch.opportunityID, message: `Opportunity ${ch.opportunityID} is won with no quote.` });
+    if (ch.phase === 'won' && !delivered) findings.push({ code: 'won_no_delivery', severity: 'warning', opportunityID: ch.opportunityID, message: `Opportunity ${said(ch)} is won (${ch.statusLabel}) but no contract or project is linked to it.` });
+    if (ch.phase === 'lost' && delivered) findings.push({ code: 'lost_with_delivery', severity: 'warning', opportunityID: ch.opportunityID, message: `Opportunity ${said(ch)} is lost but has ${ch.contracts.length} contract(s) and ${ch.projects.length} project(s) linked — the outcome or the links are wrong.` });
+    if (ch.phase === 'won' && ch.quotes.length === 0) findings.push({ code: 'won_no_quote', severity: 'info', opportunityID: ch.opportunityID, message: `Opportunity ${said(ch)} is won with no quote.` });
   }
 
   // Unlinked delivery: candidates are won opportunities on the same company with no record of that kind yet.

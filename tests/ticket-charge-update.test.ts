@@ -48,7 +48,7 @@ describe('autotask_update_ticket_charge', () => {
     const r = await call(h, 'autotask_update_ticket_charge', { chargeId: 900001, name: 'Acme SW-8 8-Port Gigabit Desktop Switch', description: GOOD, confirm: true });
     expect(update).not.toHaveBeenCalled(); // never the top-level route (404 → PUT 405)
     expect(childUpdate).toHaveBeenCalledWith('Tickets', 42, 'Charges', 900001, { name: 'Acme SW-8 8-Port Gigabit Desktop Switch', description: GOOD });
-    expect(r.message).toMatch(/^Updated ticket charge 900001 on ticket 42 \(verified/);
+    expect(r.message).toMatch(/^Updated charge "Acme SW-8 8-Port Gigabit Desktop Switch" on ticket 42 \(verified/);
     expect(r.message).toMatch(/Unchanged: unitQuantity 1, unitCost 30\.23, unitPrice 39\.3/);
     expect(r.data?.after ?? r.result?.after ?? r).toBeTruthy();
   });

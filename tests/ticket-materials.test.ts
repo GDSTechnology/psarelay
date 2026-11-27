@@ -102,12 +102,14 @@ describe('add_ticket_materials tool', () => {
     expect(childCreate).not.toHaveBeenCalled();
   });
 
-  test('confirmed: creates each charge with catalog price, billing code, picklist defaults, isBillableToCompany', async () => {
+  test('confirmed: creates each charge with catalog price, billing code, picklist defaults, isBillableToCompany — status NOT sent (read-only)', async () => {
     const { h, childCreate } = mk();
     const r = await call(h, { ticketNumber: 'T20261005.0123', items: ITEMS, dryRun: false, confirm: true, status: 'delivered', datePurchased: '2026-10-05' });
     expect(r.message).toMatch(/^Added to T20261005\.0123/);
     expect(childCreate).toHaveBeenCalledTimes(3);
-    expect(childCreate.mock.calls[0]).toEqual(['Tickets', 42, 'Charges', expect.objectContaining({ productID: 10, unitQuantity: 200, unitPrice: 0.65, unitCost: 0.31, billingCodeID: 900, chargeType: 1, status: 7, isBillableToCompany: true, datePurchased: '2026-10-05' })]);
+    expect(childCreate.mock.calls[0]).toEqual(['Tickets', 42, 'Charges', expect.objectContaining({ productID: 10, unitQuantity: 200, unitPrice: 0.65, unitCost: 0.31, billingCodeID: 900, chargeType: 1, isBillableToCompany: true, datePurchased: '2026-10-05' })]);
+    expect((childCreate.mock.calls[0] as unknown[])[3]).not.toHaveProperty('status'); // TicketCharges.status is read-only — Autotask sets it
+    expect(r.message).toMatch(/Ignored: status/);
     expect((childCreate.mock.calls[2] as unknown[])[3]).not.toHaveProperty('billingCodeID'); // product without one: left to Autotask
   });
 

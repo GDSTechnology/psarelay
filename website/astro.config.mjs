@@ -30,6 +30,7 @@ export default defineConfig({
 						{ label: 'Integration API', slug: 'guides/integration-api' },
 						{ label: 'Safety model', slug: 'guides/safety' },
 						{ label: 'Customer notifications', slug: 'guides/notifications' },
+						{ label: 'Parts on tickets', slug: 'guides/parts-on-tickets' },
 						{ label: 'Postgres mirror', slug: 'guides/mirror' },
 						{ label: 'Admin console', slug: 'guides/console' },
 						{ label: 'Merges & bulk cleanup', slug: 'guides/bulk-cleanup' },
