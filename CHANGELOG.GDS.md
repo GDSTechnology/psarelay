@@ -10,6 +10,22 @@ Each entry lists the merge commit and the PR number. Brief section references
 
 ---
 
+## v6.34.1 — 2026-11-27 — Outage alerts say what failed, and always say when it's back
+
+- **STOP after an Autotask outage** (the tenant-wide breaker: 5+ network errors / 5xx in a minute across 3+ modules)
+  now names the failing modules, the error count and the last error, in the text and as fields (`failing`,
+  `errors in the last minute`, `last error`). Seen live 2026-11-26: two STOPs (19:58, 20:17) said only "a run of
+  network errors / 5xx answers".
+- **"Back" is never missing.** The all-clear (`backpressure.recovered`, `auth.cleared`) used to go only to channels
+  that ticked it — a channel with just "Backpressure: stop" heard the STOP and never the recovery. An all-clear now
+  goes to every channel that was sent its alarm (`clears` on the event; past the cooldown) and to channels that
+  ticked it.
+- "Back" waits until a call actually gets through after the pause (the breaker stays open until one does), then says
+  how long calls were stopped ("Autotask back — calls flowing again", `stopped for 1 min 12 s`). With no call to test
+  it for 5 minutes it says "pause over (not yet tested)".
+- `autotask_get_backpressure` / `/health` backpressure gain `outage` (since, failures, endpoints, lastError,
+  awaitingTest). Only fields added.
+
 ## v6.33.0 — 2026-11-25 — Ticket details and get / search tools carry labels and names
 
 - **`get_ticket_details`**: the same record, plus `statusLabel`, `priorityLabel`, `queueLabel`, `issueTypeLabel`,

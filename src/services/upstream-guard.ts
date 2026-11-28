@@ -94,7 +94,7 @@ export class AutotaskOutageError extends Error {
   }
 }
 
-interface Breaker { failures: Array<{ t: number; ep: string }>; openUntil: number; openMs: number; probing: boolean; lastError: string }
+interface Breaker { failures: Array<{ t: number; ep: string }>; openUntil: number; openMs: number; probing: boolean; lastError: string; openedAt: number }
 const breakers = new Map<string, Breaker>();
 const WINDOW_MS = 60_000;
 const FIRST_OPEN_MS = 30_000;
@@ -103,7 +103,7 @@ const MAX_OPEN_MS = 5 * 60_000;
 export const TENANT_SPREAD = 3;
 const ALL = '*';
 const keyOf = (tenant: string, ep: string) => `${tenant} ${ep || '?'}`;
-const breaker = (k: string) => breakers.get(k) ?? breakers.set(k, { failures: [], openUntil: 0, openMs: 0, probing: false, lastError: '' }).get(k)!;
+const breaker = (k: string) => breakers.get(k) ?? breakers.set(k, { failures: [], openUntil: 0, openMs: 0, probing: false, lastError: '', openedAt: 0 }).get(k)!;
 
 function guard(k: string, label: string, now: number): void {
   const b = breakers.get(k);
@@ -146,6 +146,7 @@ function fail(b: Breaker, message: string, now: number, ep: string, opensAt: (b:
   }
   b.failures = [...b.failures.filter((f) => now - f.t < WINDOW_MS), { t: now, ep }];
   if (b.openUntil === 0 && opensAt(b)) {
+    b.openedAt = now;
     b.openMs = FIRST_OPEN_MS;
     b.openUntil = now + b.openMs;
   }
@@ -163,6 +164,38 @@ const secondsLeft = (b: Breaker | undefined, now: number) => (b && b.openUntil >
 /** Seconds left on the TENANT-wide breaker (0 = closed or ready for its probe). */
 export function outageSeconds(tenant: string, now = Date.now()): number {
   return secondsLeft(breakers.get(keyOf(tenant, ALL)), now);
+}
+
+export interface OutageStatus {
+  /** Seconds the calls still fail locally (0 = the pause is over). */
+  seconds: number;
+  /** The pause is over but no call has got through yet: Autotask is not confirmed back. */
+  awaitingTest: boolean;
+  /** When the breaker opened (ISO). */
+  since: string;
+  /** Network errors / 5xx answers counted in the last minute. */
+  failures: number;
+  /** The modules (endpoints) that failed, most failures first. */
+  endpoints: string[];
+  lastError: string;
+}
+
+/**
+ * The tenant-wide outage breaker in detail, or null when it is closed. It stays non-null after
+ * its pause runs out until a call gets through (recordSuccess) — only that confirms Autotask is back.
+ */
+export function outageStatus(tenant: string, now = Date.now()): OutageStatus | null {
+  const b = breakers.get(keyOf(tenant, ALL));
+  if (!b || b.openUntil === 0) return null;
+  const recent = b.failures.filter((f) => now - f.t < WINDOW_MS);
+  const counts = new Map<string, number>();
+  for (const f of (recent.length ? recent : b.failures)) counts.set(f.ep || '?', (counts.get(f.ep || '?') ?? 0) + 1);
+  const seconds = secondsLeft(b, now);
+  return {
+    seconds, awaitingTest: seconds === 0, since: new Date(b.openedAt || now).toISOString(), failures: recent.length,
+    endpoints: [...counts.entries()].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0])).map(([ep]) => ep),
+    lastError: b.lastError,
+  };
 }
 
 /** Seconds left for this endpoint — the tenant-wide breaker included. */

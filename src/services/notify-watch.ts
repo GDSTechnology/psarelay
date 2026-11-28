@@ -23,9 +23,28 @@ export interface WatchSources {
   toolErrors: (sinceMs: number) => Array<{ tool: string; error: string | null; at: string }>;
 }
 
-export interface WatchState { auth: 'ok' | 'paused' | 'held'; level: Backpressure['level']; cooldown: boolean; runAt: string | null; verifyAt: string | null; errorBurstAt: number }
+export interface WatchState {
+  auth: 'ok' | 'paused' | 'held'; level: Backpressure['level']; cooldown: boolean; runAt: string | null; verifyAt: string | null; errorBurstAt: number;
+  /** When the current STOP began (ms), for "stopped for …" on the all-clear. */
+  stopAt?: number | null;
+  /** When the outage pause ran out with no call through yet (ms) — the all-clear waits for a call, up to TEST_WAIT_MS. */
+  testWaitSince?: number | null;
+}
 
-export const initialWatchState = (): WatchState => ({ auth: 'ok', level: 'ok', cooldown: false, runAt: null, verifyAt: null, errorBurstAt: 0 });
+export const initialWatchState = (): WatchState => ({ auth: 'ok', level: 'ok', cooldown: false, runAt: null, verifyAt: null, errorBurstAt: 0, stopAt: null, testWaitSince: null });
+
+/** How long the all-clear waits for a call to confirm Autotask is back after an outage pause runs out. */
+export const TEST_WAIT_MS = 5 * 60_000;
+
+/** "1 h 4 min", "3 min 10 s", "40 s". */
+export function spokenDuration(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60), r = s % 60;
+  if (m < 60) return r ? `${m} min ${r} s` : `${m} min`;
+  const h = Math.floor(m / 60), rm = m % 60;
+  return rm ? `${h} h ${rm} min` : `${h} h`;
+}
 
 /** One check: the events due given the previous state; returns the new state. Pure apart from the sources. */
 export function checkOnce(src: WatchSources, prev: WatchState, now = Date.now()): { state: WatchState; events: NotifyEvent[] } {
@@ -38,16 +57,40 @@ export function checkOnce(src: WatchSources, prev: WatchState, now = Date.now())
   if (auth !== prev.auth) {
     if (auth === 'held') events.push({ type: 'auth.held', severity: 'critical', title: 'Autotask login HELD', detail: 'Autotask kept rejecting the API login, so the MCP stopped trying. Fix the API user (password / lock / integration code), then press **Retry now** on the console Overview.', fields: { failures: String(bp.auth?.failures ?? '?'), 'last error': bp.auth?.lastError ?? '' }, at });
     else if (auth === 'paused') events.push({ type: 'auth.paused', severity: 'warning', title: 'Autotask login paused', detail: `Autotask rejected the API login. All calls are paused until ${bp.auth?.blockedUntil ?? '?'}; the MCP then makes one test call.`, fields: { failures: String(bp.auth?.failures ?? '?'), 'last error': bp.auth?.lastError ?? '' }, at });
-    else events.push({ type: 'auth.cleared', severity: 'info', title: 'Autotask login working again', detail: 'The API login is accepted; calls are flowing.', at });
+    else events.push({ type: 'auth.cleared', severity: 'info', title: 'Autotask login working again', detail: 'The API login is accepted; calls are flowing.', at, clears: ['auth.paused', 'auth.held'] });
     state.auth = auth;
   }
-  // state.level remembers "stopped" through a slow spell until it is fully ok again.
+  // state.level remembers "stopped" through a slow spell until it is fully ok again — and, after an
+  // outage, until a call has got through (or TEST_WAIT_MS passed with no call to test it).
+  const usage = bp.autotask.usedPct != null ? `${bp.autotask.usedPct}%` : 'unknown';
+  const awaitingTest = bp.level === 'ok' && prev.level === 'stop' && bp.outage?.awaitingTest === true;
+  const testWaitSince = awaitingTest ? (prev.testWaitSince ?? now) : null;
+  const untested = awaitingTest && now - testWaitSince! >= TEST_WAIT_MS;
   if (bp.level === 'stop' && prev.level !== 'stop') {
-    events.push({ type: 'backpressure.stop', severity: 'warning', title: 'Autotask backpressure: STOP', detail: bp.reasons.join('\n') || 'stop', fields: { 'retry after': bp.retryAfterSeconds != null ? `${bp.retryAfterSeconds}s` : 'until fixed', 'tenant usage': bp.autotask.usedPct != null ? `${bp.autotask.usedPct}%` : 'unknown' }, at, dedupeKey: 'backpressure.stop' });
-  } else if (bp.level === 'ok' && prev.level === 'stop') {
-    events.push({ type: 'backpressure.recovered', severity: 'info', title: 'Autotask backpressure back to OK', detail: 'Dispatchers can send work again.', fields: { 'tenant usage': bp.autotask.usedPct != null ? `${bp.autotask.usedPct}%` : 'unknown' }, at });
+    const o = bp.outage;
+    const fields: Record<string, string> = { 'retry after': bp.retryAfterSeconds != null ? `${bp.retryAfterSeconds}s` : 'until fixed', 'tenant usage': usage };
+    if (o) {
+      fields['failing'] = o.endpoints.slice(0, 6).join(', ') || 'unknown';
+      fields['errors in the last minute'] = String(o.failures);
+      fields['last error'] = o.lastError || 'unknown';
+    }
+    events.push({ type: 'backpressure.stop', severity: 'warning', title: 'Autotask backpressure: STOP', detail: `${bp.reasons.join('\n') || 'stop'}\nA message follows when calls flow again.`, fields, at, dedupeKey: 'backpressure.stop' });
+    state.stopAt = now;
+  } else if (prev.level === 'stop' && bp.level === 'ok' && (!awaitingTest || untested)) {
+    const stoppedFor = prev.stopAt != null ? spokenDuration(now - prev.stopAt) : null;
+    events.push({
+      type: 'backpressure.recovered', severity: 'info',
+      title: untested ? 'Autotask pause over (not yet tested)' : 'Autotask back — calls flowing again',
+      detail: untested
+        ? `The outage pause ran out ${spokenDuration(now - testWaitSince!)} ago and no call has reached Autotask since, so it is not confirmed back. The next call tests it; another STOP follows if it still fails.`
+        : `Autotask is answering again${stoppedFor ? ` after ${stoppedFor} stopped` : ''}. Dispatchers can send work again.`,
+      fields: { ...(stoppedFor ? { 'stopped for': stoppedFor } : {}), 'tenant usage': usage },
+      at, clears: ['backpressure.stop'],
+    });
+    state.stopAt = null;
   }
-  state.level = bp.level === 'slow' ? (prev.level === 'stop' ? 'stop' : 'slow') : bp.level;
+  state.testWaitSince = untested ? null : testWaitSince;
+  state.level = awaitingTest && !untested ? 'stop' : bp.level === 'slow' ? (prev.level === 'stop' ? 'stop' : 'slow') : bp.level;
   const cooldown = bp.rateLimitCooldownSeconds > 0;
   if (cooldown && !prev.cooldown) events.push({ type: 'ratelimit.hit', severity: 'warning', title: 'Autotask 429 — API threshold exceeded', detail: `Autotask refused a call (rate limit). Calls fail locally for ${bp.rateLimitCooldownSeconds}s instead of piling on.`, fields: { 'tenant usage': bp.autotask.usedPct != null ? `${bp.autotask.usedPct}%` : 'unknown' }, at });
   state.cooldown = cooldown;

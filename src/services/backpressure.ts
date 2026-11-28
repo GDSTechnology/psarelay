@@ -14,7 +14,7 @@
 
 import { authBlockStatus, endpointQueueDepth, rateLimitCooldownSeconds, type AuthBlockStatus } from './autotask-http.js';
 import { latestTenantUsage } from './call-log.js';
-import { endpointOutages, outageSeconds, upstreamQueueDepth } from './upstream-guard.js';
+import { endpointOutages, outageSeconds, outageStatus, upstreamQueueDepth, type OutageStatus } from './upstream-guard.js';
 
 export type BackpressureLevel = 'ok' | 'slow' | 'stop';
 
@@ -35,6 +35,8 @@ export interface Backpressure {
   rateLimitCooldownSeconds: number;
   /** Seconds the TENANT-wide outage breaker stays open (0 = closed). */
   outageSeconds: number;
+  /** The tenant-wide outage in detail (null = none): what failed, since when, and whether Autotask is confirmed back. */
+  outage: OutageStatus | null;
   /** Modules (endpoints) whose own breaker is open — work that needs them waits, the rest carries on. */
   moduleOutages: Array<{ endpoint: string; seconds: number }>;
   queuedRequests: number;
@@ -49,6 +51,7 @@ export function assessBackpressure(i: {
   auth: AuthBlockStatus | null; cooldownSeconds: number; queued: number; now?: number;
   /** Outage breaker (upstream-guard.ts): seconds it stays open. */
   outageSeconds?: number;
+  outage?: OutageStatus | null;
   moduleOutages?: Array<{ endpoint: string; seconds: number }>;
 }, t: BackpressureThresholds = DEFAULT_THRESHOLDS): Backpressure {
   const now = i.now ?? Date.now();
@@ -64,7 +67,12 @@ export function assessBackpressure(i: {
   } else if (i.auth?.probing) { raise('slow'); reasons.push('Autotask login is being re-tested after a pause'); }
 
   const outage = i.outageSeconds ?? 0;
-  if (outage > 0) { raise('stop'); retry = Math.max(retry ?? 0, outage); reasons.push(`Autotask looks unavailable (a run of network errors / 5xx answers) — calls fail locally for ${outage}s, then one test call goes through`); }
+  if (outage > 0) {
+    raise('stop'); retry = Math.max(retry ?? 0, outage);
+    const o = i.outage;
+    const what = o ? `${o.failures || 'a run of'} network errors / 5xx answers within a minute${o.endpoints.length ? ` on ${o.endpoints.slice(0, 6).join(', ')}` : ''}${o.lastError ? `; last: ${o.lastError}` : ''}` : 'a run of network errors / 5xx answers';
+    reasons.push(`Autotask looks unavailable (${what}) — calls fail locally for ${outage}s, then one test call goes through`);
+  }
   const modules = i.moduleOutages ?? [];
   if (modules.length) {
     raise('slow');
@@ -89,7 +97,7 @@ export function assessBackpressure(i: {
   return {
     level, reasons, retryAfterSeconds: level === 'stop' ? retry : null, advice,
     autotask: { usedPct: pct, used: i.usage?.used ?? null, limit: i.usage?.limit ?? null, latencyTier: pct == null ? 'none' : pct >= 75 ? '+1s' : pct >= 50 ? '+0.5s' : 'none', readingAt: i.usage?.at ?? null, readingAgeSeconds: ageS },
-    auth: i.auth, rateLimitCooldownSeconds: i.cooldownSeconds, outageSeconds: outage, moduleOutages: modules, queuedRequests: i.queued,
+    auth: i.auth, rateLimitCooldownSeconds: i.cooldownSeconds, outageSeconds: outage, outage: i.outage ?? null, moduleOutages: modules, queuedRequests: i.queued,
   };
 }
 
@@ -100,6 +108,7 @@ export function backpressure(tenant: string, t?: BackpressureThresholds): Backpr
     usage: u ? { usedPct: u.usedPct, used: u.used, limit: u.limit, at: u.at } : null,
     auth: authBlockStatus(tenant), cooldownSeconds: rateLimitCooldownSeconds(tenant), queued: endpointQueueDepth() + upstreamQueueDepth(),
     outageSeconds: outageSeconds(tenant.toLowerCase()),
+    outage: outageStatus(tenant.toLowerCase()),
     moduleOutages: endpointOutages(tenant.toLowerCase()),
   }, t);
 }
