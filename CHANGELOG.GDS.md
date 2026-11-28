@@ -10,6 +10,40 @@ Each entry lists the merge commit and the PR number. Brief section references
 
 ---
 
+## v6.35.0 — 2026-11-28 — SLA credits: Autotask outage log + monthly credit claim to Kaseya
+
+- **Outage log** (MIGRATION 0027 `autotask_outage`): every time the tenant-wide outage breaker opens, a row from
+  detection to the first call that gets through (`confirmed_back`; a restart closes an open row at its last sighting,
+  `ended_reason 'restart'`), with failing modules, HTTP statuses (the breaker now records each failure's status),
+  network-error count and last error. Recorded every 20 s by `startSlaRuntime` (http transport + Postgres).
+- **Monthly claim** (`sla_claim`): on the 1st at 06:00 UTC, when turned on and last month's counted downtime reaches
+  the threshold, a plain-text credit request is drafted — month, account reference, total downtime, measured uptime
+  vs the agreement's figure, one UTC line per outage; no-HTTP-answer outages listed apart and not counted unless set.
+  Overlaps merged, clipped to the month. Notification `sla.claim_ready`.
+- **Console → SLA credits** (admins): review / edit / **Send to Kaseya** / dismiss drafts, build a draft for this or
+  last month, claim settings, and the sending mailbox. Send is guarded against double clicks (`sending` state) and
+  logged; a sent claim is never rebuilt.
+- **Microsoft 365 sending** (`src/sla/graph-mail.ts`): Graph app-only (client credentials) `sendMail` from the
+  configured mailbox, saved to Sent Items; the client secret encrypted with `MCP_SECRET_KEY`; errors name the fix
+  (secret expired, missing Mail.Send consent, mailbox not found). First PSArelay code that sends email.
+- Docs: website guide *SLA credits* (Entra app + application access policy steps), ADMIN.md.
+
+## v6.34.1 — 2026-11-27 — Outage alerts say what failed, and always say when it's back
+
+- **STOP after an Autotask outage** (the tenant-wide breaker: 5+ network errors / 5xx in a minute across 3+ modules)
+  now names the failing modules, the error count and the last error, in the text and as fields (`failing`,
+  `errors in the last minute`, `last error`). Seen live 2026-11-26: two STOPs (19:58, 20:17) said only "a run of
+  network errors / 5xx answers".
+- **"Back" is never missing.** The all-clear (`backpressure.recovered`, `auth.cleared`) used to go only to channels
+  that ticked it — a channel with just "Backpressure: stop" heard the STOP and never the recovery. An all-clear now
+  goes to every channel that was sent its alarm (`clears` on the event; past the cooldown) and to channels that
+  ticked it.
+- "Back" waits until a call actually gets through after the pause (the breaker stays open until one does), then says
+  how long calls were stopped ("Autotask back — calls flowing again", `stopped for 1 min 12 s`). With no call to test
+  it for 5 minutes it says "pause over (not yet tested)".
+- `autotask_get_backpressure` / `/health` backpressure gain `outage` (since, failures, endpoints, lastError,
+  awaitingTest). Only fields added.
+
 ## v6.33.0 — 2026-11-25 — Ticket details and get / search tools carry labels and names
 
 - **`get_ticket_details`**: the same record, plus `statusLabel`, `priorityLabel`, `queueLabel`, `issueTypeLabel`,

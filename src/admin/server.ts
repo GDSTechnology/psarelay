@@ -60,6 +60,9 @@ import { M365Store, notAPerson, resourceName, validTenantId } from '../security/
 import { clearM365Cache, m365Status } from '../security/m365-auth.js';
 import { COPILOT_TOKEN_STORE_CLIENT_ID } from '../security/entra.js';
 import { CHANNEL_KINDS, ChannelInputError, NOTIFY_SETTING_KEY, channelFromInput, channelLogDetails, channelView, parseStoredChannels } from './notifications.js';
+import { SLA_SETTING_KEY, SlaInputError, SlaStore } from '../sla/store.js';
+import { monthStart, previousMonth, settingsFromInput } from '../sla/claim.js';
+import { sendGraphMail } from '../sla/graph-mail.js';
 
 export interface AdminConsoleOptions {
   logger: Logger;
@@ -618,6 +621,110 @@ export function adminHandler(deps: AdminDeps) {
       void log(ctx, 'action.shadow_sync');
       void rt.runNow().catch((e) => opts.logger.error('admin: manual shadow sync failed', e));
       return send(res, 202, { ok: true, message: 'Sync started. Refresh the status in a minute to see the result.' });
+    }
+
+    // ── SLA credits (Autotask outage log → monthly credit claim to Kaseya, sent from Microsoft 365) ──
+    if (path.startsWith('/api/sla')) {
+      requireUser(ctx, 'admin');
+      if (!deps.pool) throw new HttpError(503, 'SLA credits need Postgres.', 'no_pg');
+      const tenant = (opts.apiUsername ?? '').toLowerCase();
+      if (!tenant) throw new HttpError(503, 'No Autotask API user is configured.', 'no_tenant');
+      const sla = new SlaStore(deps.pool, tenant);
+      const wrap = async <T>(f: () => Promise<T>): Promise<T> => {
+        try { return await f(); } catch (e) {
+          if (e instanceof SlaInputError) throw new HttpError(400, e.message, 'invalid');
+          if (/autotask_outage|sla_claim/.test(String(e))) throw new HttpError(503, 'Run the database migrations (0027) first.', 'migration');
+          throw e;
+        }
+      };
+      const claimMatch = /^\/api\/sla\/claims\/(\d+)(\/send|\/dismiss)?$/.exec(path);
+      if (path === '/api/sla' && method === 'GET') {
+        return wrap(async () => {
+          const { settings, mail } = await sla.load();
+          const now = new Date();
+          const thisMonth = monthStart(now);
+          const lastMonth = previousMonth(thisMonth);
+          const [current, last, claims] = [await sla.draftFor(thisMonth), await sla.draftFor(lastMonth), await sla.claims()];
+          return send(res, 200, { settings, mail: SlaStore.mailView(mail), months: [current, last], claims });
+        });
+      }
+      if (path === '/api/sla/settings' && method === 'PUT') {
+        return wrap(async () => {
+          const b = await readJson(req, 16 * 1024) as Record<string, unknown>;
+          let s;
+          try { s = settingsFromInput(b, (await sla.load()).settings); } catch (e) { throw new HttpError(400, (e as Error).message, 'invalid'); }
+          await sla.saveSettings(s, ctx.user!.username);
+          void log(ctx, 'sla.settings_changed', { enabled: s.enabled, to: s.to, cc: s.cc, thresholdMinutes: s.thresholdMinutes });
+          return send(res, 200, { ok: true });
+        });
+      }
+      if (path === '/api/sla/mail' && (method === 'PUT' || method === 'DELETE')) {
+        return wrap(async () => {
+          const b = method === 'DELETE' ? null : await readJson(req, 16 * 1024) as Record<string, unknown>;
+          await sla.saveMail(b, ctx.user!.username);
+          const v = SlaStore.mailView((await sla.load()).mail);
+          void log(ctx, method === 'DELETE' ? 'sla.mail_removed' : 'sla.mail_changed', v ? { tenantId: v.tenantId, clientId: v.clientId, sender: v.sender } : {});
+          return send(res, 200, { ok: true, mail: v });
+        });
+      }
+      if (path === '/api/sla/mail/test' && method === 'POST') {
+        return wrap(async () => {
+          const cfg = await sla.mailConfig();
+          try {
+            await sendGraphMail(cfg, { to: [cfg.sender], subject: 'PSArelay test — SLA credit mail', text: `Sent from the PSArelay console by ${ctx.user!.username}. If this arrived, SLA credit claims can be sent from ${cfg.sender}.` });
+          } catch (e) {
+            void log(ctx, 'sla.mail_tested', { ok: false, error: (e as Error).message.slice(0, 300) });
+            return send(res, 200, { ok: false, message: (e as Error).message });
+          }
+          void log(ctx, 'sla.mail_tested', { ok: true, sender: cfg.sender });
+          return send(res, 200, { ok: true, message: `Test sent to ${cfg.sender} (to itself). Check that mailbox's inbox.` });
+        });
+      }
+      if (path === '/api/sla/claims/build' && method === 'POST') {
+        return wrap(async () => {
+          const b = await readJson(req, 4 * 1024) as { month?: string };
+          let month: Date;
+          try { month = monthStart(String(b.month ?? '')); } catch { throw new HttpError(400, 'month must be YYYY-MM.', 'invalid'); }
+          if (month.getTime() > monthStart(new Date()).getTime()) throw new HttpError(400, 'That month hasn\'t started.', 'invalid');
+          const draft = await sla.draftFor(month);
+          const row = await sla.saveDraft(draft, { force: true });
+          if (!row) throw new HttpError(409, `The ${draft.monthLabel} claim was already sent — it is kept as sent.`, 'sent');
+          void log(ctx, 'sla.claim_built', { month: draft.month, downtimeSeconds: draft.downtimeSeconds, incidents: draft.countedIncidents });
+          return send(res, 200, { ok: true, claim: row, qualifies: draft.qualifies });
+        });
+      }
+      if (claimMatch) {
+        const id = idParam(claimMatch[1]);
+        return wrap(async () => {
+          if (!claimMatch[2] && method === 'PUT') {
+            const b = await readJson(req, 64 * 1024) as Record<string, unknown>;
+            let to: string[] | undefined, cc: string[] | undefined;
+            if ('to' in b || 'cc' in b) {
+              try { const s = settingsFromInput({ to: b.to ?? [], cc: b.cc ?? [] }, (await sla.load()).settings); to = 'to' in b ? s.to : undefined; cc = 'cc' in b ? s.cc : undefined; } catch (e) { throw new HttpError(400, (e as Error).message, 'invalid'); }
+            }
+            const row = await sla.editDraft(id, { subject: b.subject, bodyText: b.bodyText, ...(to ? { to } : {}), ...(cc ? { cc } : {}) });
+            void log(ctx, 'sla.claim_edited', { id, month: row.month });
+            return send(res, 200, { ok: true, claim: row });
+          }
+          if (claimMatch[2] === '/dismiss' && method === 'POST') {
+            await sla.dismiss(id, ctx.user!.username);
+            void log(ctx, 'sla.claim_dismissed', { id });
+            return send(res, 200, { ok: true });
+          }
+          if (claimMatch[2] === '/send' && method === 'POST') {
+            let row;
+            try { row = await sla.send(id, ctx.user!.username); } catch (e) {
+              if (e instanceof SlaInputError) throw e;
+              void log(ctx, 'sla.claim_send_failed', { id, error: (e as Error).message.slice(0, 300) });
+              return send(res, 200, { ok: false, message: (e as Error).message });
+            }
+            void log(ctx, 'sla.claim_sent', { id, month: row.month, to: row.to, cc: row.cc, from: row.sentFrom });
+            return send(res, 200, { ok: true, message: `Sent to ${row.to.join(', ')} from ${row.sentFrom}.`, claim: row });
+          }
+          throw new HttpError(404, 'Not found.');
+        });
+      }
+      throw new HttpError(404, 'Not found.');
     }
 
     // ── notifications (Discord / Teams / Slack / JSON webhooks) ──
@@ -1242,6 +1349,7 @@ export async function startAdminConsole(opts: AdminConsoleOptions): Promise<Admi
       // Notification channels live beside the settings but aren't one (their URLs are secrets).
       getNotifier().setChannels(parseStoredChannels(saved[NOTIFY_SETTING_KEY]));
       delete saved[NOTIFY_SETTING_KEY];
+      delete saved[SLA_SETTING_KEY]; // SLA credit settings + the mail app's sealed secret: read by SlaStore
       const dropped = loadOverrides(saved);
       if (dropped.length) opts.logger.warn(`admin: ignored invalid saved setting(s): ${dropped.join(', ')}`);
       applySettings();

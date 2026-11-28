@@ -88,6 +88,7 @@ const ROUTES = [
   { hash: '#/integrations', label: 'Integrations', view: integrations, admin: true },
   { hash: '#/users', label: 'Users', view: users, admin: true },
   { hash: '#/m365', label: 'Microsoft 365', view: m365, admin: true },
+  { hash: '#/sla', label: 'SLA credits', view: slaCredits, admin: true },
   { hash: '#/activity', label: 'Activity', view: activity, admin: true },
   { hash: '#/account', label: 'Account', view: account },
 ];
@@ -1471,6 +1472,114 @@ async function notifications(body) {
       add,
       ...(list.length ? list : [h('section', { class: 'panel' }, h('p', { class: 'muted' }, 'No channels yet.'))]),
     ].filter(Boolean));
+  }
+  await draw();
+}
+
+// SLA credits: Autotask outages this server logged, the monthly credit claim to Kaseya (review → Send),
+// the claim settings, and the Microsoft 365 mailbox it is sent from.
+async function slaCredits(body) {
+  const act = async (fn, ok) => { try { const r = await fn(); toast((r && r.message) || ok); await draw(); } catch (x) { toast(x.message); } };
+  const fmtDur = (s) => { s = Math.round(s || 0); if (s < 60) return `${s} s`; const m = Math.floor(s / 60), r = s % 60; if (m < 60) return r ? `${m} min ${r} s` : `${m} min`; const hr = Math.floor(m / 60), rm = m % 60; return rm ? `${hr} h ${rm} min` : `${hr} h`; };
+  async function draw() {
+    const r = await api('GET', '/api/sla');
+    const s = r.settings;
+
+    // ── this month / last month ──
+    const monthPanel = (m) => h('section', { class: 'panel' },
+      h('h2', null, m.monthLabel, ' ', m.qualifies ? h('span', { class: 'badge warn' }, 'Qualifies for a claim') : h('span', { class: 'badge ok' }, 'Under the threshold')),
+      h('p', null, `${m.countedIncidents} outage(s) counted, ${fmtDur(m.downtimeSeconds)} down — ${Number(m.uptimePct).toFixed(3)}% up`),
+      m.incidents.length ? h('div', { class: 'table-wrap' }, h('table', null,
+        h('thead', null, h('tr', null, h('th', null, 'Started'), h('th', null, 'Ended'), h('th', null, 'Length'), h('th', null, 'Answer'), h('th', null, 'Failing'), h('th', null, 'Counted'))),
+        h('tbody', null, m.incidents.map((i) => h('tr', null,
+          h('td', null, when(i.start)), h('td', null, when(i.end)), h('td', null, fmtDur(i.seconds)),
+          h('td', null, i.statuses.length ? i.statuses.map((x) => `HTTP ${x}`).join(' / ') : 'no HTTP answer'),
+          h('td', { class: 'muted' }, i.endpoints.join(', ')),
+          h('td', null, i.counted ? 'yes' : h('span', { class: 'muted' }, 'no'), i.note ? h('div', { class: 'muted', style: 'font-size:12px' }, i.note) : null)))))) : h('p', { class: 'muted' }, 'No outages logged.'),
+      h('div', { class: 'row', style: 'margin-top:8px' },
+        h('button', { class: 'small', onclick: () => act(() => api('POST', '/api/sla/claims/build', { month: m.month.slice(0, 7) }), 'Draft built — review it below.') }, 'Build claim draft')));
+
+    // ── claims ──
+    const claimPanels = r.claims.map((c) => {
+      const draft = c.status === 'draft';
+      const subj = h('input', { type: 'text', value: c.subject, disabled: !draft, maxlength: 250, 'aria-label': 'Subject' });
+      const txt = h('textarea', { rows: 18, disabled: !draft, 'aria-label': 'Email text', style: 'width:100%;font-family:ui-monospace,monospace;font-size:13px' });
+      txt.value = c.bodyText;
+      const badge = { draft: 'warn', sending: 'warn', sent: 'ok', dismissed: '' }[c.status] || '';
+      return h('section', { class: 'panel' },
+        h('h2', null, `Claim — ${new Date(c.month + 'T00:00:00Z').toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' })} `, h('span', { class: `badge ${badge}` }, c.status)),
+        h('p', { class: 'muted' }, `${c.incidents} outage(s), ${fmtDur(c.downtimeSeconds)} down, ${Number(c.uptimePct).toFixed(3)}% up · To ${c.to.join(', ') || '— (no address set)'}${c.cc.length ? ` · Cc ${c.cc.join(', ')}` : ''}`,
+          c.sentAt ? ` · sent ${when(c.sentAt)} by ${c.sentBy} from ${c.sentFrom}` : '', c.dismissedBy ? ` · dismissed by ${c.dismissedBy}` : ''),
+        h('label', null, 'Subject'), subj,
+        h('label', { style: 'margin-top:8px' }, 'Text'), txt,
+        draft ? h('div', { class: 'row', style: 'margin-top:8px' },
+          h('button', { class: 'small', onclick: () => act(() => api('PUT', `/api/sla/claims/${c.id}`, { subject: subj.value, bodyText: txt.value }), 'Draft saved.') }, 'Save changes'),
+          h('button', { class: 'small primary', onclick: () => confirm(`Email this claim to ${c.to.join(', ')}${r.mail ? ` from ${r.mail.sender}` : ''}?\n\nSave your edits first — the saved text is what is sent.`) && act(() => api('POST', `/api/sla/claims/${c.id}/send`, {})) }, 'Send to Kaseya'),
+          h('button', { class: 'small', onclick: () => confirm('Dismiss this claim? You can build it again later.') && act(() => api('POST', `/api/sla/claims/${c.id}/dismiss`, {}), 'Dismissed.') }, 'Dismiss')) : null);
+    });
+
+    // ── settings ──
+    const err = h('p', { class: 'error', role: 'alert' });
+    const en = h('input', { type: 'checkbox', id: 'slaen', checked: s.enabled });
+    const to = h('input', { type: 'text', id: 'slato', value: s.to.join(', '), placeholder: 'Kaseya support address' });
+    const cc = h('input', { type: 'text', id: 'slacc', value: s.cc.join(', '), placeholder: 'optional, e.g. your own address' });
+    const th = h('input', { type: 'number', id: 'slath', min: 0, value: String(s.thresholdMinutes), style: 'width:110px' });
+    const up = h('input', { type: 'number', id: 'slaup', min: 90, max: 100, step: '0.001', value: s.committedUptimePct == null ? '' : String(s.committedUptimePct), placeholder: 'e.g. 99.9', style: 'width:110px' });
+    const net = h('input', { type: 'checkbox', id: 'slanet', checked: s.includeNetworkOnly });
+    const ref = h('textarea', { id: 'slaref', rows: 3, style: 'width:100%' }); ref.value = s.reference;
+    const settingsForm = h('form', { class: 'panel', onsubmit: async (e) => {
+      e.preventDefault(); err.textContent = '';
+      try {
+        await api('PUT', '/api/sla/settings', { enabled: en.checked, to: to.value, cc: cc.value, thresholdMinutes: Number(th.value), committedUptimePct: up.value === '' ? null : Number(up.value), includeNetworkOnly: net.checked, reference: ref.value });
+        toast('Saved.'); await draw();
+      } catch (x) { err.textContent = x.message; }
+    } },
+      h('h2', null, 'Claim settings'),
+      h('label', { for: 'slaen', style: 'display:flex;gap:8px;align-items:center;font-weight:400' }, en, 'Draft last month\'s claim on the 1st (you review and send it)'),
+      h('div', { class: 'row', style: 'margin-top:8px' },
+        h('div', { style: 'flex:1;min-width:220px' }, h('label', { for: 'slato' }, 'To (Kaseya)'), to),
+        h('div', { style: 'flex:1;min-width:220px' }, h('label', { for: 'slacc' }, 'Cc'), cc)),
+      h('div', { class: 'row', style: 'margin-top:8px' },
+        h('div', null, h('label', { for: 'slath' }, 'Claim from (minutes down)'), th),
+        h('div', null, h('label', { for: 'slaup' }, 'Uptime in your agreement %'), up)),
+      h('label', { for: 'slanet', style: 'display:flex;gap:8px;align-items:center;font-weight:400;margin-top:8px' }, net, 'Also count outages with no HTTP answer (could be this server\'s own connection)'),
+      h('label', { for: 'slaref', style: 'margin-top:8px' }, 'Account reference (put in the email: company, account number, agreement)'), ref,
+      h('div', { class: 'row', style: 'margin-top:8px' }, h('button', { class: 'primary', type: 'submit' }, 'Save settings')), err);
+
+    // ── mail ──
+    const merr = h('p', { class: 'error', role: 'alert' });
+    const mt = h('input', { type: 'text', id: 'slamt', value: r.mail?.tenantId || '', placeholder: 'Directory (tenant) ID', autocomplete: 'off', spellcheck: 'false' });
+    const mc = h('input', { type: 'text', id: 'slamc', value: r.mail?.clientId || '', placeholder: 'Application (client) ID', autocomplete: 'off', spellcheck: 'false' });
+    const ms = h('input', { type: 'password', id: 'slams', placeholder: r.mail?.hasSecret ? 'stored — leave empty to keep' : 'client secret value', autocomplete: 'new-password' });
+    const mf = h('input', { type: 'text', id: 'slamf', value: r.mail?.sender || '', placeholder: 'e.g. support@yourcompany.com', autocomplete: 'off' });
+    const mailForm = h('form', { class: 'panel', onsubmit: async (e) => {
+      e.preventDefault(); merr.textContent = '';
+      try { await api('PUT', '/api/sla/mail', { tenantId: mt.value, clientId: mc.value, clientSecret: ms.value, sender: mf.value }); toast('Saved — use "Send test".'); await draw(); }
+      catch (x) { merr.textContent = x.message; }
+    } },
+      h('h2', null, 'Send from (Microsoft 365)'),
+      h('p', { class: 'muted' }, 'An Entra app registration with the Mail.Send APPLICATION permission (admin consent), limited to this one mailbox by an Exchange application access policy. The secret is stored encrypted.'),
+      h('div', { class: 'row' },
+        h('div', { style: 'flex:1;min-width:260px' }, h('label', { for: 'slamt' }, 'Tenant ID'), mt),
+        h('div', { style: 'flex:1;min-width:260px' }, h('label', { for: 'slamc' }, 'Client ID'), mc)),
+      h('div', { class: 'row', style: 'margin-top:8px' },
+        h('div', { style: 'flex:1;min-width:260px' }, h('label', { for: 'slams' }, 'Client secret'), ms),
+        h('div', { style: 'flex:1;min-width:260px' }, h('label', { for: 'slamf' }, 'Sender mailbox'), mf)),
+      h('div', { class: 'row', style: 'margin-top:8px' },
+        h('button', { class: 'primary', type: 'submit' }, 'Save mailbox'),
+        r.mail ? h('button', { class: 'small', type: 'button', onclick: () => act(() => api('POST', '/api/sla/mail/test', {})) }, 'Send test (to itself)') : null,
+        r.mail ? h('button', { class: 'small danger', type: 'button', onclick: () => confirm('Remove the mailbox settings and its stored secret?') && act(() => api('DELETE', '/api/sla/mail'), 'Removed.') }, 'Remove') : null),
+      merr);
+
+    fill(body,
+      h('h1', null, 'SLA credits'),
+      h('p', { class: 'muted' }, 'Every time Autotask fails across several modules at once (5+ network errors / 5xx answers in a minute) this server logs it, until a call gets through again. On the 1st, last month\'s outages become a credit request to Kaseya — drafted here for you to review, edit and send. Outages where Autotask answered with HTTP 5xx are counted; ones with no answer at all may be this server\'s own connection and are listed apart.'),
+      r.mail ? null : h('div', { class: 'banner' }, 'Set up the Microsoft 365 mailbox below before a claim can be sent.'),
+      s.to.length ? null : h('div', { class: 'banner' }, 'Add Kaseya\'s address under Claim settings — check your Autotask agreement for where SLA credit requests go.'),
+      claimPanels,
+      r.months.map(monthPanel),
+      settingsForm,
+      mailForm);
   }
   await draw();
 }

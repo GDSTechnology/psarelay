@@ -24,7 +24,7 @@ The limit is the tenant's, not yours: one integration's burst slows every other 
 | **Concurrency gate** | At most 2 (configurable up to 3) calls per endpoint; extra calls queue. |
 | **Caller and tenant caps** | At most 4 calls in flight per caller and 8 for the tenant (configurable); extra calls queue, so one chat burst can't starve the dispatchers. |
 | **Transient retry** | A read that hits a network error, timeout or 502/503/504 is retried twice with jittered backoff. Writes and HTTP 500 (Autotask's validation errors) never are. |
-| **Outage breaker** | Per module: 5 network errors / 5xx answers in a minute on one endpoint (say Quotes) and calls to *it* fail locally for 30 s, then one test call decides — every other module carries on. Failures across 3+ endpoints pause the whole tenant. |
+| **Outage breaker** | Per module: 5 network errors / 5xx answers in a minute on one endpoint (say Quotes) and calls to *it* fail locally for 30 s, then one test call decides — every other module carries on. Failures across 3+ endpoints pause the whole tenant. A tenant pause raises a **STOP** notification naming the failing modules and the last error, and a **back** notification (with how long it lasted) once a call gets through. |
 | **Mirror sync** | Skips a run above 85% usage or during a cooldown; capped at 100 calls a run. |
 | **Bulk jobs** | Re-read tenant usage every minute while writing; half pace from 40%, stop from 65%; quiet hours. |
 | **Login protection** | A rejected login pauses everything, so retries can't lock the API user. |

@@ -26,14 +26,15 @@ export type NotifyEventType =
   | 'commerce.order_ready' | 'commerce.order_invoiced' | 'commerce.order_paid' | 'commerce.order_failed' | 'commerce.subscription_changed'
   | 'platform.upgrade_requested'
   | 'platform.plan_requested'
-  | 'm365.link_needed';
+  | 'm365.link_needed'
+  | 'sla.claim_ready';
 
 export const NOTIFY_EVENTS: Array<{ type: Exclude<NotifyEventType, 'test'>; label: string; severity: NotifySeverity }> = [
   { type: 'auth.held', label: 'Autotask login HELD (needs Retry now)', severity: 'critical' },
   { type: 'auth.paused', label: 'Autotask login paused after a failed login', severity: 'warning' },
-  { type: 'auth.cleared', label: 'Autotask login working again', severity: 'info' },
-  { type: 'backpressure.stop', label: 'Backpressure: stop (usage ≥ 90%, 429, login)', severity: 'warning' },
-  { type: 'backpressure.recovered', label: 'Backpressure back to ok', severity: 'info' },
+  { type: 'auth.cleared', label: 'Autotask login working again (always sent where its pause / hold went)', severity: 'info' },
+  { type: 'backpressure.stop', label: 'Backpressure: stop (Autotask down / 5xx, usage ≥ 90%, 429, login)', severity: 'warning' },
+  { type: 'backpressure.recovered', label: 'Backpressure back to ok (always sent where the stop went)', severity: 'info' },
   { type: 'ratelimit.hit', label: 'Autotask 429 (threshold exceeded)', severity: 'warning' },
   { type: 'shadow.sync_error', label: 'Mirror sync error on an entity', severity: 'warning' },
   { type: 'shadow.verify_failed', label: 'Mirror consistency check failed', severity: 'warning' },
@@ -55,6 +56,7 @@ export const NOTIFY_EVENTS: Array<{ type: Exclude<NotifyEventType, 'test'>; labe
   { type: 'platform.upgrade_requested', label: 'A user asked for a module that is not on the plan', severity: 'info' },
   { type: 'platform.plan_requested', label: 'A user asked to choose a plan (free trial or read-only plan)', severity: 'info' },
   { type: 'm365.link_needed', label: 'Someone signed in from Microsoft 365 Copilot and needs to be linked to Autotask', severity: 'info' },
+  { type: 'sla.claim_ready', label: 'A monthly SLA credit claim to Kaseya is drafted and waits for review', severity: 'info' },
   { type: 'vendor.notice_due', label: 'A customer price change takes effect within 30 days with no notice recorded', severity: 'warning' },
 ];
 
@@ -70,7 +72,16 @@ export interface NotifyEvent {
   at?: string;
   /** Same key within the cooldown is sent once per channel. Default: type. */
   dedupeKey?: string;
+  /**
+   * An all-clear: the alarm event types it ends. It goes to EVERY channel that was sent one of those
+   * alarms (whatever that channel ticked, and past the cooldown), so a STOP is never left without its
+   * "back" — and a channel that never heard the alarm doesn't get a stray all-clear.
+   */
+  clears?: NotifyEventType[];
 }
+
+/** Alarms an all-clear can end (notify-watch raises their `clears`). */
+const PAIRED_ALARMS = new Set<string>(['backpressure.stop', 'auth.paused', 'auth.held']);
 
 export interface NotifyChannel {
   id: string;
@@ -162,6 +173,8 @@ export class Notifier {
   private channels: NotifyChannel[] = [];
   private status = new Map<string, ChannelStatus>();
   private lastSent = new Map<string, number>();
+  /** `${channel}|${alarm type}` sent and not yet cleared — its all-clear is owed to that channel. */
+  private openAlarms = new Set<string>();
   private queue: Promise<void> = Promise.resolve();
 
   constructor(
@@ -179,12 +192,19 @@ export class Notifier {
     const now = Date.now();
     const cooldown = this.opts.cooldownMs ?? 15 * 60_000;
     for (const c of this.channels) {
-      if (!c.enabled || !c.events.includes(e.type)) continue;
+      if (!c.enabled) continue;
+      const enqueue = () => { this.queue = this.queue.then(() => this.send(c, e).then(() => undefined, () => undefined)); };
+      if (e.clears?.length) {
+        const ended = e.clears.filter((t) => this.openAlarms.delete(`${c.id}|${t}`));
+        if (ended.length) { this.lastSent.set(`${c.id}|${e.dedupeKey ?? e.type}`, now); enqueue(); continue; }
+      }
+      if (!c.events.includes(e.type)) continue;
       const key = `${c.id}|${e.dedupeKey ?? e.type}`;
       const last = this.lastSent.get(key);
       if (last !== undefined && now - last < cooldown) continue;
       this.lastSent.set(key, now);
-      this.queue = this.queue.then(() => this.send(c, e).then(() => undefined, () => undefined));
+      if (PAIRED_ALARMS.has(e.type)) this.openAlarms.add(`${c.id}|${e.type}`);
+      enqueue();
     }
   }
 
