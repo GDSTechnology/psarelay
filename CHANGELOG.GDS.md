@@ -10,6 +10,24 @@ Each entry lists the merge commit and the PR number. Brief section references
 
 ---
 
+## v6.35.0 — 2026-11-28 — SLA credits: Autotask outage log + monthly credit claim to Kaseya
+
+- **Outage log** (MIGRATION 0027 `autotask_outage`): every time the tenant-wide outage breaker opens, a row from
+  detection to the first call that gets through (`confirmed_back`; a restart closes an open row at its last sighting,
+  `ended_reason 'restart'`), with failing modules, HTTP statuses (the breaker now records each failure's status),
+  network-error count and last error. Recorded every 20 s by `startSlaRuntime` (http transport + Postgres).
+- **Monthly claim** (`sla_claim`): on the 1st at 06:00 UTC, when turned on and last month's counted downtime reaches
+  the threshold, a plain-text credit request is drafted — month, account reference, total downtime, measured uptime
+  vs the agreement's figure, one UTC line per outage; no-HTTP-answer outages listed apart and not counted unless set.
+  Overlaps merged, clipped to the month. Notification `sla.claim_ready`.
+- **Console → SLA credits** (admins): review / edit / **Send to Kaseya** / dismiss drafts, build a draft for this or
+  last month, claim settings, and the sending mailbox. Send is guarded against double clicks (`sending` state) and
+  logged; a sent claim is never rebuilt.
+- **Microsoft 365 sending** (`src/sla/graph-mail.ts`): Graph app-only (client credentials) `sendMail` from the
+  configured mailbox, saved to Sent Items; the client secret encrypted with `MCP_SECRET_KEY`; errors name the fix
+  (secret expired, missing Mail.Send consent, mailbox not found). First PSArelay code that sends email.
+- Docs: website guide *SLA credits* (Entra app + application access policy steps), ADMIN.md.
+
 ## v6.34.1 — 2026-11-27 — Outage alerts say what failed, and always say when it's back
 
 - **STOP after an Autotask outage** (the tenant-wide breaker: 5+ network errors / 5xx in a minute across 3+ modules)

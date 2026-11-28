@@ -94,7 +94,7 @@ export class AutotaskOutageError extends Error {
   }
 }
 
-interface Breaker { failures: Array<{ t: number; ep: string }>; openUntil: number; openMs: number; probing: boolean; lastError: string; openedAt: number }
+interface Breaker { failures: Array<{ t: number; ep: string; s?: number }>; openUntil: number; openMs: number; probing: boolean; lastError: string; openedAt: number }
 const breakers = new Map<string, Breaker>();
 const WINDOW_MS = 60_000;
 const FIRST_OPEN_MS = 30_000;
@@ -135,7 +135,7 @@ export function recordSuccess(tenant: string, endpoint: string): void {
   breakers.delete(keyOf(tenant, ALL));
 }
 
-function fail(b: Breaker, message: string, now: number, ep: string, opensAt: (b: Breaker) => boolean): void {
+function fail(b: Breaker, message: string, now: number, ep: string, opensAt: (b: Breaker) => boolean, status?: number): void {
   b.lastError = message.slice(0, 200);
   if (b.probing) {
     // The probe failed: open again, twice as long.
@@ -144,7 +144,7 @@ function fail(b: Breaker, message: string, now: number, ep: string, opensAt: (b:
     b.openUntil = now + b.openMs;
     return;
   }
-  b.failures = [...b.failures.filter((f) => now - f.t < WINDOW_MS), { t: now, ep }];
+  b.failures = [...b.failures.filter((f) => now - f.t < WINDOW_MS), { t: now, ep, ...(status != null ? { s: status } : {}) }];
   if (b.openUntil === 0 && opensAt(b)) {
     b.openedAt = now;
     b.openMs = FIRST_OPEN_MS;
@@ -152,11 +152,11 @@ function fail(b: Breaker, message: string, now: number, ep: string, opensAt: (b:
   }
 }
 
-export function recordTransientFailure(tenant: string, endpoint: string, message: string, now = Date.now()): void {
+export function recordTransientFailure(tenant: string, endpoint: string, message: string, now = Date.now(), status?: number): void {
   const enough = (b: Breaker) => b.failures.length >= outageFailures();
-  fail(breaker(keyOf(tenant, endpoint)), message, now, endpoint, enough);
+  fail(breaker(keyOf(tenant, endpoint)), message, now, endpoint, enough, status);
   // The whole tenant only when the failures span several modules — a single module's outage stays local.
-  fail(breaker(keyOf(tenant, ALL)), message, now, endpoint, (b) => enough(b) && new Set(b.failures.map((f) => f.ep)).size >= TENANT_SPREAD);
+  fail(breaker(keyOf(tenant, ALL)), message, now, endpoint, (b) => enough(b) && new Set(b.failures.map((f) => f.ep)).size >= TENANT_SPREAD, status);
 }
 
 const secondsLeft = (b: Breaker | undefined, now: number) => (b && b.openUntil > now ? Math.ceil((b.openUntil - now) / 1000) : 0);
@@ -178,6 +178,10 @@ export interface OutageStatus {
   /** The modules (endpoints) that failed, most failures first. */
   endpoints: string[];
   lastError: string;
+  /** Distinct HTTP statuses among those failures (502 / 503 / 504) — an answer from Autotask's side. */
+  httpStatuses: number[];
+  /** Failures with no HTTP answer (network error, timeout) — could also be this server's own connection. */
+  networkErrors: number;
 }
 
 /**
@@ -189,12 +193,15 @@ export function outageStatus(tenant: string, now = Date.now()): OutageStatus | n
   if (!b || b.openUntil === 0) return null;
   const recent = b.failures.filter((f) => now - f.t < WINDOW_MS);
   const counts = new Map<string, number>();
-  for (const f of (recent.length ? recent : b.failures)) counts.set(f.ep || '?', (counts.get(f.ep || '?') ?? 0) + 1);
+  const pool = recent.length ? recent : b.failures;
+  for (const f of pool) counts.set(f.ep || '?', (counts.get(f.ep || '?') ?? 0) + 1);
   const seconds = secondsLeft(b, now);
   return {
     seconds, awaitingTest: seconds === 0, since: new Date(b.openedAt || now).toISOString(), failures: recent.length,
     endpoints: [...counts.entries()].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0])).map(([ep]) => ep),
     lastError: b.lastError,
+    httpStatuses: [...new Set(pool.filter((f) => f.s != null).map((f) => f.s!))].sort((x, y) => x - y),
+    networkErrors: pool.filter((f) => f.s == null).length,
   };
 }
 

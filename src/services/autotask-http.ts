@@ -561,7 +561,7 @@ export class AutotaskHttpClient {
         releaseUpstream();
       }
       const transient = isTransient(err);
-      if (transient) recordTransientFailure(tenant, ep, err instanceof Error ? err.message : String(err));
+      if (transient) { const st = (err as { status?: unknown })?.status; recordTransientFailure(tenant, ep, err instanceof Error ? err.message : String(err), Date.now(), typeof st === 'number' ? st : undefined); }
       else if (typeof (err as { status?: unknown })?.status === 'number') recordSuccess(tenant, ep); // Autotask answered
       if (!transient || attempt >= tries || endpointOutageSeconds(tenant, ep) > 0) throw err;
       const wait = backoffMs(attempt);

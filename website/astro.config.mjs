@@ -36,6 +36,7 @@ export default defineConfig({
 						{ label: 'Commerce', slug: 'guides/commerce' },
 						{ label: 'Vendor billing', slug: 'guides/vendor-billing' },
 						{ label: 'Throttling', slug: 'guides/throttling' },
+						{ label: 'SLA credits', slug: 'guides/sla-credits' },
 					],
 				},
 				{

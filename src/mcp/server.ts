@@ -9,6 +9,7 @@
 
 import { getShadowRuntime, initShadow, mirrorGet, mirrorQuery } from '../db/shadow-runtime.js';
 import { startNotifyWatch } from '../services/notify-watch.js';
+import { startSlaRuntime } from '../sla/store.js';
 import { startVendorMonitor } from '../vendors/monitor.js';
 import { startBulkWorker } from '../bulk/worker.js';
 import { startCommerceTracker } from '../commerce/tools.js';
@@ -256,6 +257,8 @@ export class PsarelayServer {
         startNotifyWatch({ tenant, lastRun: () => getShadowRuntime()?.lastRun() ?? null, lastVerify: () => getShadowRuntime()?.lastVerify() ?? null });
         // Vendor monitor (stale imports, renewals, contracts ending, sync drift) — daily at MCP_VENDOR_MONITOR_HOUR_UTC; off when unset.
         if (isPgEnabled()) startVendorMonitor(this.autotaskService, () => getPool(this.logger), this.logger);
+        // SLA credits: log every Autotask outage; draft last month's credit claim to Kaseya on the 1st (sent from the console).
+        if (isPgEnabled()) startSlaRuntime({ tenant, getPool: () => getPool(this.logger), logger: this.logger });
         // Bulk jobs (placeholder cleanup): pushes approved, running jobs at their pace.
         if (isPgEnabled()) startBulkWorker(this.autotaskService, () => getPool(this.logger), this.logger, tenant);
         // Orders: follow each one to its invoice and payment (reads only).

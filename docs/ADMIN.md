@@ -463,6 +463,20 @@ A list of capabilities to build, so a missing tool is captured instead of worked
 
 The same request again (same title, ignoring case and punctuation) counts another occurrence instead of adding a row. Admins set the status (open → planned → built, or declined / duplicate) and priority. A resolution note says which tool or release covers it. A request marked built or declined that is reported again reopens. Stored in Postgres (migration 0014).
 
+### SLA credits (admins)
+
+Every tenant-wide Autotask outage (the outage breaker: 5+ network errors / 5xx in a minute across 3+ modules) is
+logged in `autotask_outage` (migration 0027) from detection until a call gets through. On the 1st at 06:00 UTC,
+when **Claim settings → Draft last month's claim** is on and the month's counted downtime reaches the threshold,
+a credit request to Kaseya is drafted (`sla_claim`) and the **SLA credit claim ready** notification fires. The page
+shows the drafts (edit subject / text, **Send to Kaseya**, **Dismiss**), this and last month's outages
+(**Build claim draft** at any time), the claim settings (To / Cc, threshold, the uptime in your agreement, account
+reference, whether no-answer outages count) and the Microsoft 365 mailbox it is sent from (Entra app with
+Mail.Send application permission + an application access policy limiting it to that mailbox; secret encrypted with
+`MCP_SECRET_KEY`; **Send test** mails the mailbox itself). Only HTTP 5xx outages count by default — no-answer ones
+may be this server's own connection. Sent claims are never rebuilt; every change and send is in the Activity log.
+Full setup: website guide *SLA credits*.
+
 ### Notifications (Discord, Teams, Slack, any webhook)
 
 The **Notifications** page posts an alert to a chat channel when something
@@ -477,6 +491,7 @@ trips. Each channel picks its own events:
 | Mirror sync error on an entity; mirror consistency check needs attention | warning |
 | A write **failed after writing** (half-applied: n8n / Hermes change) | critical |
 | A burst of tool errors (5+ in 5 minutes) | warning |
+| A monthly SLA credit claim to Kaseya is drafted and waits for review | info |
 
 **How often you hear about it**
 - The server checks every 20 seconds.

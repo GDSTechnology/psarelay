@@ -26,7 +26,8 @@ export type NotifyEventType =
   | 'commerce.order_ready' | 'commerce.order_invoiced' | 'commerce.order_paid' | 'commerce.order_failed' | 'commerce.subscription_changed'
   | 'platform.upgrade_requested'
   | 'platform.plan_requested'
-  | 'm365.link_needed';
+  | 'm365.link_needed'
+  | 'sla.claim_ready';
 
 export const NOTIFY_EVENTS: Array<{ type: Exclude<NotifyEventType, 'test'>; label: string; severity: NotifySeverity }> = [
   { type: 'auth.held', label: 'Autotask login HELD (needs Retry now)', severity: 'critical' },
@@ -55,6 +56,7 @@ export const NOTIFY_EVENTS: Array<{ type: Exclude<NotifyEventType, 'test'>; labe
   { type: 'platform.upgrade_requested', label: 'A user asked for a module that is not on the plan', severity: 'info' },
   { type: 'platform.plan_requested', label: 'A user asked to choose a plan (free trial or read-only plan)', severity: 'info' },
   { type: 'm365.link_needed', label: 'Someone signed in from Microsoft 365 Copilot and needs to be linked to Autotask', severity: 'info' },
+  { type: 'sla.claim_ready', label: 'A monthly SLA credit claim to Kaseya is drafted and waits for review', severity: 'info' },
   { type: 'vendor.notice_due', label: 'A customer price change takes effect within 30 days with no notice recorded', severity: 'warning' },
 ];
 

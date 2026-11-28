@@ -13,7 +13,7 @@ const src = (outage: OutageStatus | null, outageSeconds: number, now: number): W
   backpressure: () => assessBackpressure({ usage, auth: null, cooldownSeconds: 0, queued: 0, now, outageSeconds, outage }),
   lastRun: () => null, lastVerify: () => null, toolErrors: () => [],
 });
-const down: OutageStatus = { seconds: 30, awaitingTest: false, since: new Date(NOW).toISOString(), failures: 6, endpoints: ['Tickets', 'Companies', 'TimeEntries'], lastError: 'HTTP 503: Service Unavailable' };
+const down: OutageStatus = { seconds: 30, awaitingTest: false, since: new Date(NOW).toISOString(), failures: 6, endpoints: ['Tickets', 'Companies', 'TimeEntries'], lastError: 'HTTP 503: Service Unavailable', httpStatuses: [503], networkErrors: 0 };
 const waiting: OutageStatus = { ...down, seconds: 0, awaitingTest: true };
 
 beforeEach(() => { process.env.AUTOTASK_OUTAGE_FAILURES = '5'; }); // setup.ts turns the breaker off
@@ -21,9 +21,9 @@ afterEach(() => { _resetUpstreamGuard(); process.env.AUTOTASK_OUTAGE_FAILURES = 
 
 test('the outage breaker reports what failed, and stays "awaiting a test" until a call gets through', () => {
   const t = 'tenant';
-  for (const [i, ep] of ['Tickets', 'Tickets', 'Companies', 'TimeEntries', 'Tickets'].entries()) recordTransientFailure(t, ep, `HTTP 503 #${i}`, NOW + i);
+  for (const [i, ep] of ['Tickets', 'Tickets', 'Companies', 'TimeEntries', 'Tickets'].entries()) recordTransientFailure(t, ep, `HTTP 503 #${i}`, NOW + i, i === 2 ? undefined : 503);
   const o = outageStatus(t, NOW + 10)!;
-  expect(o).toMatchObject({ seconds: 30, awaitingTest: false, failures: 5, endpoints: ['Tickets', 'Companies', 'TimeEntries'], lastError: 'HTTP 503 #4' });
+  expect(o).toMatchObject({ seconds: 30, awaitingTest: false, failures: 5, endpoints: ['Tickets', 'Companies', 'TimeEntries'], lastError: 'HTTP 503 #4', httpStatuses: [503], networkErrors: 1 });
   expect(outageStatus(t, NOW + 31_000)).toMatchObject({ seconds: 0, awaitingTest: true });
   recordSuccess(t, 'Tickets');
   expect(outageStatus(t, NOW + 32_000)).toBeNull();
